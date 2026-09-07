@@ -196,5 +196,18 @@ session, source range, supplying turn, managed attempt when applicable, and
 successful terminal evidence. Recovery can confirm a completed managed turn
 from its pre-dispatch attempt snapshot even if it lost the later offer write.
 
+After executor takeover, `reconcileExecution` settles an abandoned attempt
+under the append lock. A recorded successful terminal settles the attempt;
+an unsuccessful terminal preserves partial output as a failed attempt. No
+terminal evidence means uncertain, including loss before process creation.
+Recovery never appends another copy of the input or dispatches it again.
+An exact repeated settlement is a no-op, and stale attempts are refused.
+
+An attempt covers one harness turn. Successful termination includes hcn's
+`awaiting-input` result: the asking turn completed, while its question stays
+in the transcript. This does not claim that the person's whole task is
+finished. Their answer is a new input that continues the conversation; it
+does not require repeating the already acknowledged asking turn.
+
 These preparation APIs do not yet enable managed dispatch. RFC 15 still
 requires verified hcn budgets, bounded summarization, and worker integration.

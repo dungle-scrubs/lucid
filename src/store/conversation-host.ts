@@ -47,7 +47,12 @@ import {
   parseContextFact,
   reduceContextCoverage,
 } from "../protocol/context-coverage.js";
-import { parseExecutionFact, reduceExecution } from "../protocol/execution.js";
+import {
+  parseExecutionFact,
+  reconcileExecutionFact,
+  reduceExecution,
+  refuseExecution,
+} from "../protocol/execution.js";
 import type { HarnessName } from "../protocol/frames.js";
 import { HubError } from "../protocol/hub-errors.js";
 import type { Effect } from "../protocol/index.js";
@@ -183,6 +188,7 @@ export interface ConversationHost {
   offerConversationContext(offer: ContextOfferRequest): ReduceResult;
   confirmConversationContext(turnId: string): ReduceResult;
   writeExecution(fact: unknown): ReduceResult;
+  reconcileExecution(inputId: string, expectedAttempt: number): ReduceResult;
   acceptInput(
     input: { readonly id: string; readonly text: string; readonly mode: "queue" },
     options?: { readonly completeSettings?: DriverChoice; readonly managed?: boolean },
@@ -364,8 +370,32 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     });
   };
 
+  const writeExecution = (
+    produce: (state: ChannelState) => ReturnType<typeof reconcileExecutionFact>,
+  ): ReduceResult => {
+    const at = deps.now();
+    return transactDynamic((state) => {
+      const decision = produce(state);
+      const fact = "issue" in decision ? null : decision;
+      const result =
+        "issue" in decision
+          ? refuseExecution(state, at, decision.issue)
+          : reduceExecution(state, fact, at, deps.executorLease());
+      return {
+        result,
+        frame: null,
+        entry:
+          fact && result.verdict === "accepted" && result.state !== state
+            ? { v: 1, at, src: "execution", payloadVersion: 1, fact }
+            : null,
+      };
+    });
+  };
+
   return {
     hasAcceptedInput: (id) => log.acceptedInput(id) !== undefined,
+    reconcileExecution: (inputId, attempt) =>
+      writeExecution((state) => reconcileExecutionFact(state, inputId, attempt)),
     contextCoverage: (harness, sessionId) =>
       confirmedContextThrough(log.state(), harness, sessionId),
     offerConversationContext: (offer) =>
@@ -577,22 +607,8 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
         ? { verdict: "accepted", receipt: { inputId: input.id, seq: acceptedSeq } }
         : { verdict: "refused", issue: conflict ? "E-COMP-06" : result.issue };
     },
-    writeExecution: (raw: unknown): ReduceResult => {
-      const at = deps.now();
-      const result = transactDynamic((state) => {
-        const fact = parseExecutionFact(raw);
-        const reduced = reduceExecution(state, fact, at, deps.executorLease());
-        return {
-          result: reduced,
-          frame: null,
-          entry:
-            fact && reduced.verdict === "accepted" && reduced.state !== state
-              ? { v: 1, at, src: "execution", payloadVersion: 1, fact }
-              : null,
-        };
-      });
-      return result;
-    },
+    writeExecution: (raw) =>
+      writeExecution(() => parseExecutionFact(raw) ?? { issue: "invalid-execution" }),
     grantCredit: (tokens: number): ReduceResult => {
       const at = deps.now();
       const entry: LogEntry = { v: 1, at, src: "credit", tokens };

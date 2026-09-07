@@ -230,14 +230,12 @@ export function parseExecutionFact(value: unknown): ExecutionFact | null {
   }
 }
 
-export function reduceExecution(
+export function refuseExecution(
   state: ChannelState,
-  raw: unknown,
   now: number,
-  executor: boolean,
+  issue: ProtocolIssue,
 ): ReduceResult {
-  const fact = parseExecutionFact(raw);
-  const reject = (issue: ProtocolIssue = "execution-ineligible"): ReduceResult => ({
+  return {
     verdict: "refused",
     issue,
     state,
@@ -250,7 +248,18 @@ export function reduceExecution(
       issue,
       now,
     },
-  });
+  };
+}
+
+export function reduceExecution(
+  state: ChannelState,
+  raw: unknown,
+  now: number,
+  executor: boolean,
+): ReduceResult {
+  const fact = parseExecutionFact(raw);
+  const reject = (issue: ProtocolIssue = "execution-ineligible"): ReduceResult =>
+    refuseExecution(state, now, issue);
   if (!fact) return reject("invalid-execution");
   if (!executor && fact.kind !== "retry-authorized" && fact.kind !== "fresh-authorized")
     return reject("executor-required");
@@ -334,6 +343,11 @@ export function reduceExecution(
     return accept({ ...fact, actions: current.actions, ...(previous ? { previous } : {}) });
   }
   if (fact.attempt !== current.attempt) return reject("execution-stale");
+  if (fact.kind === "attempt-ended" && current.kind === "attempt-ended")
+    return fact.turnId === current.start.turnId &&
+      JSON.stringify(fact.outcome) === JSON.stringify(current.outcome)
+      ? accept(current, true)
+      : reject("execution-stale");
   if (fact.kind === "held") {
     if (
       current.kind !== "requested" &&
@@ -361,4 +375,48 @@ export function reduceExecution(
     return reject();
   const { actions: _actions, previous: _previous, ...start } = current;
   return accept({ ...base, kind: "attempt-ended", start, outcome: fact.outcome });
+}
+
+/** A new executor can settle an abandoned attempt from durable evidence.
+ * No new input, disposition, authorization, or dispatch is produced. */
+export function reconcileExecutionFact(
+  state: ChannelState,
+  inputId: string,
+  attempt: number,
+): ExecutionFact | { readonly issue: ProtocolIssue } {
+  const current = state.executions[inputId];
+  if (!current) return { issue: "unknown-input" };
+  if (current.attempt !== attempt) return { issue: "execution-stale" };
+  if (current.kind === "attempt-ended")
+    return {
+      kind: "attempt-ended",
+      inputId,
+      attempt,
+      turnId: current.start.turnId,
+      outcome: current.outcome,
+    };
+  if (current.kind !== "attempt-started" || state.epoch <= current.epoch)
+    return { issue: "execution-ineligible" };
+  const terminalSeq = state.completedTurns[current.turnId];
+  const turn = state.contextTurns[current.turnId];
+  const ended = turn?.ended === true && turn.epoch === current.epoch;
+  return {
+    kind: "attempt-ended",
+    inputId,
+    attempt,
+    turnId: current.turnId,
+    outcome:
+      terminalSeq === undefined
+        ? {
+            kind: ended ? "failed-after-start" : "uncertain",
+            failure: {
+              code: "E-HUB-07",
+              evidence: ended ? "terminal-error" : "process-lost",
+              reason: ended
+                ? "The recorded turn ended without a successful result. Partial workspace effects may exist. Inspect the workspace before continuing in a new session."
+                : "The worker stopped without a confirmed result. Workspace effects may exist; they are not confirmed. Inspect the workspace before continuing in a new session.",
+            },
+          }
+        : { kind: "completed", terminalSeq },
+  };
 }
