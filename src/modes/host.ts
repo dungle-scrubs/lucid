@@ -29,7 +29,12 @@
  */
 
 import type { HarnessEvent } from "../harness/events.js";
-import { type HarnessName, type HarnessRunner, HarnessSpawnError } from "../harness/runner.js";
+import {
+  type HarnessName,
+  type HarnessRunner,
+  HarnessSpawnError,
+  type SessionHandle,
+} from "../harness/runner.js";
 import { composeAnnotationPrompt } from "../protocol/annotations.js";
 import {
   ARTIFACT_PREAMBLE_MARKER,
@@ -40,9 +45,12 @@ import {
   quoteForRefusal,
 } from "../protocol/artifacts.js";
 import { EventKind } from "../protocol/events.js";
+import type { NativeIntent } from "../protocol/execution.js";
 import { ARTIFACT_BYTES_MAX } from "../protocol/frames.js";
+import { HubError } from "../protocol/hub-errors.js";
 import type { Frame, InputMode, ReduceResult } from "../protocol/index.js";
 import { applyPatch, parsePatchBody } from "../protocol/patch.js";
+import { ContextPreparationError } from "../store/conversation-context.js";
 import type { ConversationHost } from "../store/conversation-host.js";
 import { classifyStoreFailure, type StoreFailureCode } from "../store/errors.js";
 import { createSequencer } from "./sequencer.js";
@@ -171,6 +179,26 @@ export const hostSeamFor = (host: ConversationHost): ArtifactHost => ({
 });
 
 export interface HeadlessDeps {
+  /** Complete context and persist its authorization before external work.
+   * A ready prompt includes protocol teaching and every current artifact's
+   * bytes, including resynchronization after a refused patch. The host adds
+   * no material after this callback has accounted for the final prompt.
+   * Held inputs keep their queued disposition and do not block later inputs. */
+  readonly prepareTurn?: (input: {
+    readonly inputId: string;
+    readonly signal: AbortSignal;
+    readonly text: string;
+    readonly turnId: string;
+    readonly profile: "headless-turn" | "headless-session";
+    readonly native: NativeIntent;
+  }) => Promise<
+    | { readonly kind: "held" }
+    | {
+        readonly kind: "ready";
+        readonly prompt: string;
+        readonly native: NativeIntent;
+      }
+  >;
   /** Validate the exact identity immediately before each external process. */
   readonly beforeProcess?: (resume: string | undefined) => Promise<void>;
   readonly owner?: import("../protocol/process-owner.js").ProcessOwner;
@@ -425,6 +453,7 @@ const handleArtifactMessage = (
 // ---------------------------------------------------------------------------
 
 interface HostContext {
+  handedOver(): void;
   isStopped(): boolean;
   stop(end: Extract<SourceEnd, { kind: "store-failed" }>): void;
   warning(event: HarnessEvent, operation: string, artifactId: string): void;
@@ -480,7 +509,7 @@ const sessionStrategy = (
   // one handle rather than the caller learning about the wait.
   // hcn session carries --model, --provider and (since 0.6.0) --effort.
   const cancellation = new AbortController();
-  const open = () =>
+  const open = (resume: string | undefined) =>
     deps.runner.openSession({
       signal: cancellation.signal,
       ...(deps.cwd === undefined ? {} : { cwd: deps.cwd }),
@@ -488,17 +517,28 @@ const sessionStrategy = (
       sessionId: deps.sessionId,
       // Continue the session this harness last held in this record, if lucid
       // found one. The id comes from attach-ok and nowhere else.
-      ...(ctx.resumeSessionId === undefined ? {} : { resume: ctx.resumeSessionId }),
+      ...(resume === undefined ? {} : { resume }),
       ...(deps.model === undefined ? {} : { model: deps.model }),
       ...(deps.provider === undefined ? {} : { provider: deps.provider }),
       ...(deps.effort === undefined ? {} : { effort: deps.effort }),
     });
-  const opening = deps.beforeProcess
-    ? deps.beforeProcess(ctx.resumeSessionId).then(() => {
-        if (cancellation.signal.aborted) throw new Error("Source closed before process start");
-        return open();
-      })
-    : open();
+  const deferred = Promise.withResolvers<SessionHandle>();
+  const opening = deferred.promise;
+  let openingStarted = false;
+  const startOpening = (resume: string | undefined): Promise<SessionHandle> => {
+    if (openingStarted) return opening;
+    openingStarted = true;
+    deferred.resolve(
+      deps.beforeProcess
+        ? deps.beforeProcess(resume).then(() => {
+            if (cancellation.signal.aborted) throw new Error("Source closed before process start");
+            return open(resume);
+          })
+        : open(resume),
+    );
+    return opening;
+  };
+  if (!deps.prepareTurn) startOpening(ctx.resumeSessionId);
   // A failure to open must not become an unhandled rejection. It must also
   // not be silent: a session hcn refuses (a harness with no session mode, an
   // unknown model, a provider it cannot express) ends the source exactly like
@@ -514,8 +554,32 @@ const sessionStrategy = (
   let closed = false;
   // Inputs that arrived mid-turn in `queue` mode, waiting for the boundary. Answers and steers are never held (RFC-05 R3).
   const waiting: Array<{ id: string; text: string; mode: InputMode }> = [];
+  let sessionIdentity = ctx.resumeSessionId;
 
   let artifactPreambleSent = false;
+
+  const refusePrepared = (cause: unknown, fallbackCode: string): void => {
+    if (closed) return;
+    closed = true;
+    waiting.length = 0;
+    cancellation.abort();
+    if (!openingStarted) deferred.reject(cause);
+    void opening.then((session) => session.close()).catch(() => {});
+    const storeCode = classifyStoreFailure(cause);
+    if (storeCode !== undefined) {
+      ctx.stop({ kind: "store-failed", code: storeCode, operation: "turn" });
+      return;
+    }
+    const message = cause instanceof Error ? cause.message : String(cause);
+    ctx.sequencer.emit(ctx.getTurnId(), {
+      kind: EventKind.error,
+      code: cause instanceof HubError ? cause.code : fallbackCode,
+      message,
+      terminal: true,
+    });
+    ctx.reported();
+    ctx.openRefused(message);
+  };
 
   // RFC-12: end this source so its owner can re-open under the changed
   // preference. Anything still waiting for a boundary is dropped here, not
@@ -527,7 +591,18 @@ const sessionStrategy = (
     closed = true;
     waiting.length = 0;
     ctx.driverChange();
+    if (!openingStarted) deferred.reject(new Error("Driver changed before prepared input"));
     void opening.then((session) => session.close()).catch(() => {});
+  };
+
+  const drainWaiting = (): void => {
+    if (closed || ctx.isStopped()) return;
+    if (waiting.length > 0 && ctx.boundaryChange()) {
+      endAsDriverChange();
+      return;
+    }
+    const due = waiting.splice(0, deps.prepareTurn ? 1 : waiting.length);
+    for (const input of due) sendNow(input.id, input.text, input.mode);
   };
 
   const sendNow = (id: string, text: string, mode: InputMode): void => {
@@ -546,7 +621,7 @@ const sessionStrategy = (
     // Not for answers: an answer is raw text through the harness answer
     // path, not a prompt.
     let composed = text;
-    if (mode !== "answer") {
+    if (mode !== "answer" && !(deps.prepareTurn && mode === "queue")) {
       let framed = composeAnnotationPrompt(text);
       if (!artifactPreambleSent) {
         const withProtocol = composeArtifactPrompt(framed, "headless-session");
@@ -611,10 +686,58 @@ const sessionStrategy = (
         });
       return;
     }
-    void opening
-      .then((session) => session.send(id, composed))
+    const prepare = deps.prepareTurn;
+    let failureCode = "E-HUB-06";
+    const delivery =
+      prepare && mode === "queue"
+        ? (async () => {
+            turnRunning = true;
+            ctx.sequencer.disposition(id, "queued");
+            if (openingStarted && sessionIdentity === undefined)
+              throw new HubError(
+                "The running harness has not reported its native session identity. Keep this input pending.",
+                "E-HUB-03",
+              );
+            const prepared = await prepare({
+              inputId: id,
+              signal: cancellation.signal,
+              text,
+              turnId: ctx.getTurnId(),
+              profile: "headless-session",
+              native:
+                sessionIdentity === undefined
+                  ? { kind: "fresh" }
+                  : { kind: "resume", sessionId: sessionIdentity },
+            });
+            if (closed || ctx.isStopped()) return null;
+            if (prepared.kind === "held") {
+              turnRunning = false;
+              drainWaiting();
+              return null;
+            }
+            const resume =
+              prepared.native.kind === "resume" ? prepared.native.sessionId : undefined;
+            if (openingStarted && resume !== sessionIdentity)
+              throw new Error(
+                "Prepared context requires another native session. Reopen the source before dispatch.",
+              );
+            failureCode = "E-HUB-05";
+            if (!openingStarted) sessionIdentity = resume;
+            const session = await startOpening(resume);
+            if (closed || ctx.isStopped()) return null;
+            ctx.owedBytes.clear();
+            ctx.handedOver();
+            return session.send(id, prepared.prompt);
+          })()
+        : opening.then((session) => session.send(id, composed));
+    void delivery
       .then((sent) => {
+        if (sent === null) return;
         if (sent.disposition === "rejected") {
+          if (prepare && mode === "queue") {
+            refusePrepared(new Error(sent.reason ?? "send rejected"), "E-HUB-05");
+            return;
+          }
           ctx.sequencer.disposition(id, "rejected", sent.reason ?? "send rejected");
           return;
         }
@@ -625,13 +748,19 @@ const sessionStrategy = (
         ctx.expected.push({ inputId: id, applied: true });
         ctx.sequencer.disposition(id, "applied");
       })
-      .catch(() => {
-        ctx.sequencer.disposition(id, "rejected", "session closed");
+      .catch((cause: unknown) => {
+        if (prepare && mode === "queue") {
+          refusePrepared(cause, failureCode);
+        } else ctx.sequencer.disposition(id, "rejected", "session closed");
       });
   };
 
   return {
     onInput(id: string, text: string, mode: InputMode): void {
+      // Before a process exists, a steer starts work rather than interrupting
+      // it, so it must pass the same preparation boundary as a queued input.
+      if (deps.prepareTurn && !openingStarted && mode === "steer") mode = "queue";
+      if (deps.prepareTurn && openingStarted && mode !== "queue") ctx.handedOver();
       // A steer or answer is a request to interrupt/unblock, so it goes through mid-turn.
       // Everything else waits for the answer in progress to finish, which
       // is what the interactive path already does - the Stop hook fires at
@@ -660,6 +789,10 @@ const sessionStrategy = (
           session = await opening;
         } catch (cause) {
           if (closed) return;
+          if (deps.prepareTurn) {
+            refusePrepared(cause, "E-HUB-05");
+            return;
+          }
           const message = cause instanceof Error ? cause.message : String(cause);
           // Record why before the pump detaches. This is the only place that
           // knows, and the log is the only thing the operator will have.
@@ -677,11 +810,13 @@ const sessionStrategy = (
         }
         for await (const turn of session.turns) {
           turnRunning = true;
+          let boundaryReached = false;
           // Wrapped so the boundary is observed where it actually happens:
           // when this turn's events are exhausted. `finally` also covers a
           // consumer that abandons the turn early.
           const boundary = (): void => {
-            if (!turnRunning) return;
+            if (boundaryReached) return;
+            boundaryReached = true;
             turnRunning = false;
             if (closed) return;
             // RFC-12: the terminal event is the last moment to honor a
@@ -690,17 +825,14 @@ const sessionStrategy = (
             // outstanding - and the replacement source replays them onto
             // the new spawn. A steer or an answer was never held, so none
             // is lost to this either.
-            if (waiting.length > 0 && ctx.boundaryChange()) {
-              endAsDriverChange();
-              return;
-            }
-            const due = waiting.splice(0, waiting.length);
-            for (const w of due) sendNow(w.id, w.text, w.mode);
+            drainWaiting();
           };
           const bounded: AsyncIterable<HarnessEvent> = {
             async *[Symbol.asyncIterator]() {
               try {
                 for await (const event of turn) {
+                  if (event.kind === EventKind.identity && typeof event.sessionId === "string")
+                    sessionIdentity = event.sessionId;
                   yield event;
                   // The boundary is the terminal event, not the end of the
                   // stream. In session mode hcn holds a turn's stream open
@@ -738,6 +870,7 @@ const sessionStrategy = (
       closed = true;
       waiting.length = 0;
       cancellation.abort();
+      if (!openingStarted) deferred.reject(new Error("Source closed before prepared input"));
       void opening.then((session) => session.close()).catch(() => {});
     },
   };
@@ -829,19 +962,50 @@ const turnStrategy = (
             // resumeId on identity events via a wrapper.
             // Every later turn uses the latest emitted identity. A refusal
             // preserves the input for explicit recovery, never a fresh retry.
+            activeAbort = new AbortController();
+            let composedPrompt: string;
+            if (deps.prepareTurn) {
+              const prepared = await deps
+                .prepareTurn({
+                  inputId: next.id,
+                  signal: activeAbort.signal,
+                  text: next.text,
+                  turnId,
+                  profile: "headless-turn",
+                  native:
+                    resumeId === undefined
+                      ? { kind: "fresh" }
+                      : { kind: "resume", sessionId: resumeId },
+                })
+                .catch((cause: unknown) => {
+                  if (classifyStoreFailure(cause) !== undefined || cause instanceof HubError)
+                    throw cause;
+                  throw new ContextPreparationError(
+                    cause instanceof Error ? cause.message : String(cause),
+                    { cause },
+                  );
+                });
+              if (prepared.kind === "held") {
+                const expected = ctx.expected.findIndex((input) => input.inputId === next.id);
+                if (expected !== -1) ctx.expected.splice(expected, 1);
+                continue;
+              }
+              composedPrompt = prepared.prompt;
+              resumeId = prepared.native.kind === "resume" ? prepared.native.sessionId : undefined;
+              ctx.owedBytes.clear();
+            } else {
+              composedPrompt = composeAvailableState(
+                composeArtifactPrompt(composeAnnotationPrompt(next.text), "headless-turn"),
+                artifactState(deps, ctx),
+              );
+            }
             const attemptResume = resumeId !== undefined;
-            // Read the artifact state once for this input.
-            const state = artifactState(deps, ctx);
-            const composedPrompt = composeAvailableState(
-              composeArtifactPrompt(composeAnnotationPrompt(next.text), "headless-turn"),
-              state,
-            );
             if (ctx.isStopped())
               return { done: true, value: undefined as unknown as AsyncIterable<HarnessEvent> };
-            activeAbort = new AbortController();
             await deps.beforeProcess?.(resumeId);
             if (closed || ctx.isStopped())
               return { done: true, value: undefined as unknown as AsyncIterable<HarnessEvent> };
+            if (deps.prepareTurn) ctx.handedOver();
             let raw = deps.runner.streamTurn({
               signal: activeAbort.signal,
               ...(deps.cwd === undefined ? {} : { cwd: deps.cwd }),
@@ -924,11 +1088,7 @@ const turnStrategy = (
               },
             };
 
-            // Record that this turn consumes a queued input — Host's
-            // expected already has it as queued=false, but turn mode's
-            // queue has been shifted above; we keep them in sync by
-            // noting resumeId continuity happens above.
-            void next;
+            Object.assign(wrapped, { inputId: next.id });
             return { done: false, value: wrapped };
           }
           return { done: true, value: undefined as unknown as AsyncIterable<HarnessEvent> };
@@ -1041,6 +1201,10 @@ export const createHeadlessHost = (
   };
 
   const ctx: HostContext = {
+    handedOver: () => {
+      handedOverAt = clock();
+      stallReported = false;
+    },
     isStopped: () => stopped,
     stop,
     warning: (event, operation, artifactId) => {
@@ -1133,6 +1297,8 @@ export const createHeadlessHost = (
   // that opened it precisely so this does not have to be inferred.
   const pump = (async () => {
     for await (const turn of strategy.turns) {
+      const turnId = currentTurnId;
+      let advanced = false;
       const inputId = (turn as { inputId?: string }).inputId;
       const at =
         inputId === undefined
@@ -1155,16 +1321,20 @@ export const createHeadlessHost = (
           event.kind === EventKind.message &&
           typeof (event as { text?: unknown }).text === "string"
         ) {
-          handleArtifactMessage((event as { text: string }).text, currentTurnId, deps, ctx);
+          handleArtifactMessage((event as { text: string }).text, turnId, deps, ctx);
         }
         if (stopped) return;
         // The harness said something, so it is answering. Every event goes
         // through here, which is why the watch is cleared here rather than
         // at each of the places one can be produced.
         harnessSpoke();
-        sequencer.emit(currentTurnId, event);
+        sequencer.emit(turnId, event);
+        if (event.kind === EventKind.done && !advanced) {
+          currentTurnId = deps.mintTurnId();
+          advanced = true;
+        }
       }
-      currentTurnId = deps.mintTurnId();
+      if (!advanced) currentTurnId = deps.mintTurnId();
     }
   })();
   const sessionEnded = (why: string): void => {
@@ -1200,6 +1370,17 @@ export const createHeadlessHost = (
         });
         return;
       }
+      if (cause instanceof HubError || cause instanceof ContextPreparationError) {
+        ctx.sequencer.emit(ctx.getTurnId(), {
+          kind: EventKind.error,
+          code: cause.code,
+          message: cause.message,
+          terminal: true,
+        });
+        ctx.reported();
+        ctx.openRefused(cause.message);
+        return;
+      }
       // RFC-12: a spawn that never started (the hcn binary itself) is an
       // open refusal for the owner's purposes: hcn's own invocation
       // refusals are already carried by the strategies; this is the case
@@ -1229,8 +1410,7 @@ export const createHeadlessHost = (
     if (stopped) return;
     switch (frame.kind) {
       case "input":
-        handedOverAt = clock();
-        stallReported = false;
+        if (!deps.prepareTurn) ctx.handedOver();
         // The mode travels with the input all the way to the strategy. It
         // used to stop here, which made `steer` and `queue` mean the same
         // thing to a harness.

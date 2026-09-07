@@ -1,9 +1,138 @@
 import { expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli } from "../../src/cli/dispatch.js";
-import { offerContext, readOfferedContext } from "../../src/store/context-offer.js";
+import { encodeAnnotationBatch } from "../../src/protocol/annotations.js";
+import { putBlob } from "../../src/store/blobs.js";
+import {
+  offerContext,
+  offerProjectedContext,
+  readOfferedContext,
+} from "../../src/store/context-offer.js";
+import { projectConversationContext } from "../../src/store/conversation-context.js";
+
+test("transferred notes offer only referenced files and preserve distinct files with the same name", () => {
+  const record = mkdtempSync(join(tmpdir(), "lucid-context-files-"));
+  const first = Buffer.from("first image");
+  const second = Buffer.from("second image");
+  const refs = [first, second].map((bytes) => ({
+    bytes: bytes.length,
+    contentType: "image/png",
+    hash: putBlob(record, bytes),
+    name: "shot.png",
+  }));
+  putBlob(record, Buffer.from("unreferenced upload"));
+  const original = encodeAnnotationBatch({
+    artifactId: "review",
+    version: 1,
+    notes: refs.map((file) => ({ note: `See ${file.hash}`, spots: [], files: [file] })),
+  });
+  const context = projectConversationContext({
+    artifacts: [],
+    from: 0,
+    through: 3,
+    pendingInputId: "next",
+    transcript: {
+      aborted: [],
+      events: [],
+      inputs: [
+        { id: "notes", seq: 1, mode: "queue", status: "applied", text: original },
+        {
+          id: "next",
+          seq: 2,
+          mode: "queue",
+          status: "outstanding",
+          text: "Continue from those notes",
+        },
+      ],
+    },
+  });
+  const offered = offerProjectedContext(record, context);
+  try {
+    const text = readOfferedContext(offered.path, 0, 65536).text;
+    expect(text).toBe(offered.text);
+    expect(text.endsWith(context.pending.text)).toBe(true);
+    expect(text).not.toContain(record);
+    expect(text).not.toContain("unreferenced upload");
+    expect(offered.attachments.map((file) => file.entryId)).toEqual(["input:notes", "input:notes"]);
+    const paths = offered.attachments.map((file) => file.path);
+    for (const path of paths) expect(text).toContain(path ?? "unavailable");
+    expect(text).toContain("Use these locations instead of recorded historical paths");
+    expect(paths[0]).not.toBe(paths[1]);
+    expect(paths.every((path) => path?.startsWith(`${offered.path}/`))).toBe(true);
+    expect(paths.map((path) => readFileSync(path ?? "").toString())).toEqual([
+      "first image",
+      "second image",
+    ]);
+    expect(paths.every((path) => (lstatSync(path ?? "").mode & 0o077) === 0)).toBe(true);
+    expect(context.history[0]?.text).toBe(original);
+  } finally {
+    offered.close();
+    expect(existsSync(offered.path)).toBe(false);
+    rmSync(record, { force: true, recursive: true });
+  }
+});
+
+test("the context copy explicitly identifies a referenced blob that is no longer available", () => {
+  const record = mkdtempSync(join(tmpdir(), "lucid-context-missing-"));
+  const text = encodeAnnotationBatch({
+    artifactId: "review",
+    version: 1,
+    notes: [
+      {
+        note: "Inspect the missing image",
+        spots: [],
+        files: [
+          {
+            hash: "f".repeat(64),
+            bytes: 5,
+            contentType: "image/png",
+            name: "missing.png",
+            path: "/old/expired/copy.png",
+          },
+        ],
+      },
+    ],
+  });
+  const context = projectConversationContext({
+    artifacts: [],
+    from: 0,
+    through: 2,
+    pendingInputId: "next",
+    transcript: {
+      aborted: [],
+      events: [],
+      inputs: [{ id: "next", seq: 1, mode: "queue", status: "outstanding", text }],
+    },
+  });
+  const offered = offerProjectedContext(record, context);
+  try {
+    const restored = readOfferedContext(offered.path, 0, 65536).text;
+    const references = restored.split("The current accepted user request follows:")[0] ?? "";
+    const manifest: unknown = JSON.parse(references.trim().split("\n\n").at(-1) ?? "null");
+    expect(manifest).toEqual([
+      {
+        entryId: "input:next",
+        hash: "f".repeat(64),
+        noteIndex: 0,
+        path: null,
+      },
+    ]);
+    expect(restored).toContain("A null path means the file is unavailable; say so");
+  } finally {
+    offered.close();
+    rmSync(record, { force: true, recursive: true });
+  }
+});
 
 test("offered context is private, outside the record, and readable in bounded slices", () => {
   const record = mkdtempSync(join(tmpdir(), "lucid-context-record-"));

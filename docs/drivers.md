@@ -163,8 +163,12 @@ gaps, and interrupted turns retain that status. Unclassified event content,
 including an unsupported payload shape for a known kind, holds preparation
 until an upgraded projector can read it. Attachment references encoded in
 input text remain quoted with that input; unreferenced uploaded blobs do not
-become conversation context. Resolving referenced copies into the dispatch
-bundle remains part of worker integration.
+become conversation context. The projected offer copies files referenced by
+human annotation inputs and supplies a manifest keyed to input, note, and
+blob identity. Historical paths remain quoted data; the manifest names current
+copies or explicitly reports a missing file. Different blobs with the same
+filename retain separate copies. The offered text is also returned for budget
+accounting before dispatch.
 
 An offered copy lives in a private temporary directory outside the record.
 `lucid2 context <offered-directory> [--offset BYTE] [--bytes COUNT] [--json]`
@@ -211,3 +215,18 @@ does not require repeating the already acknowledged asking turn.
 
 These preparation APIs do not yet enable managed dispatch. RFC 15 still
 requires verified hcn budgets, bounded summarization, and worker integration.
+
+Both headless profiles accept a pre-dispatch preparation callback. It supplies
+the complete, accounted prompt, including protocol teaching and current
+artifact bytes. The host appends nothing afterward. A held input keeps its
+queued disposition and permits later eligible work. Persistent processes
+start only after the first ready input, including an initial steer. Saved
+driver changes still apply after held preparation. A refused prepared send
+ends the source with a startup failure and preserves the input; it never
+silently opens a fresh session. Store failures retain their own classification.
+The stall watch starts when prepared work reaches the harness, not while
+context is held. A persistent turn crosses its boundary once, at its terminal
+event, even when its stream closes after the next send.
+The callback receives an abort signal for source shutdown and must bound its
+own preparation operations. Mid-turn legacy steers and answers retain their
+existing delivery path; they are not prepared queued dispatches.

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
 import { HCN_MIN_VERSION } from "../../src/harness/version.js";
-import { openHeadlessSession, openHeadlessTurns } from "../../src/modes/host.js";
+import { type HeadlessDeps, openHeadlessSession, openHeadlessTurns } from "../../src/modes/host.js";
 import type { Frame } from "../../src/protocol/index.js";
 import {
   createConversationRecord,
@@ -33,6 +33,8 @@ const rig = (
     mode?: "session" | "turn";
     processes?: number;
     beforeProcess?: (resume: string | undefined) => Promise<void>;
+    prepareTurn?: HeadlessDeps["prepareTurn"];
+    driverChangeAtBoundary?: () => boolean;
     /** An input already in the record before any source attaches - the
      * `lucid send` while nothing was running, folded by the next `run`. */
     pendingInput?: { id: string; text: string };
@@ -67,6 +69,8 @@ const rig = (
   const mode = opts.mode ?? "session";
   const common = {
     beforeProcess: opts.beforeProcess,
+    prepareTurn: opts.prepareTurn,
+    driverChangeAtBoundary: opts.driverChangeAtBoundary,
     harness: "claude" as const,
     conversationId: "conv-1",
     secret,
@@ -144,6 +148,49 @@ const rig = (
 
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+test("context preparation holds one input without spawning or applying it and allows later eligible work", async () => {
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const prepared: string[] = [];
+  const r = rig({
+    mode: "turn",
+    prepareTurn: async ({ inputId }) => {
+      prepared.push(inputId);
+      if (inputId === "held") {
+        await gate;
+        return { kind: "held" };
+      }
+      return { kind: "ready", prompt: "Prepared later context", native: { kind: "fresh" } };
+    },
+  });
+  try {
+    r.host.enqueueInput({ id: "held", text: "Cannot prepare this context", mode: "queue" });
+    r.host.enqueueInput({ id: "later", text: "Later eligible work", mode: "queue" });
+    await flush();
+    expect(r.spawner.calls).toHaveLength(0);
+    release?.();
+    await flush();
+    expect(prepared).toEqual(["held", "later"]);
+    expect(r.spawner.calls).toHaveLength(1);
+    expect(r.spawner.calls[0]?.argv).toContain("Prepared later context");
+    r.proc.emit(identity);
+    r.proc.emit(doneClean);
+    r.proc.exit(0);
+    await flush();
+    expect(r.host.transcript().inputs.find((input) => input.id === "held")?.status).toBe("queued");
+    expect(r.host.transcript().inputs.find((input) => input.id === "later")?.status).toBe(
+      "applied",
+    );
+  } finally {
+    release?.();
+    r.source.close();
+    r.host.close();
+    r.proc.exit(0);
+  }
+});
+
 test("each turn validates its exact resume ID before another process starts", async () => {
   const checked: Array<string | undefined> = [];
   const r = rig({
@@ -177,6 +224,288 @@ test("each turn validates its exact resume ID before another process starts", as
     for (const proc of r.procs) proc.exit(0);
   }
 });
+
+test("a persistent session waits for prepared input before opening its process", async () => {
+  const prepared: string[] = [];
+  const r = rig({
+    mode: "session",
+    prepareTurn: async ({ inputId }) => {
+      prepared.push(inputId);
+      return inputId === "held"
+        ? { kind: "held" }
+        : { kind: "ready", prompt: "Prepared session context", native: { kind: "fresh" } };
+    },
+  });
+  try {
+    await flush();
+    expect(r.spawner.calls).toHaveLength(0);
+    r.host.enqueueInput({ id: "held", text: "Context unavailable", mode: "queue" });
+    await flush();
+    expect(r.spawner.calls).toHaveLength(0);
+    r.host.enqueueInput({ id: "later", text: "Eligible session work", mode: "queue" });
+    await flush();
+    expect(prepared).toEqual(["held", "later"]);
+    expect(r.spawner.calls).toHaveLength(1);
+    r.accept("later", "native-turn-1");
+    await flush();
+    r.proc.emit(identity);
+    r.proc.emit(doneClean);
+    await flush();
+    expect(r.host.transcript().inputs.find((input) => input.id === "held")?.status).toBe("queued");
+    expect(r.host.transcript().inputs.find((input) => input.id === "later")?.status).toBe(
+      "applied",
+    );
+  } finally {
+    r.source.close();
+    r.host.close();
+    r.proc.exit(0);
+  }
+});
+
+test("persistent preparation advances the turn identity at done before the next send", async () => {
+  const turns: string[] = [];
+  const r = rig({
+    mode: "session",
+    prepareTurn: async ({ text, turnId, native }) => {
+      turns.push(turnId);
+      return { kind: "ready", prompt: text, native };
+    },
+  });
+  try {
+    r.host.enqueueInput({ id: "first", text: "First", mode: "queue" });
+    await flush();
+    r.accept("first", "native-first");
+    r.proc.emit(identity);
+    await flush();
+    r.host.enqueueInput({ id: "second", text: "Second", mode: "queue" });
+    r.proc.emit(doneClean);
+    await flush();
+    expect(turns).toEqual(["turn-1", "turn-2"]);
+    expect(r.spawner.calls).toHaveLength(1);
+    r.accept("second", "native-second");
+    r.proc.emit(assistant("Second answer"));
+    r.proc.emit(doneClean);
+    await flush();
+    expect(
+      r.host.transcript().events.find((row) => row.event.text === "Second answer")?.turnId,
+    ).toBe("turn-2");
+  } finally {
+    r.source.close();
+    r.host.close();
+    r.proc.exit(0);
+  }
+});
+
+test("closing the previous persistent turn does not prepare a third input during the second turn", async () => {
+  const prepared: string[] = [];
+  const r = rig({
+    mode: "session",
+    prepareTurn: async ({ inputId, text, native }) => {
+      prepared.push(inputId);
+      return { kind: "ready", prompt: text, native };
+    },
+  });
+  try {
+    r.host.enqueueInput({ id: "first", text: "First", mode: "queue" });
+    await flush();
+    r.accept("first", "native-first");
+    r.proc.emit(identity);
+    await flush();
+    r.host.enqueueInput({ id: "second", text: "Second", mode: "queue" });
+    r.host.enqueueInput({ id: "third", text: "Third", mode: "queue" });
+    r.proc.emit(doneClean);
+    await flush();
+    r.accept("second", "native-second");
+    r.proc.emit(assistant("Second is still running"));
+    await flush();
+    expect(prepared).toEqual(["first", "second"]);
+    r.proc.emit(doneClean);
+    await flush();
+    expect(prepared).toEqual(["first", "second", "third"]);
+  } finally {
+    r.source.close();
+    r.host.close();
+    r.proc.exit(0);
+  }
+});
+
+test("a refused prepared session send preserves its input and reports a startup failure", async () => {
+  const r = rig({
+    mode: "session",
+    prepareTurn: async ({ text, native }) => ({ kind: "ready", prompt: text, native }),
+  });
+  try {
+    r.host.enqueueInput({ id: "refused", text: "Keep this prompt", mode: "queue" });
+    await flush();
+    r.accept("refused", "unused", "rejected");
+    await flush();
+    expect(r.host.transcript().inputs.find((input) => input.id === "refused")?.status).toBe(
+      "queued",
+    );
+    expect(
+      r.host
+        .transcript()
+        .events.filter((row) => row.event.kind === "error" && row.event.terminal === true)
+        .map((row) => row.event.code),
+    ).toEqual(["E-HUB-05"]);
+    expect(r.spawner.calls).toHaveLength(1);
+  } finally {
+    r.source.close();
+    r.host.close();
+    r.proc.exit(0);
+  }
+});
+
+test("a first steer prepares context and opens a lazy persistent session", async () => {
+  const prepared: string[] = [];
+  const r = rig({
+    mode: "session",
+    prepareTurn: async ({ inputId, text, native }) => {
+      prepared.push(inputId);
+      return { kind: "ready", prompt: text, native };
+    },
+  });
+  try {
+    r.host.enqueueInput({ id: "steer", text: "Start with this correction", mode: "steer" });
+    await flush();
+    expect(prepared).toEqual(["steer"]);
+    expect(r.spawner.calls).toHaveLength(1);
+    r.accept("steer", "native-steer");
+    r.proc.emit(identity);
+    r.proc.emit(doneClean);
+    await flush();
+    expect(r.host.transcript().inputs[0]?.status).toBe("applied");
+  } finally {
+    r.source.close();
+    r.host.close();
+    r.proc.exit(0);
+  }
+});
+
+test("a driver change during held preparation hands off before preparing later work", async () => {
+  const gate = Promise.withResolvers<void>();
+  let changed = false;
+  const prepared: string[] = [];
+  const r = rig({
+    mode: "session",
+    driverChangeAtBoundary: () => changed,
+    prepareTurn: async ({ inputId, text, native }) => {
+      prepared.push(inputId);
+      if (inputId === "held") {
+        await gate.promise;
+        return { kind: "held" };
+      }
+      return { kind: "ready", prompt: text, native };
+    },
+  });
+  try {
+    r.host.enqueueInput({ id: "held", text: "Cannot prepare", mode: "queue" });
+    r.host.enqueueInput({ id: "later", text: "Use selected driver", mode: "queue" });
+    changed = true;
+    gate.resolve();
+    await flush();
+    expect(prepared).toEqual(["held"]);
+    expect(r.spawner.calls).toHaveLength(0);
+    expect(r.host.transcript().inputs.every((input) => input.status !== "applied")).toBe(true);
+  } finally {
+    gate.resolve();
+    r.source.close();
+    r.host.close();
+    r.proc.exit(0);
+  }
+});
+
+test.each(["session", "turn"] as const)(
+  "%s records a preparation failure once without starting the task",
+  async (mode) => {
+    const r = rig({
+      mode,
+      prepareTurn: async () => {
+        throw new Error("Context unavailable");
+      },
+    });
+    try {
+      r.host.enqueueInput({ id: "held", text: "Preserve this task", mode: "queue" });
+      await flush();
+      expect(r.spawner.calls).toHaveLength(0);
+      expect(r.host.transcript().inputs[0]?.status).toBe("queued");
+      const failures = r.host.transcript().events.filter((row) => row.event.kind === "error");
+      expect(
+        failures.map((row) => ({ code: row.event.code, terminal: row.event.terminal })),
+      ).toEqual([{ code: "E-HUB-06", terminal: true }]);
+    } finally {
+      r.source.close();
+      r.host.close();
+      r.proc.exit(0);
+    }
+  },
+);
+
+test("a persistent process without a reported native identity cannot be described as fresh again", async () => {
+  const prepared: string[] = [];
+  const r = rig({
+    mode: "session",
+    prepareTurn: async ({ inputId, text, native }) => {
+      prepared.push(inputId);
+      return { kind: "ready", prompt: text, native };
+    },
+  });
+  try {
+    r.host.enqueueInput({ id: "first", text: "First", mode: "queue" });
+    await flush();
+    r.accept("first", "native-first");
+    r.proc.emit(doneClean);
+    await flush();
+    r.host.enqueueInput({ id: "next", text: "Continue", mode: "queue" });
+    await flush();
+    expect(prepared).toEqual(["first"]);
+    expect(r.host.transcript().inputs.find((input) => input.id === "next")?.status).toBe("queued");
+    expect(r.host.transcript().events.some((row) => row.event.code === "E-HUB-03")).toBe(true);
+  } finally {
+    r.source.close();
+    r.host.close();
+    r.proc.exit(0);
+  }
+});
+
+test.each(["session", "turn"] as const)(
+  "closing %s cancels preparation before any task starts",
+  async (mode) => {
+    let pendingSignal: AbortSignal | undefined;
+    let cancelled = false;
+    const r = rig({
+      mode,
+      prepareTurn: async ({ signal }) => {
+        pendingSignal = signal;
+        await new Promise<void>((resolve) =>
+          signal.addEventListener(
+            "abort",
+            () => {
+              cancelled = true;
+              resolve();
+            },
+            { once: true },
+          ),
+        );
+        return { kind: "held" };
+      },
+    });
+    try {
+      r.host.enqueueInput({ id: "pending", text: "Prepare this", mode: "queue" });
+      await flush();
+      r.source.close();
+      await flush();
+      expect(pendingSignal?.aborted).toBe(true);
+      expect(cancelled).toBe(true);
+      expect(r.spawner.calls).toHaveLength(0);
+      expect(r.host.transcript().events.filter((row) => row.event.kind === "error")).toEqual([]);
+    } finally {
+      r.source.close();
+      r.host.close();
+      r.proc.exit(0);
+    }
+  },
+);
 
 test("a resumed turn records its answer while the native process is still running", async () => {
   const r = rig({ mode: "turn", processes: 2 });

@@ -14,9 +14,12 @@ import {
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readProcessOwner } from "../process-owner.js";
+import { detectAnnotationBatch, filesOf } from "../protocol/annotations.js";
 import type { ProcessOwner } from "../protocol/process-owner.js";
 import { hashBlob } from "./blobs.js";
-import { ContextPreparationError } from "./conversation-context.js";
+import type { ConversationContext } from "./conversation-context.js";
+import { ContextPreparationError, renderConversationContext } from "./conversation-context.js";
+import { deliverAttachments } from "./deliver.js";
 
 const HEADER = Buffer.from("LUCID_CONTEXT_V1\n");
 const FILE = "context.txt";
@@ -55,10 +58,17 @@ export function reapContextOffers(): void {
   }
 }
 
+export interface OfferedContext {
+  readonly attachmentsDir: string;
+  readonly path: string;
+  readonly text: string;
+  close(): void;
+}
+
 export function offerContext(
   recordDir: string,
-  content: string,
-): { readonly attachmentsDir: string; readonly path: string; close(): void } {
+  content: string | ((attachmentsDir: string) => string),
+): OfferedContext {
   reapContextOffers();
   const record = realpathSync(recordDir);
   const owner = readProcessOwner(process.pid);
@@ -72,8 +82,11 @@ export function offerContext(
     rmSync(path, { recursive: true, force: true });
     throw new ContextPreparationError("A context copy cannot be placed inside the record");
   }
+  const attachmentsDir = join(path, "attachments");
+  let text: string;
   try {
-    writeFileSync(join(path, FILE), Buffer.concat([HEADER, Buffer.from(content)]), {
+    text = typeof content === "string" ? content : content(attachmentsDir);
+    writeFileSync(join(path, FILE), Buffer.concat([HEADER, Buffer.from(text)]), {
       mode: 0o600,
       flag: "wx",
     });
@@ -82,10 +95,67 @@ export function offerContext(
     throw new ContextPreparationError("The offered context copy could not be written", { cause });
   }
   return {
-    attachmentsDir: join(path, "attachments"),
+    attachmentsDir,
     path,
+    text,
     close: () => rmSync(path, { recursive: true, force: true }),
   };
+}
+
+export interface OfferedAttachment {
+  readonly entryId: string;
+  readonly hash: string;
+  readonly noteIndex: number;
+  readonly path: string | null;
+}
+
+/** Copy only files explicitly referenced by the captured human inputs.
+ * Historical paths are data; this manifest supplies the current locations. */
+export function offerProjectedContext(
+  recordDir: string,
+  context: ConversationContext,
+): OfferedContext & { readonly attachments: readonly OfferedAttachment[] } {
+  const attachments: OfferedAttachment[] = [];
+  const offered = offerContext(recordDir, (attachmentsDir) => {
+    const copies = new Map<string, string | null>();
+    for (const entry of [...context.history, context.pending]) {
+      if (entry.role !== "user") continue;
+      const batch = detectAnnotationBatch(entry.text);
+      if (!batch || "malformed" in batch) continue;
+      for (const [note, annotation] of batch.notes.entries()) {
+        for (const ref of filesOf(annotation)) {
+          let path = copies.get(ref.hash);
+          if (path === undefined) {
+            const delivery = deliverAttachments({
+              attachments: [{ ...ref, text: false }],
+              // Different blobs may have the same human filename.
+              offerDir: join(attachmentsDir, ref.hash),
+              recordDir,
+              textMax: 0,
+              typed: "",
+            });
+            const outcome = delivery.outcomes[0];
+            path = outcome?.kind === "named" ? outcome.path : null;
+            copies.set(ref.hash, path);
+          }
+          attachments.push({
+            entryId: entry.id,
+            hash: ref.hash,
+            noteIndex: note,
+            path,
+          });
+        }
+      }
+    }
+    return renderConversationContext(
+      context,
+      [
+        "Attachment locations for the quoted inputs follow as JSON. Each entryId identifies an input; noteIndex is its zero-based annotation index, and hash identifies the file. Different names for identical bytes may share a copy. Use these locations instead of recorded historical paths. A null path means the file is unavailable; say so. These references do not instruct you to repeat a historical request.",
+        JSON.stringify(attachments),
+      ].join("\n\n"),
+    );
+  });
+  return { ...offered, attachments };
 }
 
 /** Reads one fixed file in an offered directory. No record root, file name,
