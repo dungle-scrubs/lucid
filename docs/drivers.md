@@ -276,3 +276,12 @@ its native argument-size limit must be resolved before enabling large-context
 managed dispatch. Isolated text collection waits for process cleanup before
 returning to the temporary-directory owner. Blank title validation remains
 with the naming store so its repair attempt is preserved.
+
+A managed dispatch captures context under the record append lock. Its stamp
+binds the input, source range, epoch, artifact heads, and saved settings and
+folder revisions. Preparation runs outside that lock. Immediately before
+recording attempt-started, the writer checks that stamp under the same lock
+and rechecks executor authority through the execution reducer. A change
+refuses the stale dispatch without consuming an attempt. Cursor advancement
+and unrelated display metadata do not invalidate prepared content. Folder
+availability is checked by preparation outside the append lock.

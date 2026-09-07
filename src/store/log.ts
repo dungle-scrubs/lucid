@@ -966,7 +966,15 @@ export interface LogDeps {
   readonly onAppendEvent?: (e: AppendEvent) => void;
 }
 
+export interface LockedRecordSnapshot {
+  readonly artifacts: readonly ArtifactVersion[];
+  readonly state: ChannelState;
+  readonly transcript: Transcript;
+}
+
 export interface ConversationLog {
+  /** Catch up and read one coherent record under the append lock. */
+  inspect<TValue>(read: (snapshot: LockedRecordSnapshot) => TValue): TValue;
   readonly paths: RecordPaths;
   readonly conversationId: string;
   state(): ChannelState;
@@ -1181,6 +1189,27 @@ export const createLog = (
     });
   const lineOf = (entry: LogEntry): Buffer => Buffer.from(`${JSON.stringify(entry)}\n`);
 
+  const transcript = (): Transcript => ({
+    events: [...acc.events],
+    inputs: [...acc.inputs],
+    aborted: [...acc.aborted],
+  });
+  const lockedSnapshot = (raw: Buffer): LockedRecordSnapshot => {
+    const artifacts: ArtifactVersion[] = [];
+    for (const [id, version] of curArtifactHeads) {
+      const artifact = readArtifactVersion(raw, id, version, curArtifactIndex);
+      if (artifact === null || artifact.artifactId !== id || artifact.version !== version)
+        throw new StoreError(
+          "corrupt-log",
+          "The current artifact could not be read during context capture",
+        );
+      artifacts.push(artifact);
+    }
+    return { artifacts, state: curState, transcript: transcript() };
+  };
+  const inspect = <TValue>(read: (snapshot: LockedRecordSnapshot) => TValue): TValue =>
+    transaction((_folded, raw) => ({ line: null, result: read(lockedSnapshot(raw)) }));
+
   const append: ConversationLog["append"] = (produce) =>
     transaction(() => {
       const { entry, result, frame } = produce(curState);
@@ -1344,15 +1373,12 @@ export const createLog = (
   };
 
   return {
+    inspect,
     paths,
     conversationId,
     state: () => curState,
     acceptedInput: (id) => acc.inputs.find((entry) => entry.id === id),
-    transcript: () => ({
-      events: [...acc.events],
-      inputs: [...acc.inputs],
-      aborted: [...acc.aborted],
-    }),
+    transcript,
     goodBytes: () => curGoodBytes,
     artifactIndex: () => new Map(curArtifactIndex),
     artifactHeads: () => new Map(curArtifactHeads),

@@ -48,6 +48,7 @@ import {
   reduceContextCoverage,
 } from "../protocol/context-coverage.js";
 import {
+  type AttemptStart,
   parseExecutionFact,
   reconcileExecutionFact,
   reduceExecution,
@@ -71,6 +72,11 @@ import {
   type TransitionRecord,
 } from "../protocol/index.js";
 import { enqueueManagedInput } from "../protocol/reducer.js";
+import {
+  captureDispatchContext,
+  type DispatchSnapshot,
+  dispatchStamp,
+} from "./dispatch-context.js";
 import { pathsForDir, type RecordPaths, StoreError } from "./errors.js";
 import type { LockEvent } from "./flock.js";
 import type { ArtifactVersions } from "./log.js";
@@ -183,6 +189,8 @@ export const readRecordFiles = (
 };
 
 export interface ConversationHost {
+  captureDispatch(inputId: string, from: number): DispatchSnapshot;
+  writePreparedExecution(fact: AttemptStart, stamp: string): ReduceResult;
   hasAcceptedInput(id: string): boolean;
   contextCoverage(harness: HarnessName, sessionId: string): number;
   offerConversationContext(offer: ContextOfferRequest): ReduceResult;
@@ -393,6 +401,18 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
   };
 
   return {
+    captureDispatch: (inputId, from) =>
+      log.inspect((snapshot) => captureDispatchContext(dir, inputId, from, snapshot)),
+    writePreparedExecution: (fact, stamp) =>
+      writeExecution((state) => {
+        if (
+          dispatchStamp(dir, fact.inputId, fact.context, state.epoch, log.artifactHeads()) !==
+            stamp ||
+          fact.context.through !== state.seq + 1
+        )
+          return { issue: "execution-stale" };
+        return fact;
+      }),
     hasAcceptedInput: (id) => log.acceptedInput(id) !== undefined,
     reconcileExecution: (inputId, attempt) =>
       writeExecution((state) => reconcileExecutionFact(state, inputId, attempt)),
