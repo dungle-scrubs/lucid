@@ -6,6 +6,7 @@ import { conversations } from "../../src/cli/record-addressing.js";
 import { openDrivenConversation, startHeadless } from "../../src/cli/runtime.js";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
 import type { HarnessRunner } from "../../src/harness/runner.js";
+import { HCN_MIN_VERSION } from "../../src/harness/version.js";
 import type { createHeadlessHost } from "../../src/modes/host.js";
 import type { Frame } from "../../src/protocol/index.js";
 import { createConversationHost, openWriter } from "../../src/store/conversation-host.js";
@@ -251,7 +252,7 @@ test("failed-log shutdown releases presence and closes the host while harness cl
   });
   if (handle.kind !== "running") throw new Error("did not start");
   const cursor = handle.host.cursor();
-  proc.emit({ kind: "session", sessionId: "session-1", harness: "claude", hcn: "0.6.0" });
+  proc.emit({ kind: "session", sessionId: "session-1", harness: "claude", hcn: HCN_MIN_VERSION });
   handle.source.receive({
     kind: "input",
     id: "in-1",

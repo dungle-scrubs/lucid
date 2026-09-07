@@ -22,6 +22,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
+import { HCN_MIN_VERSION } from "../../src/harness/version.js";
 import { createHeadlessHost, hostSeamFor } from "../../src/modes/host.js";
 import { encodeAnnotationBatch } from "../../src/protocol/annotations.js";
 import type { Frame } from "../../src/protocol/frames.js";
@@ -61,7 +62,7 @@ const rig = () => {
     kind: "session",
     sessionId: SID,
     harness: "claude",
-    hcn: "0.6.0",
+    hcn: HCN_MIN_VERSION,
     escalateQuestions: true,
   });
   let seq = 0;

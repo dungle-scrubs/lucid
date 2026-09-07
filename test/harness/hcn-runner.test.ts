@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { decodeHarnessLine } from "../../src/harness/events.js";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
 import { HarnessRefusal, HarnessVersionError } from "../../src/harness/runner.js";
+import { HCN_MIN_VERSION } from "../../src/harness/version.js";
 import { FakeHcnProcess, fakeSpawner, fixtureEvents } from "./fakes.js";
 
 const BIN = "/fake/hcn";
@@ -101,7 +102,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: "0.6.0",
+      hcn: HCN_MIN_VERSION,
       escalateQuestions: true,
     });
     const session = await opening;
@@ -147,7 +148,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: "0.6.0",
+      hcn: HCN_MIN_VERSION,
       escalateQuestions: true,
     });
     const session = await opening;
@@ -166,7 +167,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: "0.6.0",
+      hcn: HCN_MIN_VERSION,
       escalateQuestions: true,
     });
     const session = await opening;
@@ -192,7 +193,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: "0.6.0",
+      hcn: HCN_MIN_VERSION,
       escalateQuestions: true,
     });
     const session = await opening;
@@ -213,7 +214,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: "0.6.0",
+      hcn: HCN_MIN_VERSION,
       escalateQuestions: true,
     });
     const session = await opening;
@@ -236,7 +237,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: "0.6.0",
+      hcn: HCN_MIN_VERSION,
       escalateQuestions: true,
     });
     const session = await opening;
@@ -253,7 +254,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: "0.6.0",
+      hcn: HCN_MIN_VERSION,
       escalateQuestions: true,
     });
     const session = await opening;
@@ -288,7 +289,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "pi",
-      hcn: "0.6.0",
+      hcn: HCN_MIN_VERSION,
       escalateQuestions: true,
     });
     await opening;
@@ -437,7 +438,7 @@ describe("inspection, which never spawns a harness", () => {
 
 describe("review fixes: what the cross-family review found", () => {
   const sid2 = "479c05c6-0c2b-416a-9700-2b04cf8ecf24";
-  const open = async (r: ReturnType<typeof rig>, hcn = "0.6.0") => {
+  const open = async (r: ReturnType<typeof rig>, hcn = HCN_MIN_VERSION) => {
     const opening = r.runner.openSession({ harness: "claude", sessionId: sid2 });
     r.proc.emit({
       kind: "session",
@@ -567,7 +568,7 @@ describe("a turn that carries a failure still delivers its events", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: "0.6.0",
+      hcn: HCN_MIN_VERSION,
       escalateQuestions: true,
     });
     const session = await opening;

@@ -81,7 +81,7 @@ describe("what the pinned hcn serves", () => {
         };
       };
       expect(body.driverChoices.harnesses).toEqual(["claude", "codex", "pi", "muse"]);
-      // The pinned 0.6.0 describes all four. On a deliberate hcn bump this
+      // The pinned release describes all four. On a deliberate hcn bump this
       // is the assertion that names the change.
       expect(Object.keys(body.driverChoices.vocabulary)).toEqual(["claude", "codex", "pi", "muse"]);
       for (const h of Object.keys(body.driverChoices.vocabulary)) {
