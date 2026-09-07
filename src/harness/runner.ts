@@ -144,6 +144,8 @@ export interface OpenSessionOptions {
 }
 
 export interface StreamTurnOptions {
+  /** hcn-enforced wall-clock bound in seconds. Isolated jobs default to 60. */
+  readonly timeoutSeconds?: number;
   readonly signal?: AbortSignal;
   readonly isolation?: "tool-free";
   readonly harness: HarnessName;

@@ -11,6 +11,57 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
+test("a clean blank title remains invalid output eligible for its one repair attempt", async () => {
+  const { runNamingJob } = await import("../../src/server/naming-worker.js");
+  const root = mkdtempSync(join(tmpdir(), "lucid-title-blank-"));
+  roots.push(root);
+  const { paths } = createConversationRecord(root, "c");
+  openConversation(paths.dir, {
+    now: () => 1,
+    presence: () => false,
+    executorLease: () => false,
+    onEffect: () => {},
+    onRecord: () => {},
+  }).enqueueInput({ id: "first", text: "Repair project search", mode: "queue" });
+  let launches = 0;
+  const runner: HarnessRunner = {
+    inspect: async () => ({ name: "claude", session: true, verifiedAgainst: "fake" }),
+    countContext: async () => ({ status: "unavailable", reason: "not-configured" }),
+    capabilities: async () => {
+      throw new Error("unused");
+    },
+    openSession: async () => {
+      throw new Error("unused");
+    },
+    streamTurn: async function* (options) {
+      launches++;
+      if (launches === 2) expect(options.prompt).toContain("Your previous output was invalid");
+      yield {
+        kind: "message",
+        role: "assistant",
+        text: launches === 1 ? "  " : "Project search repair",
+      };
+      yield { kind: "done", exitCode: 0, cause: "clean" };
+    },
+  };
+  const resolve = async () => ({
+    harness: "claude" as const,
+    model: "concrete-opus",
+    effort: "high",
+    profile: "headless-turn" as const,
+  });
+  await runNamingJob(paths.dir, "c", runner, resolve);
+  expect(readRecordMetadata(paths.dir).titleGeneration).toMatchObject({
+    status: "repair",
+    attempts: 1,
+  });
+  await runNamingJob(paths.dir, "c", runner, resolve);
+  expect(readRecordMetadata(paths.dir)).toMatchObject({
+    conversationTitle: "Project search repair",
+    titleGeneration: { status: "finished", attempts: 2 },
+  });
+});
+
 test("worker defers unresolved settings then names separately without a working folder or native resume", async () => {
   const { runNamingJob } = await import("../../src/server/naming-worker.js");
   const root = mkdtempSync(join(tmpdir(), "lucid-title-worker-"));

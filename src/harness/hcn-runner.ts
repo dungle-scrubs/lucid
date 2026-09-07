@@ -245,20 +245,39 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
       ...flag("--effort", opts.effort),
       ...flag("--resume", opts.resume),
       ...flag("--isolation", opts.isolation),
-      ...(opts.isolation ? ["--timeout", "60", "--questions", "none"] : []),
-      opts.prompt,
+      ...flag(
+        "--timeout",
+        opts.timeoutSeconds === undefined
+          ? opts.isolation
+            ? "60"
+            : undefined
+          : String(opts.timeoutSeconds),
+      ),
+      ...(opts.isolation ? ["--questions", "none"] : []),
+      "--prompt-file",
+      "-",
     ];
     log({ event: "hcn_run", turnId: opts.turnId, harness: opts.harness });
     const proc = deps.spawn(argv, opts.cwd === undefined ? {} : { cwd: opts.cwd });
-    let terminating = false;
+    let termination: Promise<void> | undefined;
     const terminate = (): void => {
-      if (terminating) return;
-      terminating = true;
-      void terminateHcn(proc, deps.refusalGraceMs ?? 1_000);
+      termination ??= (async () => {
+        const grace = deps.refusalGraceMs ?? 12_000;
+        await terminateHcn(proc, grace);
+        await settlesWithin(proc.exited, grace);
+        proc.disposeOutput();
+      })();
     };
     const removeAbort = (): void => opts.signal?.removeEventListener("abort", terminate);
     opts.signal?.addEventListener("abort", terminate, { once: true });
     if (opts.signal?.aborted) terminate();
+    void proc.inputError?.then(terminate);
+    try {
+      proc.write(opts.prompt);
+      proc.endInput();
+    } catch {
+      terminate();
+    }
     void proc.exited.then(removeAbort, removeAbort);
     // A pipe nobody reads fills, and a child blocked writing to it stops
     // producing stdout - a hang that looks exactly like a harness stall.
@@ -282,6 +301,7 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
             log({ event: "hcn_run_abandoned", turnId: opts.turnId, harness: opts.harness });
             terminate();
           }
+          await termination;
         }
       },
     };

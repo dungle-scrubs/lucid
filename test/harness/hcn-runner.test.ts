@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { decodeHarnessLine } from "../../src/harness/events.js";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
+import { nodeSpawnHcn } from "../../src/harness/node-deps.js";
 import { HarnessRefusal, HarnessVersionError } from "../../src/harness/runner.js";
 import { HCN_MIN_VERSION } from "../../src/harness/version.js";
 import { FakeHcnProcess, fakeSpawner, fixtureEvents } from "./fakes.js";
@@ -58,7 +59,16 @@ describe("streamTurn over hcn run --json", () => {
     // pass on a decoder that mangled every field.
     expect(events).toEqual(recorded);
     expect(events.at(-1)).toMatchObject({ kind: "done", cause: "clean" });
-    expect(r.spawner.calls[0]?.argv).toEqual([BIN, "run", "claude", "--json", "hi"]);
+    expect(r.spawner.calls[0]?.argv).toEqual([
+      BIN,
+      "run",
+      "claude",
+      "--json",
+      "--prompt-file",
+      "-",
+    ]);
+    expect(r.proc.writes.join("")).toBe("hi");
+    expect(r.proc.inputEnded).toBe(true);
   });
 
   test("resume and model reach the argv", async () => {
@@ -520,6 +530,31 @@ describe("review fixes: what the cross-family review found", () => {
 });
 
 describe("an abandoned turn does not leave a child running", () => {
+  test("abandonment waits for process cleanup before returning to the directory owner", async () => {
+    let exited = false;
+    class SlowExit extends FakeHcnProcess {
+      override kill(signal: "SIGTERM" | "SIGKILL" = "SIGTERM"): void {
+        this.signals.push(signal);
+        setTimeout(() => {
+          exited = true;
+          this.exit(null);
+        }, 5);
+      }
+    }
+    const r = rig([new SlowExit()]);
+    const iterator = r.runner
+      .streamTurn({
+        harness: "claude",
+        prompt: "Summary",
+        turnId: "summary",
+        isolation: "tool-free",
+      })
+      [Symbol.asyncIterator]();
+    r.proc.emit({ kind: "token", text: "too much output" });
+    await iterator.next();
+    await iterator.return?.();
+    expect(exited).toBe(true);
+  });
   test("breaking out of a turn's events kills the hcn process", async () => {
     const r = rig();
     const turn = r.runner.streamTurn({ harness: "claude", prompt: "hi", turnId: "t1" });
@@ -552,6 +587,26 @@ describe("an abandoned turn does not leave a child running", () => {
     expect(events).toHaveLength(1);
     expect(r.proc.signals).toHaveLength(0);
   });
+});
+
+test("a large prepared prompt crosses the real hcn process boundary over stdin", async () => {
+  // Synthetic peer implements the public hcn stream, not a native harness.
+  const peer =
+    'const text = await Bun.stdin.text(); console.log(JSON.stringify({kind:"message", role:"assistant", text:String(text.length)})); console.log(JSON.stringify({kind:"done", exitCode:0, cause:"clean"}));';
+  const runner = createHcnRunner({
+    bin: "/synthetic/hcn",
+    spawn: (argv, opts) =>
+      nodeSpawnHcn([process.execPath, "-e", peer, "--", ...argv.slice(1)], opts),
+  });
+  const events = [];
+  for await (const event of runner.streamTurn({
+    harness: "claude",
+    prompt: "x".repeat(1024 * 1024),
+    turnId: "large-prompt",
+  }))
+    events.push(event);
+  expect(events).toContainEqual({ kind: "message", role: "assistant", text: "1048576" });
+  expect(events.at(-1)).toMatchObject({ kind: "done", cause: "clean" });
 });
 
 describe("a turn that carries a failure still delivers its events", () => {
@@ -825,6 +880,10 @@ test("isolated naming asks hcn to enforce isolation, bounds runtime, and refuses
   expect(r.spawner.calls[0]?.argv).toContain("--isolation");
   expect(r.spawner.calls[0]?.argv).toContain("tool-free");
   expect(r.spawner.calls[0]?.argv).toContain("--timeout");
+  expect(r.spawner.calls[0]?.argv).toContain("--prompt-file");
+  expect(r.spawner.calls[0]?.argv).not.toContain("Name quoted data");
+  expect(r.proc.writes.join("")).toBe("Name quoted data");
+  expect(r.proc.inputEnded).toBe(true);
   expect(() =>
     r.runner.streamTurn({
       harness: "claude",

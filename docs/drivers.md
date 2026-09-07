@@ -242,3 +242,37 @@ event, even when its stream closes after the next send.
 The callback receives an abort signal for source shutdown and must bound its
 own preparation operations. Mid-turn legacy steers and answers retain their
 existing delivery path; they are not prepared queued dispatches.
+
+`createContextPreparer` accounts for the renderer's complete prompt. When
+history exceeds the verified budget, it starts with the last four human/assistant
+messages and every entry after them, narrowing to the most recent message
+when needed to fit. It always retains all mandatory current content and the
+pending input. Older content is summarized through the selected model in a
+separate tool-free temporary directory, without a working native session ID.
+Every summary request is counted with the same isolated choices before it
+runs. Large source entries split between Unicode code points with source IDs and
+offsets. Preparation permits at most six passes, 64 summary operations, and
+256 accounting requests; each output is bounded to 16,000 characters and
+each summary operation has a 300-second hcn deadline. A
+character limit bounds transport allocation only and never estimates tokens.
+
+The preparer retains up to 16 first-pass derived summaries in memory. Further
+compression for a larger pending request does not replace that fuller cache.
+Cache keys include
+source content, source coverage, selected harness/model/effort/provider, and
+the verified executable. Changed pending text can reuse unchanged older
+history, but the complete resulting prompt is always recounted. The result
+includes summary notice data; the controller must display it and revalidate
+its dispatch snapshot. This module does not authorize or launch the pending
+task. Unknown budgets, unavailable isolation, incomplete summaries, changed
+executables/models, and oversized mandatory content hold with E-HUB-06.
+The offered full context copy remains canonical for retrieval; summaries do
+not alter the record. Worker integration and browser notices remain active
+RFC 15 work before managed execution can be enabled.
+
+All one-turn prompts cross the Lucid-to-hcn boundary over stdin, including
+ordinary task prompts. The native harness transport still belongs to hcn;
+its native argument-size limit must be resolved before enabling large-context
+managed dispatch. Isolated text collection waits for process cleanup before
+returning to the temporary-directory owner. Blank title validation remains
+with the naming store so its repair attempt is preserved.

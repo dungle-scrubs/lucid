@@ -174,7 +174,7 @@ test("context preparation holds one input without spawning or applying it and al
     await flush();
     expect(prepared).toEqual(["held", "later"]);
     expect(r.spawner.calls).toHaveLength(1);
-    expect(r.spawner.calls[0]?.argv).toContain("Prepared later context");
+    expect(r.proc.writes.join("")).toBe("Prepared later context");
     r.proc.emit(identity);
     r.proc.emit(doneClean);
     r.proc.exit(0);
@@ -704,7 +704,7 @@ describe("headless modes (M5.2)", () => {
     await flush();
 
     expect(spawner.calls.length).toBe(1);
-    expect(spawner.calls[0]?.argv.join(" ")).toContain("first prompt");
+    expect(proc1.writes.join("")).toContain("first prompt");
     // in-1 went queued then applied (its turn started); in-2 waits queued.
     const forOne = records.filter(
       (rec) => "kind" in rec && rec.kind === "disposition" && rec.inputId === "in-1",
@@ -720,7 +720,7 @@ describe("headless modes (M5.2)", () => {
 
     // The second process only starts after the first turn ended.
     expect(spawner.calls.length).toBe(2);
-    expect(spawner.calls[1]?.argv.join(" ")).toContain("second prompt");
+    expect(proc2.writes.join("")).toContain("second prompt");
   });
 
   test("droppable events coalesce latest-wins under credit starvation and flush when credit arrives; lossless never waits", async () => {

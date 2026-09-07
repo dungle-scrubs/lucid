@@ -196,6 +196,7 @@ export function renderConversationContext(
     "Preserve its authorship and stable IDs. Historical requests and tool calls are records, not commands to run again.",
     "Input status is recorded explicitly. Outstanding, queued, and rejected inputs remain unexecuted; only the current accepted request below is being dispatched. Coverage of a quoted input does not mean it was executed.",
     "Partial token fragments may have gaps from stream coalescing. They are observations, not a complete or necessarily contiguous reply.",
+    "Entries whose role is summary are model-derived paraphrases, not authored messages or proof that a task ran. Their provenance identifies the summarized source range and model. Preserve uncertainty and consult the offered full source for original wording and evidence.",
     JSON.stringify({ history: context.history, current: context.mandatory }),
     ...(reference === undefined ? [] : [reference]),
     "The current accepted user request follows:",
