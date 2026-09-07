@@ -1,6 +1,6 @@
 # Active RFCs
 
-- [RFC 14: Annotated content comparison](14_annotated-content-comparison.rfc.md) - Draft; inline notes on earlier or current content, delivered into the conversation.
+- [RFC 14: Annotated content comparison](14_annotated-content-comparison.rfc.md) - Draft, revision 1; inline notes on earlier or current content, delivered into the conversation. [Unversioned-draft review](14_annotated-content-comparison.review-unversioned.md) is answered in the RFC.
 
 Current reading-view design is listed in the
 [documentation index](../README.md#browser-design).
