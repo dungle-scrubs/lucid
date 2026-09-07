@@ -149,3 +149,33 @@ must not leave the child or its output tasks running.
 These contracts consolidate the substrate plan and completed RFCs 02-05 and
 13. Their historical labels remain in some oracle names; see the
 [archive policy](README.md#historical-references).
+
+## Conversation titles
+
+Conversation titles are display metadata, separate from artifact titles. The
+shared validator accepts one to seven Unicode word-like segments and at most
+128 Unicode scalar values. A manual rename compares `titleRevision` under
+the append lock. It advances the revision and wins over a late generated title.
+
+Accepted input carries a durable naming marker. After input fsync, Lucid
+writes the original prompt's fallback, its revision, and bounded naming state
+to metadata. A worker can recover a missing metadata write from that marker.
+Discovery leaves untouched legacy metadata alone. Valid legacy titles remain;
+invalid ones display a fallback until an explicit valid rename.
+
+The CLI wakes a detached, short-lived naming worker after submission and
+settings changes, and when serving starts. One root lock limits each root to
+one coordinator; it runs at most two naming jobs. A separate job lock covers
+an isolated hcn turn. Naming does not take the conversation executor lease or
+write assistant events. Embedded servers opt in with a worker wake callback;
+the CLI owns its executable entry point. The coordinator scans on wake or
+repair. A root-level fingerprint cache skips unchanged legacy logs across
+worker restarts; recovery streams its marker preflight in bounded chunks.
+
+Unresolved settings consume no attempt. hcn must accept tool-free isolation
+before launch. Unsupported isolation records an unavailable reason and keeps
+the fallback. A later wake rechecks availability without consuming an attempt
+until isolation succeeds. Each attempt is consumed durably before launch. Only an invalid
+title allows one repair; interrupted and failed attempts are not repeated.
+Naming has its own temporary working folder, a bounded prompt excerpt, and
+no native session resume. Attachment contents are never a naming source.

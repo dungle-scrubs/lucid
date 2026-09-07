@@ -250,3 +250,65 @@ summary:focus-visible {
     padding-inline: 28px;
   }
 }
+
+.hub-item {
+  display: flex;
+  align-items: center;
+}
+.hub-item .hub-row {
+  flex: 1;
+  min-width: 0;
+}
+.hub-rename {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  margin-inline-end: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+}
+.hub-rename:hover,
+.hub-rename[data-state="open"] {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.settings-popover.title-popover {
+  width: min(360px, calc(100vw - 32px));
+  max-height: var(--radix-popover-content-available-height);
+}
+.title-form label {
+  font-weight: 600;
+}
+.title-count {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.title-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .hub-rename {
+    opacity: 0;
+  }
+  .hub-rename[data-state="open"],
+  .hub-item:hover .hub-rename,
+  .hub-item:focus-within .hub-rename {
+    opacity: 1;
+  }
+}
+[data-slot="button"][data-variant="default"] {
+  background: var(--primary);
+  color: var(--background);
+  border: 1px solid var(--primary);
+}
+[data-slot="button"][data-variant="ghost"] {
+  background: transparent;
+  color: var(--foreground);
+  border: 1px solid transparent;
+}

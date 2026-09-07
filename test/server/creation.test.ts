@@ -403,3 +403,41 @@ test("an unavailable record root keeps creation retryable with the same request"
   const id = (await recovered.json()).conversationId;
   expect((await r.request("conversations", body).then((r) => r.json())).conversationId).toBe(id);
 });
+
+test("hub title writes validate text and use revision conflicts without launching a model", async () => {
+  const r = await rig();
+  const created = await (
+    await r.request("conversations", { creationId: "title-create", workingDirectory: r.home })
+  ).json();
+  const path = `conversations/${created.conversationId}/title`;
+  const malformed = await r.request(path, []);
+  expect(malformed.status).toBe(400);
+  expect(await malformed.json()).toMatchObject({
+    error: "E-HUB-08",
+    reason: expect.any(String),
+    actions: ["Edit title"],
+  });
+  const rename = await r.request(path, { expectedRevision: 0, title: "  Search   repairs " });
+  expect(rename.status).toBe(200);
+  expect(await rename.json()).toMatchObject({
+    title: "Search repairs",
+    titleRevision: 1,
+    titleOrigin: "manual",
+  });
+  expect((await r.request(path, { expectedRevision: 0, title: "Late title" })).status).toBe(409);
+  expect(
+    (
+      await r.request(path, {
+        expectedRevision: 1,
+        title: "one two three four five six seven eight",
+      })
+    ).status,
+  ).toBe(400);
+  const page = await (await r.request("conversations")).json();
+  expect(page.conversations[0]).toMatchObject({
+    title: "Search repairs",
+    titleRevision: 1,
+    titleOrigin: "manual",
+  });
+  expect(r.launches()).toBe(0);
+});

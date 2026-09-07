@@ -652,3 +652,43 @@ test("settings inspection validates argv, propagates refusal, and reuses descrip
   await expect(rejected).rejects.toBeInstanceOf(HarnessRefusal);
   expect(r.spawner.calls).toHaveLength(3);
 });
+
+test("isolated naming asks hcn to enforce isolation, bounds runtime, and refuses resume", async () => {
+  const r = rig();
+  const turn = r.runner.streamTurn({
+    harness: "claude",
+    prompt: "Name quoted data",
+    turnId: "naming",
+    isolation: "tool-free",
+    model: "opus",
+    effort: "high",
+    cwd: "/isolated",
+  });
+  r.proc.emitFixture("run-clean");
+  r.proc.exit(0);
+  for await (const _event of turn) {
+    /* Drain recorded evidence. */
+  }
+  expect(r.spawner.calls[0]?.argv).toContain("--isolation");
+  expect(r.spawner.calls[0]?.argv).toContain("tool-free");
+  expect(r.spawner.calls[0]?.argv).toContain("--timeout");
+  expect(() =>
+    r.runner.streamTurn({
+      harness: "claude",
+      prompt: "Name",
+      turnId: "bad",
+      isolation: "tool-free",
+      resume: "working-session",
+    }),
+  ).toThrow("resume");
+  const check = rig();
+  const result = check.runner.inspect("claude", {
+    model: "opus",
+    effort: "high",
+    isolation: "tool-free",
+  });
+  check.proc.emit('{"error":"unsupported-option"}\n');
+  check.proc.exit(2);
+  await expect(result).rejects.toBeInstanceOf(HarnessRefusal);
+  expect(check.spawner.calls[0]?.argv).toContain("--isolation");
+});

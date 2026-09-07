@@ -1,6 +1,7 @@
 import { readdirSync, statSync, watch } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
+import { savedTitleFields } from "../protocol/conversation-title.js";
 import type { ConversationSummary, DiscoveryIssue } from "../protocol/conversations.js";
 import { pathsForDir } from "./errors.js";
 import {
@@ -59,9 +60,7 @@ export const readRecordSummary = (
   if (!statSync(pathsForDir(dir).logPath).isFile()) throw new Error("Record log is unavailable");
   return {
     conversationId: value.conversationId,
-    ...(typeof value.conversationTitle === "string"
-      ? { conversationTitle: value.conversationTitle }
-      : {}),
+    ...savedTitleFields(value),
     dir,
     ...folderSummary(value),
   };
@@ -104,6 +103,10 @@ export class DiscoveryIndex {
       }),
     );
     return matches;
+  }
+  /** Metadata validated during the last scan; callers must not mutate it. */
+  scannedMetadata(dir: string): RecordMetadata | undefined {
+    return this.metadata.get(dir)?.value;
   }
   scan(): Discovery {
     let entries: string[];

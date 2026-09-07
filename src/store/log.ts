@@ -1,3 +1,6 @@
+import { createReadStream } from "node:fs";
+import { initializeNaming } from "./conversation-naming.js";
+import { pathsForDir } from "./errors.js";
 /**
  * The conversation log: the deep module that owns the durable file.
  *
@@ -64,6 +67,7 @@ export type LogEntry =
       readonly v: 1;
       readonly at: number;
       readonly src: "input";
+      readonly namingEligible?: true;
       readonly input: {
         readonly id: string;
         readonly text: string;
@@ -590,6 +594,7 @@ const walk = (
   goodBytes: number;
   entries: number;
   transcript: TranscriptAcc;
+  namingEligible: boolean;
   refusedInputs: readonly FoldRefusal[];
   artifactIndex: Map<string, number>;
   /** Per artifact version, the seq of the last frame before it. Its place in
@@ -605,6 +610,7 @@ const walk = (
   const collected: CollectedEntry[] = [];
   let entries = 0;
   const transcript: TranscriptAcc = { events: [], inputs: [], aborted: [] };
+  let namingEligible = false;
   const refusedInputs: FoldRefusal[] = [];
   const artifactIndex = new Map<string, number>();
   /** Where each artifact version sits in the conversation: the seq of the
@@ -697,6 +703,12 @@ const walk = (
             refusedInputs.push({ offset, issue: result.issue });
             state = result.state;
           } else {
+            if (
+              parsed.src === "input" &&
+              "namingEligible" in parsed &&
+              parsed.namingEligible === true
+            )
+              namingEligible = true;
             collectTranscript(transcript, parsed as LogEntry, frame, result);
             state = result.state;
             entries += 1;
@@ -723,6 +735,7 @@ const walk = (
     entries,
     transcript,
     refusedInputs,
+    namingEligible,
     artifactIndex,
     artifactVersions,
     artifactHeads,
@@ -1122,6 +1135,13 @@ export const createLog = (
         onWritten: () => {
           curState = result.state;
           collectTranscript(acc, entry, frame, result);
+          if (entry.src === "input" && entry.namingEligible) {
+            try {
+              initializeNaming(paths.dir, acc.inputs);
+            } catch {
+              // The prompt is durable. The worker retries this derived write from the marker.
+            }
+          }
         },
       };
     });
@@ -1302,3 +1322,26 @@ export const createLog = (
     }),
   };
 };
+
+/** Recover only submission-marked work, never migrate a record because it was discovered. */
+export async function recoverConversationNaming(dir: string, id: string): Promise<void> {
+  const paths = pathsForDir(dir);
+  // Scan bounded chunks. Legacy logs can contain large artifact histories.
+  const marker = Buffer.from('"namingEligible":true');
+  let tail = Buffer.alloc(0);
+  let marked = false;
+  for await (const chunk of createReadStream(paths.logPath, { highWaterMark: 32768 })) {
+    const bytes = Buffer.concat([tail, chunk]);
+    if (bytes.includes(marker)) {
+      marked = true;
+      break;
+    }
+    tail = bytes.subarray(Math.max(0, bytes.length - marker.length + 1));
+  }
+  if (!marked) return;
+  withRecordLock(paths, id, () => {
+    const secret = readFileSync(paths.secretPath, "utf8").trim();
+    const { folded } = readFoldRepair(paths, id, secret);
+    if (folded.namingEligible) initializeNaming(dir, folded.transcript.inputs);
+  });
+}

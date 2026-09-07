@@ -1,5 +1,12 @@
 import { ConfigurationError } from "../config/user-config.js";
+import {
+  fallbackConversationTitle,
+  storedConversationTitle,
+  titleState,
+} from "../protocol/conversation-title.js";
 import { HubError } from "../protocol/hub-errors.js";
+import { renameConversation } from "../store/conversation-naming.js";
+import { readRecordMetadata } from "../store/record-identity.js";
 /**
  * The loopback server — one command, every record, a record chosen by URL.
  *
@@ -74,6 +81,7 @@ import { mintToken } from "./token.js";
 
 export interface ServerOpts {
   readonly configLocation?: import("../config/user-config.js").ConfigLocation;
+  readonly wakeNaming?: (root: string) => void;
   readonly runner?: import("../harness/runner.js").HarnessRunner;
   readonly rootDir?: string;
   readonly port?: number;
@@ -195,6 +203,12 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
     records.discoveryIndex,
   );
   const discovery = watchConversations(rootDir, { scan: records.list });
+  const wakeNaming = (): void => {
+    try {
+      opts.wakeNaming?.(rootDir);
+    } catch {}
+  };
+  wakeNaming();
 
   /** This server's own origins. A request carrying any other `Origin` is
    * refused before it is routed, which is what stops a page you happened to
@@ -328,6 +342,42 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           dirForRequest(id);
         }
 
+        const titleWrite = path.match(/^\/api\/conversations\/([^/]+)\/title\/?$/);
+        if (titleWrite && req.method === "POST") {
+          const id = decodeURIComponent(titleWrite[1] ?? "");
+          try {
+            const body: unknown = await req.json();
+            if (!body || typeof body !== "object" || Array.isArray(body))
+              throw new HubError("Expected a title and title revision.", "E-HUB-08", 400, [
+                "Edit title",
+              ]);
+            const request = body as Record<string, unknown>;
+            return json(
+              renameConversation(dirForRequest(id), id, request.expectedRevision, request.title),
+            );
+          } catch (error) {
+            if (error instanceof SyntaxError)
+              return hubFailure(
+                new HubError(
+                  "Expected valid JSON with a title and title revision.",
+                  "E-HUB-08",
+                  400,
+                  ["Edit title"],
+                ),
+              );
+            if (error instanceof HubError || error instanceof RecordLookupError)
+              return hubFailure(error);
+            return json(
+              {
+                error: "E-HUB-01",
+                reason: "Cannot update the conversation record.",
+                actions: ["Check record folder", "Retry rename"],
+              },
+              503,
+            );
+          }
+        }
+
         const read = path.match(/^\/api\/conversations\/([^/]+)\/?$/);
         if (read && req.method === "GET") {
           const id = decodeURIComponent(read[1] ?? "");
@@ -355,6 +405,13 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
               driverChoices: await settings.choices(),
             });
           }
+          const titleMeta = readRecordMetadata(dir);
+          const title =
+            storedConversationTitle(
+              typeof titleMeta.conversationTitle === "string"
+                ? titleMeta.conversationTitle
+                : undefined,
+            ) ?? fallbackConversationTitle(snapshot.transcript.inputs);
           const view = buildView({
             transcript: snapshot.transcript,
             status: snapshot.status,
@@ -449,6 +506,8 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             driverChoices: await settings.choices(),
             // A torn trailing write folds cleanly but short. That is damage
             // too, and the page says so.
+            title,
+            ...titleState(titleMeta),
             damaged: snapshot.goodBytes < logSize(dir),
           });
         }
@@ -730,7 +789,9 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
         if (driverPref && req.method === "POST") {
           const id = decodeURIComponent(driverPref[1] ?? "");
           try {
-            return json(await settings.update(dirForRequest(id), id, await req.json()));
+            const updated = await settings.update(dirForRequest(id), id, await req.json());
+            wakeNaming();
+            return json(updated);
           } catch (error) {
             return hubFailure(error);
           }
@@ -859,6 +920,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
                 result.issue === "input-queue-full" ? 429 : 400,
               );
             }
+            wakeNaming();
             return json({ inputId, verdict: "accepted" });
           });
         }

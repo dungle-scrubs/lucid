@@ -63,6 +63,8 @@ export interface DispatchDeps {
   readonly sendInputFn?: (conversationId: string, opts: SendOpts) => { inputId: string };
   readonly watchConversationFn?: (conversationId: string, opts: WatchOpts) => Promise<void>;
   readonly runConversationFn?: (opts: RunOpts) => Promise<RunResult>;
+  readonly namingWorkerFn?: (root: string) => Promise<void>;
+  readonly wakeNamingFn?: (root: string) => void;
   readonly serveFn?: (opts: ServeOpts) => Promise<void>;
   readonly announceFn?: (stdin: string) => Promise<AnnounceResult>;
   readonly injectFn?: (stdin: string) => Promise<InjectResult>;
@@ -88,6 +90,7 @@ export interface DispatchDeps {
 }
 
 export type DispatchResult =
+  | { readonly kind: "name-titles" }
   | { readonly kind: "send"; readonly conversationId: string; readonly inputId: string }
   | { readonly kind: "watch"; readonly conversationId: string }
   | { readonly kind: "run"; readonly conversationId: string; readonly dir: string }
@@ -139,6 +142,12 @@ export const dispatch = async (
     return { kind: "inject" };
   }
 
+  if (mapped.kind === "name-titles") {
+    const run = deps.namingWorkerFn ?? (await import("./naming.js")).runNamingWorker;
+    await run(mapped.root);
+    return { kind: "name-titles" };
+  }
+
   // One root resolution for the three record-touching commands. Not per-branch.
   // The factory is bound once to that root so adapters reuse the same
   // addressing discipline rather than re-deriving `conversations(rootDir)`
@@ -162,7 +171,10 @@ export const dispatch = async (
       const serveFn =
         deps.serveFn ??
         (async (opts: ServeOpts) => (await import("./serve.js")).serveConversation(opts));
-      await serveFn({ rootDir: effectiveRoot });
+      await serveFn({
+        rootDir: effectiveRoot,
+        ...(deps.wakeNamingFn ? { wakeNaming: deps.wakeNamingFn } : {}),
+      });
       return { kind: "serve" };
     }
     case "send": {
@@ -171,6 +183,8 @@ export const dispatch = async (
         text: mapped.text,
         conversationsFactory: deps.conversationsFactory ? convFactory : boundFactory,
       });
+      if (deps.wakeNamingFn) deps.wakeNamingFn(dispatchConvs.rootDir);
+
       return { kind: "send", conversationId: mapped.conversationId, inputId };
     }
     case "watch": {

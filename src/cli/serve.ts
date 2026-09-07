@@ -19,6 +19,7 @@ export interface ServeOpts {
   /** `0` asks the kernel for a free port. Tests use it; a person does not. */
   readonly port?: number;
   readonly token?: string;
+  readonly wakeNaming?: (root: string) => void;
   readonly log?: (line: string) => void;
 }
 
@@ -26,7 +27,12 @@ export interface ServeOpts {
  * lives — which is what makes this usable both from the command below and
  * from a test that starts one, drives it, and closes it. */
 export const startServe = async (opts: ServeOpts = {}) =>
-  startServer({ rootDir: opts.rootDir, port: opts.port, token: opts.token });
+  startServer({
+    rootDir: opts.rootDir,
+    port: opts.port,
+    token: opts.token,
+    wakeNaming: opts.wakeNaming,
+  });
 
 /** The command. Starts a server and blocks until the process is asked to
  * stop, then closes it so the port is free for the next start. */

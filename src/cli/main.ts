@@ -14,6 +14,7 @@
  */
 
 import { runCli } from "./dispatch.js";
+import { requestNaming } from "./naming.js";
 
 const run = async (): Promise<void> => {
   const argv = process.argv.slice(2);
@@ -23,7 +24,7 @@ const run = async (): Promise<void> => {
   const onAbort = (): void => ac.abort();
   process.on("SIGINT", onAbort);
   process.on("SIGTERM", onAbort);
-  await runCli(argv, { signal: ac.signal });
+  await runCli(argv, { signal: ac.signal, wakeNamingFn: requestNaming });
 };
 
 run().catch((e) => {

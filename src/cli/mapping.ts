@@ -11,6 +11,7 @@
  */
 
 export type MappedCommand =
+  | { readonly kind: "name-titles"; readonly root: string }
   | { readonly kind: "send"; readonly conversationId: string; readonly text: string }
   | { readonly kind: "watch"; readonly conversationId: string }
   | {
@@ -34,6 +35,10 @@ export type MappedCommand =
 export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
   const [cmd, ...rest] = argv;
   switch (cmd) {
+    case "_name-titles":
+      return rest.length === 1 && rest[0]
+        ? { kind: "name-titles", root: rest[0] }
+        : { kind: "help", message: "A record root is required" };
     case "send": {
       const conversationId = rest[0];
       if (!conversationId)

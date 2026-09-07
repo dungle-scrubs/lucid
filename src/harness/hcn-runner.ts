@@ -129,6 +129,7 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
         ...flag("--model", choice.model),
         ...flag("--effort", choice.effort),
         ...flag("--provider", choice.provider),
+        ...flag("--isolation", choice.isolation),
       ]);
       if (check.code !== 0)
         throw new HarnessRefusal("invalid-settings", check.err.join("\n") || check.out.join("\n"));
@@ -178,6 +179,8 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
   };
 
   const streamTurn = (opts: StreamTurnOptions): AsyncIterable<HarnessEvent> => {
+    if (opts.isolation && opts.resume !== undefined)
+      throw new HarnessRefusal("invalid-isolation", "An isolated turn cannot resume a session");
     const argv = [
       deps.bin,
       "run",
@@ -187,6 +190,8 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
       ...flag("--provider", opts.provider),
       ...flag("--effort", opts.effort),
       ...flag("--resume", opts.resume),
+      ...flag("--isolation", opts.isolation),
+      ...(opts.isolation ? ["--timeout", "60", "--questions", "none"] : []),
       opts.prompt,
     ];
     log({ event: "hcn_run", turnId: opts.turnId, harness: opts.harness });

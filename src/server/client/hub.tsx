@@ -8,6 +8,7 @@ import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { ConversationPage, ListedConversation } from "../../protocol/conversations.js";
 import { TOKEN_HEADER } from "../constants.js";
+import { ConversationRename } from "./conversation-rename.js";
 import { NewConversation, PENDING_CREATION } from "./new-conversation.js";
 import { Button } from "./ui/button.js";
 
@@ -77,7 +78,7 @@ function Project({
       </summary>
       <ul>
         {items.map((item) => (
-          <li key={item.conversationId}>
+          <li key={item.conversationId} className="hub-item">
             <a className="hub-row" href={`/c/${encodeURIComponent(item.conversationId)}`}>
               <span className="hub-title">{item.title}</span>
               <span className="hub-context">
@@ -88,6 +89,7 @@ function Project({
                     : item.conversationId}
               </span>
             </a>
+            <ConversationRename item={item} request={apiFetch} />
           </li>
         ))}
       </ul>

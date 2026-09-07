@@ -135,6 +135,7 @@ export interface OpenSessionOptions {
 }
 
 export interface StreamTurnOptions {
+  readonly isolation?: "tool-free";
   readonly harness: HarnessName;
   readonly prompt: string;
   readonly resume?: string;
@@ -159,7 +160,12 @@ export interface HarnessRunner {
   /** `hcn inspect <h> --json`, projected to what lucid reads. No spawn. */
   inspect(
     harness: HarnessName,
-    choice?: { readonly model: string; readonly effort: string; readonly provider?: string },
+    choice?: {
+      readonly model: string;
+      readonly effort: string;
+      readonly provider?: string;
+      readonly isolation?: "tool-free";
+    },
   ): Promise<HarnessFacts>;
   /** `hcn inspect <h> --capabilities`. No spawn. */
   capabilities(harness: HarnessName, model: string, mode: HarnessMode): Promise<CapabilityResult>;

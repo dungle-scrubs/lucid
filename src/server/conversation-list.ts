@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import { titleState } from "../protocol/conversation-title.js";
 import type {
   ConversationPage,
   DiscoveryIssue,
@@ -81,7 +82,11 @@ export const createConversationListing = () => {
           .map(async (entry): Promise<ListedConversation | DiscoveryIssue> => {
             const { dir, conversationTitle: savedTitle, ...summary } = entry.record;
             try {
-              return { ...summary, title: await label(dir, savedTitle) };
+              return {
+                ...summary,
+                title: await label(dir, savedTitle),
+                ...titleState({ ...summary, conversationTitle: savedTitle }),
+              };
             } catch {
               return {
                 code: "E-HUB-01",

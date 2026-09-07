@@ -390,7 +390,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
       completeSettings?: DriverChoice,
     ): ReduceResult => {
       const at = deps.now();
-      const entry: LogEntry = { v: 1, at, src: "input", input };
+      const entry: LogEntry = { v: 1, at, src: "input", input, namingEligible: true };
       return transact(entry, (s) => {
         const r = enqueueInput(s, input, at);
         if (r.verdict === "accepted" && completeSettings)

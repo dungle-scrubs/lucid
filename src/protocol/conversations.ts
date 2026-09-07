@@ -1,6 +1,8 @@
 export interface ConversationSummary {
   readonly conversationId: string;
   readonly conversationTitle?: string;
+  readonly titleRevision?: number;
+  readonly titleOrigin?: "fallback" | "generated" | "manual";
   readonly projectDirectory: string | null;
   readonly workingDirectory: string | null;
   readonly workingDirectoryStatus: "available" | "missing" | "unknown";
