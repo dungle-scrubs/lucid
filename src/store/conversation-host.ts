@@ -38,7 +38,17 @@ import { completeLegacyPreference, type DriverChoice } from "./driver-preference
 
 import { existsSync, readFileSync } from "node:fs";
 import { ownerPresence, terminalPresence } from "../process-owner.js";
+import {
+  type ContextFact,
+  type ContextOfferRequest,
+  confirmedContextThrough,
+  contextAttempt,
+  contextConfirmationLimit,
+  parseContextFact,
+  reduceContextCoverage,
+} from "../protocol/context-coverage.js";
 import { parseExecutionFact, reduceExecution } from "../protocol/execution.js";
+import type { HarnessName } from "../protocol/frames.js";
 import { HubError } from "../protocol/hub-errors.js";
 import type { Effect } from "../protocol/index.js";
 import {
@@ -168,6 +178,9 @@ export const readRecordFiles = (
 };
 
 export interface ConversationHost {
+  contextCoverage(harness: HarnessName, sessionId: string): number;
+  offerConversationContext(offer: ContextOfferRequest): ReduceResult;
+  confirmConversationContext(turnId: string): ReduceResult;
   writeExecution(fact: unknown): ReduceResult;
   acceptInput(
     input: { readonly id: string; readonly text: string; readonly mode: "queue" },
@@ -334,7 +347,72 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     | { verdict: "refused"; issue: "artifact-too-large" | "artifact-version-exists" } =>
     log.writeArtifact(params);
 
+  const writeContext = (produce: (state: ChannelState) => ContextFact | null): ReduceResult => {
+    const at = deps.now();
+    return transactDynamic((state) => {
+      const fact = parseContextFact(produce(state));
+      const result = reduceContextCoverage(state, fact, at, deps.executorLease());
+      return {
+        result,
+        frame: null,
+        entry:
+          fact && result.verdict === "accepted" && result.state !== state
+            ? { v: 1, at, src: "context", payloadVersion: 1, fact }
+            : null,
+      };
+    });
+  };
+
   return {
+    contextCoverage: (harness, sessionId) =>
+      confirmedContextThrough(log.state(), harness, sessionId),
+    offerConversationContext: (offer) =>
+      writeContext((state) => {
+        const attempt = contextAttempt(state, offer.turnId);
+        return {
+          ...offer,
+          epoch: state.epoch,
+          kind: "coverage-offered",
+          ...(attempt?.kind === "attempt-started"
+            ? { managed: { inputId: attempt.inputId, attempt: attempt.attempt } }
+            : {}),
+        };
+      }),
+    confirmConversationContext: (turnId) =>
+      writeContext((state) => {
+        let offer = state.contextOffers[turnId];
+        if (offer?.kind === "coverage-confirmed") return offer;
+        if (!offer) {
+          const attempt = contextAttempt(state, turnId);
+          const native = state.contextTurns[turnId];
+          if (
+            attempt &&
+            native?.sessionId &&
+            native.harness === attempt.driver.harness &&
+            native.epoch === attempt.epoch
+          )
+            offer = {
+              kind: "coverage-offered",
+              epoch: attempt.epoch,
+              harness: attempt.driver.harness,
+              sessionId: native.sessionId,
+              turnId,
+              context: attempt.context,
+              managed: { inputId: attempt.inputId, attempt: attempt.attempt },
+            };
+        }
+        const terminalSeq = state.completedTurns[turnId];
+        if (!offer || terminalSeq === undefined) return null;
+        // A turn knows its own output, but it did not consume new work
+        // appended concurrently after its captured context. Stop at that gap.
+        const through = contextConfirmationLimit(state, offer, terminalSeq);
+        return {
+          ...offer,
+          kind: "coverage-confirmed",
+          evidence: { kind: "completed-turn", seq: terminalSeq },
+          through,
+        };
+      }),
     conversationId,
     dir,
     snapshot,

@@ -90,6 +90,7 @@ export interface DispatchDeps {
 }
 
 export type DispatchResult =
+  | { readonly kind: "context" }
   | { readonly kind: "name-titles" }
   | { readonly kind: "send"; readonly conversationId: string; readonly inputId: string }
   | { readonly kind: "watch"; readonly conversationId: string }
@@ -121,6 +122,17 @@ export const dispatch = async (
 
   // Help is terminal — no seams, no root, no flock.
   if (mapped.kind === "help") return { kind: "help", message: mapped.message };
+  if (mapped.kind === "context") {
+    const { readOfferedContext } = await import("../store/context-offer.js");
+    const result = readOfferedContext(mapped.path, mapped.offset, mapped.bytes);
+    const output = deps.onOutput ?? ((line: string) => console.log(line));
+    output(
+      mapped.json
+        ? JSON.stringify(result)
+        : `${result.text}\n\nnextOffset: ${result.nextOffset}; done: ${result.done}`,
+    );
+    return { kind: "context" };
+  }
   if (mapped.kind === "announce") {
     const stdin = await (deps.readStdinFn ?? readStdin)();
     const fn = deps.announceFn ?? announce;

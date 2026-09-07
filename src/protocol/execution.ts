@@ -316,6 +316,7 @@ export function reduceExecution(
       fact.attempt !== current.attempt + 1 ||
       fact.context.through > state.seq + 1 ||
       fact.epoch !== state.epoch ||
+      Object.hasOwn(state.seenTurns, fact.turnId) ||
       !["requested", "held", "retry-authorized", "fresh-authorized"].includes(current.kind)
     )
       return reject();

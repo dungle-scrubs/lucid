@@ -31,6 +31,7 @@ import {
   truncateSync,
   writeSync,
 } from "node:fs";
+import { reduceContextCoverage } from "../protocol/context-coverage.js";
 import { reduceExecution } from "../protocol/execution.js";
 import { ARTIFACT_BYTES_MAX } from "../protocol/frames.js";
 import type { ChannelState, InputMode, ProtocolIssue } from "../protocol/index.js";
@@ -64,6 +65,13 @@ export type LogEntry =
       readonly src: "execution";
       readonly payloadVersion: 1;
       readonly fact: import("../protocol/execution.js").ExecutionFact;
+    }
+  | {
+      readonly v: 1;
+      readonly at: number;
+      readonly src: "context";
+      readonly payloadVersion: 1;
+      readonly fact: import("../protocol/context-coverage.js").ContextFact;
     }
   | {
       readonly v: 1;
@@ -166,6 +174,7 @@ export type LogEntry =
 
 const ENTRY_SOURCES = [
   "execution",
+  "context",
   "frame",
   "input",
   "managed-input",
@@ -415,6 +424,7 @@ const coerceCursorEntry = (raw: Envelope, offset: number): CursorEntry => {
 // ---------------------------------------------------------------------------
 
 export interface TranscriptEvent {
+  readonly harness?: import("../protocol/frames.js").HarnessName;
   readonly seq: number;
   readonly epoch: number;
   readonly turnId: string;
@@ -539,7 +549,10 @@ const applyArtifactMeta = (raw: unknown, titles: Map<string, string>): void => {
 
 const applyEntry = (
   state: ChannelState,
-  entry: Extract<LogEntry, { src: "frame" | "input" | "managed-input" | "execution" | "credit" }>,
+  entry: Extract<
+    LogEntry,
+    { src: "frame" | "input" | "managed-input" | "execution" | "context" | "credit" }
+  >,
   secret: string,
 ): { result: ReduceResult; frame: import("../protocol/index.js").Frame | null } => {
   switch (entry.src) {
@@ -547,6 +560,10 @@ const applyEntry = (
       if (entry.payloadVersion !== 1)
         throw new StoreError("corrupt-log", "Unsupported execution payload");
       return { result: reduceExecution(state, entry.fact, entry.at, true), frame: null };
+    case "context":
+      if (entry.payloadVersion !== 1)
+        throw new StoreError("corrupt-log", "Unsupported context payload");
+      return { result: reduceContextCoverage(state, entry.fact, entry.at, true), frame: null };
     case "frame": {
       const raw = entry.frame.kind === "attach" ? { ...entry.frame, secret } : entry.frame;
       const decoded = decodeFrame(raw);
@@ -589,6 +606,9 @@ const collectTranscript = (
         seq: result.record.seq,
         epoch: result.record.epoch,
         turnId: frameOrNull.turnId,
+        ...(result.state.attachment?.harness === undefined
+          ? {}
+          : { harness: result.state.attachment.harness }),
         event: frameOrNull.event,
       }),
     );

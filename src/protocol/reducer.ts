@@ -25,6 +25,7 @@
  * the switch and into liveness — two clocks again.
  */
 
+import { recordContextContent, recordContextTurn } from "./context-coverage.js";
 import { classOfEventKind, EventKind } from "./events.js";
 import type { AttachmentIntent } from "./frames.js";
 import {
@@ -145,6 +146,10 @@ export interface ChannelState {
   readonly lastTerminalParticipation: Participation | null;
   readonly executions: Readonly<Record<string, import("./execution.js").ExecutionState>>;
   readonly completedTurns: Readonly<Record<string, number>>;
+  readonly contextCoverage: Readonly<Record<string, number>>;
+  readonly contextContent: import("./context-coverage.js").ContextContent;
+  readonly contextTurns: Readonly<Record<string, import("./context-coverage.js").ContextTurn>>;
+  readonly contextOffers: Readonly<Record<string, import("./context-coverage.js").SessionContext>>;
   readonly explicitAttachments: Readonly<Record<string, number>>;
   /** The newest harness session id seen per harness, attributed by the
    * attachment that was live when its identity event was accepted.
@@ -304,6 +309,10 @@ export const initialChannelState = (init: {
   lastTerminalParticipation: null,
   executions: {},
   completedTurns: {},
+  contextCoverage: {},
+  contextContent: { current: null, earlier: [] },
+  contextTurns: {},
+  contextOffers: {},
   explicitAttachments: {},
   turn: null,
   acked: 0,
@@ -812,6 +821,14 @@ const reducePostAttach = (
                 },
               }),
           turn: sameTurn ? state.turn : { turnId: frame.turnId },
+          contextContent: recordContextContent(state.contextContent, "turn", frame.turnId, seq),
+          contextTurns: recordContextTurn(
+            state.contextTurns,
+            frame.turnId,
+            frame.epoch,
+            attachment.harness,
+            frame.event,
+          ),
           seenTurns: sameTurn
             ? state.seenTurns
             : { ...state.seenTurns, [frame.turnId]: true as const },
@@ -822,6 +839,8 @@ const reducePostAttach = (
           inFlightInputs: InputLedger.turnEnded(state.inFlightInputs, frame.event.kind),
           completedTurns:
             frame.event.kind === EventKind.done &&
+            (frame.event.exitCode === 0 || frame.event.exitCode === null) &&
+            frame.event.failure === undefined &&
             (frame.event.cause === "clean" || frame.event.cause === "awaiting-input")
               ? { ...state.completedTurns, [frame.turnId]: seq }
               : state.completedTurns,
@@ -1074,7 +1093,13 @@ export const enqueueInput = (
       ? { ...state.questionOpen, answeringInputId: input.id }
       : state.questionOpen;
   return accepted(
-    { ...state, seq: queued.seq, inputs, questionOpen },
+    {
+      ...state,
+      seq: queued.seq,
+      inputs,
+      questionOpen,
+      contextContent: recordContextContent(state.contextContent, "input", input.id, queued.seq),
+    },
     frame,
     now,
     live ? [{ type: "send", frame }] : NO_EFFECTS,

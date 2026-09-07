@@ -11,6 +11,13 @@
  */
 
 export type MappedCommand =
+  | {
+      readonly kind: "context";
+      readonly path: string;
+      readonly offset: number;
+      readonly bytes: number;
+      readonly json: boolean;
+    }
   | { readonly kind: "name-titles"; readonly root: string }
   | { readonly kind: "send"; readonly conversationId: string; readonly text: string }
   | { readonly kind: "watch"; readonly conversationId: string }
@@ -35,6 +42,40 @@ export type MappedCommand =
 export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
   const [cmd, ...rest] = argv;
   switch (cmd) {
+    case "context": {
+      const help = {
+        kind: "help",
+        message:
+          "usage: lucid2 context <offered-directory> [--offset BYTE] [--bytes COUNT] [--json]\nRead a bounded slice of offered conversation context. Reports nextOffset and done.",
+      } as const;
+      const path = rest[0];
+      if (!path || path.startsWith("--")) return help;
+      let offset = 0;
+      let bytes = 65_536;
+      let json = false;
+      const used = new Set<string>();
+      for (let index = 1; index < rest.length; index++) {
+        const flag = rest[index];
+        if (!flag || used.has(flag)) return help;
+        used.add(flag);
+        if (flag === "--json") {
+          json = true;
+          continue;
+        }
+        const value = rest[++index];
+        if (
+          (flag !== "--offset" && flag !== "--bytes") ||
+          value === undefined ||
+          !/^\d+$/.test(value)
+        )
+          return help;
+        const number = Number(value);
+        if (!Number.isSafeInteger(number)) return help;
+        if (flag === "--offset") offset = number;
+        else bytes = number;
+      }
+      return { kind: "context", path, offset, bytes, json };
+    }
     case "_name-titles":
       return rest.length === 1 && rest[0]
         ? { kind: "name-titles", root: rest[0] }
@@ -112,7 +153,7 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
     case "-h":
       return {
         kind: "help",
-        message: "usage: lucid2 <send|watch|run|chat|serve|announce|inject> [...]",
+        message: "usage: lucid2 <send|watch|run|chat|serve|announce|inject|context> [...]",
       };
     default:
       return { kind: "help", message: `unknown command: ${cmd}` };

@@ -148,3 +148,53 @@ See [honor tests](../test/modes/honor.test.ts),
 [session prompts](../test/modes/session-prompts.test.ts),
 [harness runner tests](../test/harness/hcn-runner.test.ts), and
 [driver endpoint tests](../test/server/driver.test.ts).
+
+## Recorded context preparation
+
+The context projection quotes accepted messages, recorded tool results,
+questions, partial replies, and failures with their record IDs and source
+provenance. Current artifact versions remain mandatory material. The pending
+accepted prompt stays separate from historical requests. Protocol identity
+envelopes and record credentials do not enter the projection. Arbitrary
+sensitive text already written in conversation content is not scrubbed.
+Quoted inputs retain their delivery status; quoting outstanding work does
+not execute it. Partial token fragments are marked as possibly containing
+gaps, and interrupted turns retain that status. Unclassified event content,
+including an unsupported payload shape for a known kind, holds preparation
+until an upgraded projector can read it. Attachment references encoded in
+input text remain quoted with that input; unreferenced uploaded blobs do not
+become conversation context. Resolving referenced copies into the dispatch
+bundle remains part of worker integration.
+
+An offered copy lives in a private temporary directory outside the record.
+`lucid2 context <offered-directory> [--offset BYTE] [--bytes COUNT] [--json]`
+reads that copy directly, without HTTP or record access. Each read returns at
+most 65,536 bytes on UTF-8 boundaries, with nextOffset and done. Keep the copy
+for the active execution and remove it when that execution closes.
+Use its attachmentsDir with the existing attachment delivery operation so
+both copies share one lifetime. Copies carry process provenance in their
+directory name. The next preparation reaps copies whose owner has departed;
+live owners and unknown ownership are retained. This also covers a crash
+before the attempt's first durable write.
+Failure to remove an unrelated orphan emits a cleanup warning and does not
+block preparation of this conversation.
+
+The store records offered and confirmed context per actual native session
+and supplying turn. Managed offers retain their input and attempt identity;
+other turns require no synthetic input. A durable successful terminal event
+can confirm the offer. Merely offering context does not advance coverage.
+Confirmation includes the turn's own output, stopping at concurrent input
+or another turn's events that the captured context did not supply. Repeated
+confirmation is idempotent and survives reopening the record.
+The reducer derives these limits from compressed input/turn ranges, so
+replay enforces the same gap check as the live writer. Native identity and
+terminal evidence are retained by supplying turn, independent of the most
+recent session for that harness.
+Context entries have their own envelope source, so a reader without this
+extension can carry them. A confirmation names the harness, actual native
+session, source range, supplying turn, managed attempt when applicable, and
+successful terminal evidence. Recovery can confirm a completed managed turn
+from its pre-dispatch attempt snapshot even if it lost the later offer write.
+
+These preparation APIs do not yet enable managed dispatch. RFC 15 still
+requires verified hcn budgets, bounded summarization, and worker integration.
