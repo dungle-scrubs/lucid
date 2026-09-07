@@ -200,7 +200,7 @@ export interface HeadlessDeps {
       }
   >;
   /** Validate the exact identity immediately before each external process. */
-  readonly beforeProcess?: (resume: string | undefined) => Promise<void>;
+  readonly beforeProcess?: (resume: string | undefined, signal: AbortSignal) => Promise<void>;
   readonly owner?: import("../protocol/process-owner.js").ProcessOwner;
   readonly cwd?: string;
   readonly harness: HarnessName;
@@ -246,6 +246,8 @@ export interface HeadlessDeps {
 }
 
 export interface SourceChannel {
+  /** Built-in sources settle only after their owned process cleanup completes. */
+  readonly settled: Promise<void>;
   /** Host -> source frames (input, control, credit, lease, event-ack). */
   readonly receive: (frame: Frame) => void;
   readonly close: () => void;
@@ -493,7 +495,7 @@ interface StrategyHandle {
    *  pumps this, shifting expected at each boundary and emitting events
    *  under the current turnId. */
   readonly turns: AsyncIterable<AsyncIterable<HarnessEvent>>;
-  close(): void;
+  close(): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -530,7 +532,7 @@ const sessionStrategy = (
     openingStarted = true;
     deferred.resolve(
       deps.beforeProcess
-        ? deps.beforeProcess(resume).then(() => {
+        ? deps.beforeProcess(resume, cancellation.signal).then(() => {
             if (cancellation.signal.aborted) throw new Error("Source closed before process start");
             return open(resume);
           })
@@ -546,6 +548,16 @@ const sessionStrategy = (
   // refusal from a crash. Found by running the seam against codex, which has
   // no session mode: lucid detached correctly and said nothing.
   opening.catch(() => {});
+  let cleanup: Promise<void> | undefined;
+  const closeNative = (): Promise<void> => {
+    cleanup ??= opening
+      .then((session) => session.close())
+      .then(
+        () => {},
+        () => {},
+      );
+    return cleanup;
+  };
 
   // Whether a turn is running right now. Set when the pump takes a turn off
   // the session and cleared when that turn's events end - the boundary is an
@@ -564,7 +576,7 @@ const sessionStrategy = (
     waiting.length = 0;
     cancellation.abort();
     if (!openingStarted) deferred.reject(cause);
-    void opening.then((session) => session.close()).catch(() => {});
+    void closeNative();
     const storeCode = classifyStoreFailure(cause);
     if (storeCode !== undefined) {
       ctx.stop({ kind: "store-failed", code: storeCode, operation: "turn" });
@@ -592,7 +604,7 @@ const sessionStrategy = (
     waiting.length = 0;
     ctx.driverChange();
     if (!openingStarted) deferred.reject(new Error("Driver changed before prepared input"));
-    void opening.then((session) => session.close()).catch(() => {});
+    void closeNative();
   };
 
   const drainWaiting = (): void => {
@@ -863,7 +875,7 @@ const sessionStrategy = (
         }
       },
     },
-    close(): void {
+    close(): Promise<void> {
       // Anything still waiting for a boundary is dropped here, not lost: it
       // has no applied disposition, so it is still outstanding in the record
       // and the next attach replays it.
@@ -871,7 +883,7 @@ const sessionStrategy = (
       waiting.length = 0;
       cancellation.abort();
       if (!openingStarted) deferred.reject(new Error("Source closed before prepared input"));
-      void opening.then((session) => session.close()).catch(() => {});
+      return closeNative();
     },
   };
 };
@@ -895,6 +907,7 @@ const turnStrategy = (
   // RFC-12: whether the next spawn is this source's first, so the refusal
   // probe (see below) runs once, on the turn that proves the new spawn.
   let spawns = 0;
+  let cleanup: Promise<void> | undefined;
 
   const wake = (): void => {
     const w = resolveWaiting;
@@ -1002,7 +1015,7 @@ const turnStrategy = (
             const attemptResume = resumeId !== undefined;
             if (ctx.isStopped())
               return { done: true, value: undefined as unknown as AsyncIterable<HarnessEvent> };
-            await deps.beforeProcess?.(resumeId);
+            await deps.beforeProcess?.(resumeId, activeAbort.signal);
             if (closed || ctx.isStopped())
               return { done: true, value: undefined as unknown as AsyncIterable<HarnessEvent> };
             if (deps.prepareTurn) ctx.handedOver();
@@ -1051,7 +1064,7 @@ const turnStrategy = (
                 ctx.reported();
                 ctx.openRefused(message);
                 activeAbort.abort();
-                void probe.return?.(undefined).catch(() => {});
+                await probe.return?.(undefined).catch(() => {});
                 activeTurn = null;
                 wake();
                 return { done: true, value: undefined as unknown as AsyncIterable<HarnessEvent> };
@@ -1109,11 +1122,14 @@ const turnStrategy = (
       wake();
     },
     turns,
-    close(): void {
+    close(): Promise<void> {
       closed = true;
       wake();
       activeAbort?.abort();
-      void activeTurn?.return?.(undefined).catch(() => {});
+      cleanup ??= Promise.resolve().then(async () => {
+        await activeTurn?.return?.(undefined);
+      });
+      return cleanup;
     },
   };
 };
@@ -1142,7 +1158,7 @@ export const createHeadlessHost = (
     stopped = true;
     clearInterval(watchdog);
     try {
-      strategy?.close();
+      void strategy?.close().catch(() => {});
     } catch {}
     notify(end);
   };
@@ -1351,7 +1367,7 @@ export const createHeadlessHost = (
       // below is still the right thing to do.
     }
   };
-  pump
+  const settled = pump
     .then(() => {
       // RFC-12: a driver change is a hand-off, not a death - the successor
       // source continues the conversation, and the record already carries
@@ -1388,7 +1404,7 @@ export const createHeadlessHost = (
       if (cause instanceof HarnessSpawnError) ctx.openRefused(cause.message);
       sessionEnded(cause instanceof Error ? cause.message : String(cause));
     })
-    .finally(() => {
+    .finally(async () => {
       // The stall watchdog watches a live hand-over; with the pump gone
       // there is no hand-over left to watch, and a late fire would emit
       // through a detached sequencer - a fatal refusal thrown from a
@@ -1397,14 +1413,20 @@ export const createHeadlessHost = (
       // one that triggered it), and that input is exactly what the
       // watchdog would later report as silence.
       clearInterval(watchdog);
-      if (!stopped) {
-        try {
-          sequencer.detachOnce(sourceEnd.kind === "driver-change" ? "yield" : "shutdown");
-        } finally {
-          if (!stopped) notify(sourceEnd);
+      try {
+        await strategy?.close();
+      } finally {
+        if (!stopped) {
+          try {
+            sequencer.detachOnce(sourceEnd.kind === "driver-change" ? "yield" : "shutdown");
+          } finally {
+            if (!stopped) notify(sourceEnd);
+          }
         }
       }
     });
+
+  void settled.catch(() => {});
 
   const receive = (frame: Frame): void => {
     if (stopped) return;
@@ -1463,6 +1485,7 @@ export const createHeadlessHost = (
 
   return {
     receive,
+    settled,
     close: (): void => {
       if (stopped) return;
       clearInterval(watchdog);
@@ -1472,7 +1495,7 @@ export const createHeadlessHost = (
         if (!stopped) {
           stopped = true;
           try {
-            strategy?.close();
+            void strategy?.close().catch(() => {});
           } catch {}
           notify({ kind: "closed" });
         }

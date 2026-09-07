@@ -343,22 +343,33 @@ export const openDrivenConversation = async (
     resolveDone = resolve;
   });
 
-  let doneResolved = false;
+  const sourceReady = Promise.withResolvers<
+    import("../modes/honor.js").HonoringSource | undefined
+  >();
+  let finishing = false;
   // Bind the tailer's lifetime to the runtime's abort, so abort() and
   // done stop it.
   const tailerAbort = new AbortController();
   const finish = (): void => {
-    if (doneResolved) return;
-    doneResolved = true;
+    if (finishing) return;
+    finishing = true;
     receive = undefined;
     try {
       tailerAbort.abort();
     } catch {}
-    try {
-      host.close();
-    } catch {}
-    doRelease();
-    resolveDone();
+    void sourceReady.promise
+      .then(async (opened) => {
+        try {
+          await opened?.settled;
+        } finally {
+          try {
+            host.close();
+          } catch {}
+          doRelease();
+          resolveDone();
+        }
+      })
+      .catch(() => {});
   };
 
   const baseDeps = {
@@ -371,7 +382,7 @@ export const openDrivenConversation = async (
     mintTurnId,
     now: nowFn,
     onEnded: (end: import("../modes/host.js").SourceEnd) => {
-      if (doneResolved) return;
+      if (finishing) return;
       try {
         if (end.kind === "store-failed")
           (
@@ -417,6 +428,7 @@ export const openDrivenConversation = async (
     spawn: DriverSpawn,
     selectedProfile: HeadlessProfile,
     resume: string | undefined,
+    signal?: AbortSignal,
   ): Promise<void> => {
     const state = host.state();
     const native = state.nativeSessions[spawn.harness];
@@ -428,6 +440,7 @@ export const openDrivenConversation = async (
         "E-HUB-03",
       );
     const facts = await runner.inspect(spawn.harness, {
+      signal,
       model: spawn.model,
       effort: spawn.effort,
       ...(spawn.provider === undefined ? {} : { provider: spawn.provider }),
@@ -465,19 +478,21 @@ export const openDrivenConversation = async (
         lookedAt = host.cursor();
       },
     });
+    sourceReady.resolve(source);
     profile = source.state().profile;
   } catch (e) {
+    sourceReady.resolve(undefined);
     try {
       host.close();
     } catch {}
     doRelease();
     throw e;
   }
-  if (!doneResolved) receive = source.receive;
+  if (!finishing) receive = source.receive;
 
   // Abort helper — idempotent, releases presence exactly once.
   const abort = (): void => {
-    if (doneResolved) return;
+    if (finishing) return;
     try {
       tailerAbort.abort();
     } catch {}
@@ -548,7 +563,7 @@ export const openDrivenConversation = async (
 
   const observers = new Set<() => void>();
   const onTrigger = (tailer: import("../store/tailer.js").RecordTailer): void => {
-    if (doneResolved) return;
+    if (finishing) return;
     // peek() is lock-free and may see a torn tail — only for DECIDING
     // whether to bother. Anything we act on goes through the locked
     // collect.

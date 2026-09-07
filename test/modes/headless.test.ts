@@ -32,6 +32,7 @@ const rig = (
   opts: {
     mode?: "session" | "turn";
     processes?: number;
+    process?: FakeHcnProcess;
     beforeProcess?: (resume: string | undefined) => Promise<void>;
     prepareTurn?: HeadlessDeps["prepareTurn"];
     driverChangeAtBoundary?: () => boolean;
@@ -43,7 +44,9 @@ const rig = (
   const root = mkdtempSync(join(tmpdir(), "lucid-modes-"));
   const { secret } = createConversationRecord(root, "conv-1");
   const nowMs = 0;
-  const procs = Array.from({ length: opts.processes ?? 1 }, () => new FakeHcnProcess());
+  const procs = Array.from({ length: opts.processes ?? 1 }, (_, index) =>
+    index === 0 && opts.process ? opts.process : new FakeHcnProcess(),
+  );
   const proc = procs[0] as FakeHcnProcess;
   const spawner = fakeSpawner([...procs]);
   const records: HostRecord[] = [];
@@ -1059,3 +1062,38 @@ test("session mode: queued input with no turn running is delivered straight away
   r.proc.emit({ kind: "turn", turnId: "turn-1", id: "in-1" });
   await flush();
 });
+
+test.each(["session", "turn"] as const)(
+  "%s source settlement waits for owned process cleanup",
+  async (mode) => {
+    class SlowExit extends FakeHcnProcess {
+      override kill(signal: "SIGTERM" | "SIGKILL" = "SIGTERM"): void {
+        this.signals.push(signal);
+      }
+    }
+    const proc = new SlowExit();
+    const r = rig({ mode, process: proc });
+    try {
+      r.host.enqueueInput({ id: "work", text: "Begin work", mode: "queue" });
+      if (mode === "session") r.accept("work", "native-turn");
+      proc.emit(identity);
+      await flush();
+      expect(r.spawner.calls).toHaveLength(1);
+      expect(r.source.settled).toBeDefined();
+      let settled = false;
+      void r.source.settled?.then(() => {
+        settled = true;
+      });
+      r.source.close();
+      await flush();
+      expect(settled).toBe(false);
+      proc.exit(0);
+      await r.source.settled;
+      expect(settled).toBe(true);
+    } finally {
+      proc.exit(0);
+      r.source.close();
+      r.host.close();
+    }
+  },
+);

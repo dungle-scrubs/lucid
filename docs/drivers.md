@@ -24,7 +24,14 @@ apply to UTF-8 bytes after JSON escaping; invoke commands as argument arrays.
 lucid spawns `hcn --json`, consumes NDJSON, and keeps unknown event kinds.
 It does not import hcn's normalizer or reconstruct descriptors above the
 harness seam. hcn supervises one process; lucid owns conversation delivery
-and its queue across processes. Capability claims retain their provenance:
+and its queue across processes. Every source exposes a settlement promise.
+The runtime retains its executor lease until all sources it opened have
+finished process cleanup, including sources replaced during a settings
+change. A shutdown during replacement closes the new source before it can
+be installed. Startup observer failure also closes and awaits the source.
+The harness seam bounds inspection and process cleanup; an inspection can
+be cancelled without releasing executor ownership ahead of its child.
+Capability claims retain their provenance:
 `runtime-verified`, `curated`, or `unknown`. Unknown does not imply support.
 
 Binary resolution happens once: `LUCID_HCN`, then the repository's

@@ -52,6 +52,7 @@ export interface HonorDeps {
     spawn: DriverSpawn,
     profile: HeadlessProfile,
     resume: string | undefined,
+    signal: AbortSignal,
   ) => Promise<void>;
   readonly validateSpawn?: (spawn: DriverSpawn, profile: HeadlessProfile) => Promise<void>;
   /** The deps every spawn shares (conversation, secret, runner, sendFrame,
@@ -85,6 +86,7 @@ export interface HonorDeps {
 }
 
 export interface HonoringSource extends SourceChannel {
+  readonly settled: Promise<void>;
   /** What is driving right now: the spawn in force, its profile, and
    * whether anything is. Reported, not conflated with the preference. */
   readonly state: () => {
@@ -149,6 +151,21 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
   };
   let pendingSwitch = false;
   let ended = false;
+  let openingCount = 0;
+  const completion = Promise.withResolvers<void>();
+  const cleanups = new Set<Promise<void>>();
+  const settleIfEnded = (): void => {
+    if (ended && openingCount === 0 && cleanups.size === 0) completion.resolve();
+  };
+  const rememberCleanup = (opened: SourceChannel): void => {
+    const pending = opened.settled;
+    cleanups.add(pending);
+    const complete = (): void => {
+      cleanups.delete(pending);
+      settleIfEnded();
+    };
+    void pending.then(complete, complete);
+  };
   let source: SourceChannel;
   let deliver: (frame: Frame) => void;
 
@@ -166,44 +183,52 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
     spawn: DriverSpawn,
     opts: { readonly switched: boolean; readonly notes?: readonly string[] },
   ): Promise<{ readonly source: SourceChannel; readonly profile: HeadlessProfile }> => {
-    const gen = ++generation;
-    const session = await deps.sessionCapable(spawn.harness);
-    if (spawn.profile === "interactive")
-      throw new HarnessRefusal(
-        "unsupported-profile",
-        "Interactive mode needs a human-owned terminal session. Choose a headless mode to start here.",
-      );
-    if (spawn.profile === "headless-session" && !session)
-      throw new HarnessRefusal(
-        "unsupported-profile",
-        "This harness cannot run headless-session. Choose a supported mode.",
-      );
-    const nextProfile: HeadlessProfile =
-      spawn.profile ?? (session ? "headless-session" : "headless-turn");
-    if (deps.validateSpawn) await deps.validateSpawn(spawn, nextProfile);
-    const validateProcess = deps.validateProcess;
-    const host: HeadlessDeps = {
-      ...deps.base,
-      ...(validateProcess === undefined
-        ? {}
-        : {
-            beforeProcess: (resume: string | undefined) =>
-              validateProcess(spawn, nextProfile, resume),
-          }),
-      harness: spawn.harness,
-      ...(spawn.model === undefined ? {} : { model: spawn.model }),
-      ...(spawn.provider === undefined ? {} : { provider: spawn.provider }),
-      ...(spawn.effort === undefined ? {} : { effort: spawn.effort }),
-      driverChangeAtBoundary: wantsChange,
-      onEnded: (end: SourceEnd) => handleEnded(gen, end),
-      notes: opts.notes ?? (opts.switched ? [] : deps.base.notes),
-      ...(opts.switched ? { probeFirstTurn: true } : {}),
-    };
-    const opened: SourceChannel =
-      nextProfile === "headless-session"
-        ? deps.createHostFn({ ...host, sessionId: deps.mintSessionId() }, "headless-session")
-        : deps.createHostFn(host, "headless-turn");
-    return { source: opened, profile: nextProfile };
+    openingCount++;
+    try {
+      const gen = ++generation;
+      const session = await deps.sessionCapable(spawn.harness);
+      if (spawn.profile === "interactive")
+        throw new HarnessRefusal(
+          "unsupported-profile",
+          "Interactive mode needs a human-owned terminal session. Choose a headless mode to start here.",
+        );
+      if (spawn.profile === "headless-session" && !session)
+        throw new HarnessRefusal(
+          "unsupported-profile",
+          "This harness cannot run headless-session. Choose a supported mode.",
+        );
+      const nextProfile: HeadlessProfile =
+        spawn.profile ?? (session ? "headless-session" : "headless-turn");
+      if (deps.validateSpawn) await deps.validateSpawn(spawn, nextProfile);
+      if (ended) throw new Error("Driver closed before source start");
+      const validateProcess = deps.validateProcess;
+      const host: HeadlessDeps = {
+        ...deps.base,
+        ...(validateProcess === undefined
+          ? {}
+          : {
+              beforeProcess: (resume: string | undefined, signal: AbortSignal) =>
+                validateProcess(spawn, nextProfile, resume, signal),
+            }),
+        harness: spawn.harness,
+        ...(spawn.model === undefined ? {} : { model: spawn.model }),
+        ...(spawn.provider === undefined ? {} : { provider: spawn.provider }),
+        ...(spawn.effort === undefined ? {} : { effort: spawn.effort }),
+        driverChangeAtBoundary: wantsChange,
+        onEnded: (end: SourceEnd) => handleEnded(gen, end),
+        notes: opts.notes ?? (opts.switched ? [] : deps.base.notes),
+        ...(opts.switched ? { probeFirstTurn: true } : {}),
+      };
+      const opened: SourceChannel =
+        nextProfile === "headless-session"
+          ? deps.createHostFn({ ...host, sessionId: deps.mintSessionId() }, "headless-session")
+          : deps.createHostFn(host, "headless-turn");
+      rememberCleanup(opened);
+      return { source: opened, profile: nextProfile };
+    } finally {
+      openingCount--;
+      settleIfEnded();
+    }
   };
 
   const switchTo = async (): Promise<void> => {
@@ -216,6 +241,10 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
     const desired = pref === null ? current : spawnOf(pref, current.harness, deps.harnessPinned);
     try {
       const opened = await openUnder(desired, { switched: true });
+      if (ended) {
+        opened.source.close();
+        return;
+      }
       // The replaced source's pump has already ended - its driver-change
       // ended it - but only close() releases what close() releases. It is
       // idempotent, and the successor is already attached.
@@ -228,6 +257,7 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
       deliver = opened.source.receive;
       deps.onSpawn?.();
     } catch (cause) {
+      if (ended) return;
       current = desired;
       ended = true;
       pendingCredits.length = 0;
@@ -240,6 +270,7 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
       });
     } finally {
       switching = false;
+      settleIfEnded();
       flushCredits();
       if (pendingSwitch && !ended) {
         pendingSwitch = false;
@@ -258,6 +289,7 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
       ended = true;
       pendingCredits.length = 0;
       deps.base.onEnded?.(end);
+      settleIfEnded();
       return;
     }
     if (end.kind === "driver-change") {
@@ -269,19 +301,31 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
     // record already says the session ended.
     ended = true;
     deps.base.onEnded?.(end);
+    settleIfEnded();
   };
 
   const opened = await openUnder(initial, { switched: false });
   source = opened.source;
   profile = opened.profile;
   deliver = opened.source.receive;
-  deps.onSpawn?.();
+  try {
+    deps.onSpawn?.();
+  } catch (cause) {
+    ended = true;
+    try {
+      source.close();
+    } finally {
+      await source.settled.catch(() => {});
+    }
+    throw cause;
+  }
 
   // A preference written while this driver was starting is honored at the
   // first boundary like any other change - not folded in here, where it
   // would race the very first hand-over this source makes.
 
   return {
+    settled: completion.promise,
     receive: (frame: Frame): void => {
       if (ended) return;
       // Inputs are replayed from the record after attach. Credits have no replay.
@@ -297,6 +341,7 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
       try {
         source.close();
       } catch {}
+      settleIfEnded();
     },
     state: () => ({ spawn: current, profile, ended }),
   };

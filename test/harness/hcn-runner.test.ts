@@ -904,3 +904,61 @@ test("isolated naming asks hcn to enforce isolation, bounds runtime, and refuses
   await expect(result).rejects.toBeInstanceOf(HarnessRefusal);
   expect(check.spawner.calls[0]?.argv).toContain("--isolation");
 });
+
+test("inspection has a deadline and closes silent child output", async () => {
+  const proc = new FakeHcnProcess();
+  const runner = createHcnRunner({
+    bin: "/fake/hcn",
+    spawn: fakeSpawner([proc]).spawn,
+    inspectionTimeoutMs: 5,
+    refusalGraceMs: 1,
+  });
+  await expect(runner.inspect("claude")).rejects.toThrow("inspection timed out");
+  expect(proc.signals).toEqual(["SIGTERM"]);
+});
+
+test("cancelled inspection does not spawn and in-flight cancellation cleans up", async () => {
+  const proc = new FakeHcnProcess();
+  const spawner = fakeSpawner([proc]);
+  const runner = createHcnRunner({ bin: "/fake/hcn", spawn: spawner.spawn, refusalGraceMs: 1 });
+  const abort = new AbortController();
+  const pending = runner.inspect("claude", { signal: abort.signal });
+  abort.abort();
+  await expect(pending).rejects.toThrow("inspection cancelled");
+  expect(proc.signals).toEqual(["SIGTERM"]);
+  await expect(runner.inspect("claude", { signal: abort.signal })).rejects.toThrow(
+    "inspection cancelled",
+  );
+  expect(spawner.calls).toHaveLength(1);
+});
+
+test("inspection bounds a response even when it contains no newline", async () => {
+  const proc = new FakeHcnProcess();
+  const runner = createHcnRunner({
+    bin: "/fake/hcn",
+    spawn: fakeSpawner([proc]).spawn,
+    refusalGraceMs: 1,
+  });
+  const pending = runner.inspect("claude");
+  proc.stdoutChannel.push("x".repeat(1_048_577));
+  await expect(pending).rejects.toThrow("inspection response exceeded its limit");
+  expect(proc.signals).toEqual(["SIGTERM"]);
+});
+
+test("failed descriptor inspection does not poison a later explicit inspection", async () => {
+  const first = new FakeHcnProcess();
+  const second = new FakeHcnProcess();
+  const spawner = fakeSpawner([first, second]);
+  const runner = createHcnRunner({
+    bin: "/fake/hcn",
+    spawn: spawner.spawn,
+    inspectionTimeoutMs: 5,
+    refusalGraceMs: 1,
+  });
+  await expect(runner.inspect("claude")).rejects.toThrow("inspection timed out");
+  const retried = runner.inspect("claude");
+  second.emit({ sessionMode: null, verifiedAgainst: "test" });
+  second.exit(0);
+  expect(await retried).toMatchObject({ session: false, verifiedAgainst: "test" });
+  expect(spawner.calls).toHaveLength(2);
+});

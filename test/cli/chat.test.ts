@@ -102,6 +102,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
       // The chat's host is the real store host, so enqueue will write to log.
       // We just need a source that does not throw.
       return {
+        settled: Promise.resolve(),
         receive: (f: Frame) => received.push(f),
         close: () => {},
       };
@@ -172,6 +173,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
     const keys = keysOf("Draft the RFC", "\r", "\x03");
 
     const fakeHostFn = ((_deps: { sendFrame: (f: Frame) => unknown }) => ({
+      settled: Promise.resolve(),
       receive: () => {},
       close: () => {},
     })) as unknown as typeof import("../../src/modes/host.js").createHeadlessHost;
@@ -220,6 +222,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
     {
       const keys = keysOf("ordinary", "\r", "\x03");
       const fakeHostFn = (() => ({
+        settled: Promise.resolve(),
         receive: () => {},
         close: () => {},
       })) as unknown as typeof import("../../src/modes/host.js").createHeadlessHost;
@@ -271,6 +274,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
 
       const keys = keysOf("my answer", "\r", "\x03");
       const fakeHostFn = (() => ({
+        settled: Promise.resolve(),
         receive: () => {},
         close: () => {},
       })) as unknown as typeof import("../../src/modes/host.js").createHeadlessHost;
@@ -330,6 +334,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
     const keys = keysOf("second", "\r", "\x03");
 
     const fakeHostFn = (() => ({
+      settled: Promise.resolve(),
       receive: () => {},
       close: () => {},
     })) as unknown as typeof import("../../src/modes/host.js").createHeadlessHost;
@@ -400,6 +405,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
     const views: TuiView[] = [];
     const keys = keysOf("try answer", "\r", "\x03");
     const fakeHostFn = (() => ({
+      settled: Promise.resolve(),
       receive: () => {},
       close: () => {},
     })) as unknown as typeof import("../../src/modes/host.js").createHeadlessHost;
@@ -462,6 +468,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
     const views: TuiView[] = [];
     const keys = keysOf("overflow", "\r", "\x03");
     const fakeHostFn = (() => ({
+      settled: Promise.resolve(),
       receive: () => {},
       close: () => {},
     })) as unknown as typeof import("../../src/modes/host.js").createHeadlessHost;
@@ -534,6 +541,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
     // Instead test that refused draft is kept and next id is fresh.
     const keys = keysOf("kept text", "\r", "\x03");
     const fakeHostFn = (() => ({
+      settled: Promise.resolve(),
       receive: () => {},
       close: () => {},
     })) as unknown as typeof import("../../src/modes/host.js").createHeadlessHost;
@@ -690,6 +698,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
     };
 
     const fakeHostFn = (() => ({
+      settled: Promise.resolve(),
       receive: () => {},
       close: () => {},
     })) as unknown as typeof import("../../src/modes/host.js").createHeadlessHost;
@@ -748,6 +757,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
     const views: TuiView[] = [];
     const keys = keysOf("hello", "\r", "\x03");
     const fakeHostFn = (() => ({
+      settled: Promise.resolve(),
       receive: () => {},
       close: () => {},
     })) as unknown as typeof import("../../src/modes/host.js").createHeadlessHost;
@@ -800,6 +810,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
     const fakeStdout = { isTTY: true } as unknown as NodeJS.WriteStream;
 
     const fakeHostFn = (() => ({
+      settled: Promise.resolve(),
       receive: () => {},
       close: () => {},
     })) as unknown as typeof import("../../src/modes/host.js").createHeadlessHost;
@@ -854,6 +865,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
     const now = 1000;
     const keys = keysOf("unsent text", "\x03");
     const fakeHostFn = (() => ({
+      settled: Promise.resolve(),
       receive: () => {},
       close: () => {},
     })) as unknown as typeof import("../../src/modes/host.js").createHeadlessHost;
@@ -974,7 +986,11 @@ test.each(["collect", "append"] as const)(
       runner: fakeRunnerSession,
       keys,
       onView: (view) => views.push(view),
-      createHeadlessHostFn: () => ({ receive: () => {}, close: () => {} }),
+      createHeadlessHostFn: () => ({
+        settled: Promise.resolve(),
+        receive: () => {},
+        close: () => {},
+      }),
       openConversationFn: (dir, deps) => {
         const host = openConversation(dir, deps);
         return {
@@ -1016,7 +1032,7 @@ test("chat reports a stopped driver without claiming another driver took over", 
     onView: (view) => views.push(view),
     createHeadlessHostFn: (deps) => {
       ended = deps.onEnded;
-      return { receive: () => {}, close: () => {} };
+      return { settled: Promise.resolve(), receive: () => {}, close: () => {} };
     },
   });
   expect(JSON.stringify(views.at(-1))).toContain("driver stopped");

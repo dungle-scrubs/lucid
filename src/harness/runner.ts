@@ -176,6 +176,7 @@ export interface HarnessRunner {
   inspect(
     harness: HarnessName,
     choice?: {
+      readonly signal?: AbortSignal;
       readonly model?: string;
       readonly effort?: string;
       readonly provider?: string;

@@ -83,6 +83,7 @@ test("legacy runtime does not drain managed inputs armed during lease expiry", a
     presence: () => false,
     pollMs: 1,
     createHeadlessHostFn: () => ({
+      settled: Promise.resolve(),
       receive: (frame) => {
         seen.push(frame);
       },
@@ -535,6 +536,7 @@ const makeFakeSource = (): {
   const factory = ((deps: { sendFrame: (frame: Frame) => { verdict: string } }) => {
     sendFrame = deps.sendFrame;
     return {
+      settled: Promise.resolve(),
       receive: (f: Frame): void => {
         received.push(f);
       },
@@ -608,6 +610,7 @@ describe("RFC-12: the startup honor fold at the runtime seam", () => {
     const factory = ((deps: { harness: unknown; model?: unknown }) => {
       spawns.push({ harness: deps.harness, model: deps.model });
       return {
+        settled: Promise.resolve(),
         receive: (_f: Frame): void => {},
         close: (): void => {},
       };
@@ -671,7 +674,7 @@ describe("RFC-12: the startup honor fold at the runtime seam", () => {
   });
 });
 
-test("failed-log shutdown releases presence and closes the host while harness close is pending and diagnostics throw", async () => {
+test("failed-log shutdown retains presence through harness cleanup even when diagnostics throw", async () => {
   const root = mkdtempSync(join(tmpdir(), "runtime-failed-log-"));
   const { dir } = conversations(root).ensure("failed-log");
   const writer = openWriter(dir);
@@ -728,6 +731,12 @@ test("failed-log shutdown releases presence and closes the host while harness cl
     mode: "queue",
     seq: 1,
   });
+  for (let tick = 0; tick < 100 && !proc.commands.some((c) => c.op === "close"); tick++)
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(proc.commands.some((c) => c.op === "close")).toBe(true);
+  expect(handle.presenceHeld()).toBe(true);
+  expect(closed).toBe(0);
+  proc.exit(0);
   await handle.done;
   await new Promise((r) => setTimeout(r, 0));
   expect(released).toBe(1);
@@ -746,5 +755,38 @@ test("failed-log shutdown releases presence and closes the host while harness cl
   ]);
   handle.abort();
   expect(released).toBe(1);
-  proc.exit(0);
+});
+
+test("runtime retains executor ownership until its source cleanup settles", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-runtime-cleanup-"));
+  conversations(root).ensure("cleanup");
+  const presence = fakePresence();
+  const cleanup = Promise.withResolvers<void>();
+  const running = await openDrivenConversation({
+    rootDir: root,
+    conversationId: "cleanup",
+    runner: fakeRunner,
+    acquirePresenceFn: presence.acquire,
+    presence: () => false,
+    createHeadlessHostFn: (deps) => ({
+      settled: cleanup.promise,
+      receive: () => {},
+      close: () => {
+        deps.onEnded?.({ kind: "closed" });
+      },
+    }),
+  });
+  if (running.kind !== "running") throw new Error("Runtime did not start");
+  try {
+    running.abort();
+    await Promise.resolve();
+    expect(presence.handle.held()).toBe(true);
+    cleanup.resolve();
+    await running.done;
+    expect(presence.handle.held()).toBe(false);
+  } finally {
+    cleanup.resolve();
+    running.abort();
+    await running.done;
+  }
 });

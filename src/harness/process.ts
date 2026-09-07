@@ -33,6 +33,8 @@ export interface HarnessDeps {
   readonly refusalGraceMs?: number;
   /** Context-accounting wall-clock ceiling, including native probe cleanup. */
   readonly accountingTimeoutMs?: number;
+  /** Inspection commands cannot hold source startup indefinitely. */
+  readonly inspectionTimeoutMs?: number;
   /** Absolute path to the hcn binary. */
   readonly bin: string;
   /** Structured boundary log, one line per transition. */

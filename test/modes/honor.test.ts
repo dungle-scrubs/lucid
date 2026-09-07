@@ -625,7 +625,11 @@ test("credit arriving during a driver switch reaches the replacement", async () 
       delivered.push(frames);
       opened += 1;
       endSource = deps.onEnded;
-      return { receive: (frame) => frames.push(frame), close: () => {} };
+      return {
+        settled: Promise.resolve(),
+        receive: (frame) => frames.push(frame),
+        close: () => {},
+      };
     },
   });
   endSource?.({ kind: "driver-change" });
@@ -659,7 +663,11 @@ test("credit arriving after a late refusal does not revive an ended driver", asy
       const frames: Frame[] = [];
       delivered.push(frames);
       endSource = deps.onEnded;
-      return { receive: (frame) => frames.push(frame), close: () => {} };
+      return {
+        settled: Promise.resolve(),
+        receive: (frame) => frames.push(frame),
+        close: () => {},
+      };
     },
   });
   try {
@@ -675,4 +683,103 @@ test("credit arriving after a late refusal does not revive an ended driver", asy
   } finally {
     driver.close();
   }
+});
+
+test.each(["inspection", "created"] as const)(
+  "shutdown during replacement %s waits for cleanup and cannot leave a source open",
+  async (phase) => {
+    const inspect = Promise.withResolvers<boolean>();
+    const cleanup = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+    const closes = [0, 0];
+    let inspections = 0;
+    let opened = 0;
+    let endSource: Parameters<typeof createHeadlessHost>[0]["onEnded"];
+    let driver: HonoringSource;
+    driver = await openHonoringDriver({
+      base: {
+        conversationId: "switch-shutdown",
+        secret: "test-secret",
+        runner: createHcnRunner({ spawn: fakeSpawner([]).spawn, bin: BIN }),
+        mintTurnId: () => "turn-1",
+        host: fakeArtifactHost(),
+        sendFrame: () => ({ verdict: "refused", issue: "not-used" }),
+      },
+      sessionCapable: async () => (++inspections === 1 ? true : inspect.promise),
+      initialHarness: "claude",
+      harnessPinned: false,
+      readPreference: () => null,
+      mintSessionId: () => "session",
+      createHostFn: (deps) => {
+        const index = opened++;
+        endSource = deps.onEnded;
+        if (index === 1 && phase === "created") queueMicrotask(() => driver.close());
+        return {
+          settled: cleanup[index]?.promise ?? Promise.resolve(),
+          receive: () => {},
+          close: () => {
+            closes[index] = (closes[index] ?? 0) + 1;
+          },
+        };
+      },
+    });
+    let settled = false;
+    void driver.settled.then(() => {
+      settled = true;
+    });
+    endSource?.({ kind: "driver-change" });
+    if (phase === "inspection") driver.close();
+    inspect.resolve(true);
+    await settle();
+    expect(opened).toBe(phase === "inspection" ? 1 : 2);
+    expect(closes[0]).toBeGreaterThan(0);
+    if (phase === "created") expect(closes[1]).toBeGreaterThan(0);
+    expect(settled).toBe(false);
+    cleanup[0]?.resolve();
+    await settle();
+    if (phase === "created") {
+      expect(settled).toBe(false);
+      cleanup[1]?.resolve();
+    }
+    await driver.settled;
+    expect(settled).toBe(true);
+  },
+);
+
+test("a failed startup observer closes its created source before open rejects", async () => {
+  const cleanup = Promise.withResolvers<void>();
+  let closed = false;
+  let rejected = false;
+  const opening = openHonoringDriver({
+    base: {
+      conversationId: "startup-observer",
+      secret: "test-secret",
+      runner: createHcnRunner({ spawn: fakeSpawner([]).spawn, bin: BIN }),
+      mintTurnId: () => "turn-1",
+      host: fakeArtifactHost(),
+      sendFrame: () => ({ verdict: "refused", issue: "not-used" }),
+    },
+    sessionCapable: async () => false,
+    initialHarness: "claude",
+    harnessPinned: false,
+    readPreference: () => null,
+    mintSessionId: () => "session",
+    createHostFn: () => ({
+      settled: cleanup.promise,
+      receive: () => {},
+      close: () => {
+        closed = true;
+      },
+    }),
+    onSpawn: () => {
+      throw new Error("synthetic observer failure");
+    },
+  });
+  void opening.catch(() => {
+    rejected = true;
+  });
+  await settle();
+  expect(closed).toBe(true);
+  expect(rejected).toBe(false);
+  cleanup.resolve();
+  await expect(opening).rejects.toThrow("synthetic observer failure");
 });

@@ -81,17 +81,51 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
   const runToCompletion = async (
     argv: readonly string[],
     cwd?: string,
+    signal?: AbortSignal,
   ): Promise<{ out: string[]; err: string[]; code: number | null }> => {
+    if (signal?.aborted)
+      throw new HarnessRefusal("inspection-cancelled", "hcn inspection cancelled");
     const proc = deps.spawn([deps.bin, ...argv], cwd === undefined ? {} : { cwd });
-    const out: string[] = [];
-    const err: string[] = [];
-    const readErr = (async () => {
-      for await (const line of lines(proc.stderr)) err.push(line);
-    })();
-    for await (const line of lines(proc.stdout)) out.push(line);
-    await readErr;
-    const code = await proc.exited;
-    return { out, err, code };
+    const interrupted = Promise.withResolvers<never>();
+    const cancel = (): void =>
+      interrupted.reject(new HarnessRefusal("inspection-cancelled", "hcn inspection cancelled"));
+    signal?.addEventListener("abort", cancel, { once: true });
+    if (signal?.aborted) cancel();
+    const timer = setTimeout(
+      () =>
+        interrupted.reject(new HarnessRefusal("inspection-timeout", "hcn inspection timed out")),
+      deps.inspectionTimeoutMs ?? OPEN_TIMEOUT_MS,
+    );
+    let size = 0;
+    const read = async (chunks: AsyncIterable<string>): Promise<string[]> => {
+      let text = "";
+      for await (const chunk of chunks) {
+        size += chunk.length;
+        if (size > 1_048_576)
+          throw new HarnessRefusal(
+            "inspection-limit",
+            "hcn inspection response exceeded its limit",
+          );
+        text += chunk;
+      }
+      return text.split("\n").filter((line) => line.trim() !== "");
+    };
+    const completed = Promise.all([read(proc.stdout), read(proc.stderr), proc.exited]);
+    let success = false;
+    try {
+      const [out, err, code] = await Promise.race([completed, interrupted.promise]);
+      success = true;
+      return { out, err, code };
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", cancel);
+      if (!success) {
+        const grace = deps.refusalGraceMs ?? 12_000;
+        await terminateHcn(proc, grace);
+        await settlesWithin(proc.exited, grace);
+      }
+      proc.disposeOutput();
+    }
   };
 
   /** The dump's `vocabulary` and `turnOptions` projected to what RFC-12's
@@ -137,6 +171,7 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
           ...flag("--mode", choice.runtime?.profile),
         ],
         choice.runtime?.cwd,
+        choice.signal,
       );
       if (check.code !== 0)
         throw new HarnessRefusal("invalid-settings", check.err.join("\n") || check.out.join("\n"));
@@ -185,6 +220,10 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
     if (!pending) {
       pending = readFacts(harness);
       factCache.set(harness, pending);
+      const request = pending;
+      void request.catch(() => {
+        if (factCache.get(harness) === request) factCache.delete(harness);
+      });
     }
     return runtime === undefined ? pending : { ...(await pending), runtime };
   };

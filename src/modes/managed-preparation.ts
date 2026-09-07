@@ -153,6 +153,7 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
       const resume = native.kind === "resume" ? native.sessionId : undefined;
       const facts = await runner
         .inspect(driver.harness, {
+          signal: input.signal,
           model: driver.model,
           effort: driver.effort,
           provider: driver.provider,
