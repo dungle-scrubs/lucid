@@ -971,6 +971,7 @@ export interface ConversationLog {
   readonly conversationId: string;
   state(): ChannelState;
   transcript(): Transcript;
+  acceptedInput(id: string): TranscriptInput | undefined;
   goodBytes(): number;
   /** Seek index for (artifactId, version) -> offset, built during the fold
    * that already happens when the record opens. Reading a version is a seek,
@@ -1346,6 +1347,7 @@ export const createLog = (
     paths,
     conversationId,
     state: () => curState,
+    acceptedInput: (id) => acc.inputs.find((entry) => entry.id === id),
     transcript: () => ({
       events: [...acc.events],
       inputs: [...acc.inputs],

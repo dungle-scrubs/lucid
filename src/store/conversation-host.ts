@@ -178,6 +178,7 @@ export const readRecordFiles = (
 };
 
 export interface ConversationHost {
+  hasAcceptedInput(id: string): boolean;
   contextCoverage(harness: HarnessName, sessionId: string): number;
   offerConversationContext(offer: ContextOfferRequest): ReduceResult;
   confirmConversationContext(turnId: string): ReduceResult;
@@ -364,6 +365,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
   };
 
   return {
+    hasAcceptedInput: (id) => log.acceptedInput(id) !== undefined,
     contextCoverage: (harness, sessionId) =>
       confirmedContextThrough(log.state(), harness, sessionId),
     offerConversationContext: (offer) =>
@@ -526,7 +528,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
       let acceptedSeq = 0;
       const result = transactDynamic((state) => {
         // append refreshes the transcript under its lock before this lookup.
-        const previous = log.transcript().inputs.find((entry) => entry.id === input.id);
+        const previous = log.acceptedInput(input.id);
         if (previous && previous.text === input.text && previous.mode === input.mode) {
           acceptedSeq = previous.seq;
           return {

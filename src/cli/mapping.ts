@@ -146,6 +146,12 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
     case "inject":
       return { kind: "inject" };
     case "serve":
+      if (rest.length > 0)
+        return {
+          kind: "help",
+          message:
+            "usage: lucid2 serve\nOpen the local conversation hub on the configured loopback port.",
+        };
       return { kind: "serve" };
     case undefined:
     case "help":

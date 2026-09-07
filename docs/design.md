@@ -10,8 +10,9 @@ instrumentation stylesheet as the app.
 ## Layout and surfaces
 
 The document has the primary column. The conversation has a narrower reading
-column with a resizable divider. Each column has one header. Save and discard
-belong in the document header; guidance stays beneath the document.
+column with a resizable divider. Save and discard belong in the document
+header; guidance stays beneath the document. The conversation has no duplicate
+identity or idle header. Driver choices stay with the composer.
 
 Keep the neutral ground cool, without process-yellow or sepia warming. The
 surrounding surface is darker than the patterned document ground, which is
@@ -47,8 +48,16 @@ retains the exact request across reload and offers retry or explicit discard.
 Queued input says "Waiting for the agent…"; live work says "The agent is
 working…". With saved input and no agent, say "No agent is connected. Your
 message is saved." That state has no progress animation or elapsed timer.
-The header must distinguish waiting from working. A failed operation keeps
-its reason at the place where the person attempted it.
+Activity in the conversation distinguishes waiting from working. A failed
+operation keeps its reason at the place where the person attempted it.
+
+Composer and note sends retain one exact request in this tab until admission
+is known. A lost response or expired token keeps a visible saved-send card in
+the scrolling conversation, with explicit Retry. Reload restores that card
+without sending it. A matching accepted receipt clears it; a matching
+admission refusal restores editable text. Malformed recovery data cannot be
+sent or replaced automatically. Discarding it is explicit and does not cancel
+an accepted input. The recovery card must not push the composer off-screen.
 
 ## Documents and notes
 

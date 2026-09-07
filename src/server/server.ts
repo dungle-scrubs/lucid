@@ -136,15 +136,15 @@ const json = (body: unknown, status = 200): Response =>
 const text = (body: string, status: number): Response =>
   new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
 
-const withWriter = (
+const withWriter = async (
   dir: string,
   conversationId: string,
-  action: (host: ConversationHost) => Response,
-): Response => {
+  action: (host: ConversationHost) => Response | Promise<Response>,
+): Promise<Response> => {
   let host: ConversationHost | undefined;
   try {
     host = openWriter(dir, { expectedConversationId: conversationId });
-    return action(host);
+    return await action(host);
   } catch (cause) {
     const code = classifyStoreFailure(cause);
     if (code === "record-busy") {
@@ -894,6 +894,8 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           } catch {
             return json({ error: "invalid-json" }, 400);
           }
+          if (body === null || typeof body !== "object" || Array.isArray(body))
+            return json({ error: "text-required" }, 400);
           const value = (body as { text?: unknown }).text;
           const requestedId = (body as { id?: unknown }).id;
           if (
@@ -901,38 +903,40 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             (typeof requestedId !== "string" || !isWireId(requestedId))
           )
             return json({ error: "invalid-input-id", verdict: "refused" }, 400);
-          if (typeof value !== "string" || value.trim() === "") {
+          if (typeof value !== "string") {
             return json({ error: "text-required" }, 400);
           }
-          // The protocol's own bound, imported rather than restated. A limit
-          // mirrored here would drift from the one that actually refuses.
           if (value.length > TEXT_MAX) return json({ error: "text-too-large" }, 413);
-
           const dir = dirForRequest(id);
-          const saved = preferenceState(dir);
-          const completed =
-            !saved.error && !saved.revision
-              ? (await settings.project(dir)).conversationSettings.selected
-              : null;
-          return withWriter(dir, id, (host) => {
+          return await withWriter(dir, id, async (host) => {
             const inputId =
               typeof requestedId === "string" ? requestedId : `browser-${randomUUID()}`;
-            const result = host.acceptInput(
-              { id: inputId, text: value, mode: "queue" },
-              { completeSettings: completed ?? undefined },
-            );
-            if (result.verdict === "refused") {
-              return json(
-                { error: result.issue, verdict: "refused" },
-                result.issue === "E-COMP-06"
-                  ? 409
-                  : result.issue === "input-queue-full"
-                    ? 429
-                    : 400,
-              );
-            }
-            wakeNaming();
-            return json({ ...result.receipt, verdict: "accepted" });
+            const input = { id: inputId, text: value, mode: "queue" as const };
+            const reply = (result: ReturnType<ConversationHost["acceptInput"]>): Response => {
+              if (result.verdict === "refused") {
+                return json(
+                  { error: result.issue, inputId, verdict: "refused" },
+                  result.issue === "E-COMP-06"
+                    ? 409
+                    : result.issue === "input-queue-full"
+                      ? 429
+                      : 400,
+                );
+              }
+              wakeNaming();
+              return json({ ...result.receipt, verdict: "accepted" });
+            };
+            // The host compares the original payload under the append lock.
+            // An existing receipt does not depend on today's driver defaults.
+            if (host.hasAcceptedInput(inputId)) return reply(host.acceptInput(input));
+            if (value.trim() === "")
+              return json({ error: "text-required", inputId, verdict: "refused" }, 400);
+            const saved = preferenceState(dir);
+            const completed =
+              !saved.error && !saved.revision
+                ? (await settings.project(dir)).conversationSettings.selected
+                : null;
+            return reply(host.acceptInput(input, { completeSettings: completed ?? undefined }));
           });
         }
 

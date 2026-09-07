@@ -223,8 +223,8 @@ const isBatch = (v: unknown): v is AnnotationBatch => {
 };
 
 const FENCE_RE = new RegExp(
-  `\`\`\`[ \\t]*${ANNOTATION_FENCE}[ \\t]*\\n([\\s\\S]*?)\\n?\`\`\``,
-  "g",
+  `\`\`\`[ \\t]*${ANNOTATION_FENCE}[ \\t]*\\n([\\s\\S]*?)\\n[ \\t]*\`\`\`[ \\t]*(?=\\r?$)`,
+  "gm",
 );
 
 /** The batch carried in this text, or null. A malformed block is not a

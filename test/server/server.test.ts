@@ -185,6 +185,17 @@ describe("reading a conversation", () => {
 });
 
 describe("writing reaches the record with nothing driving", () => {
+  test("a null input body is a client error and appends no work", async () => {
+    const before = readFileSync(join(root, CONV, "log.ndjson"), "utf8");
+    const response = await api(`/api/conversations/${CONV}/input`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "null",
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "text-required" });
+    expect(readFileSync(join(root, CONV, "log.ndjson"), "utf8")).toBe(before);
+  });
   test("concurrent retries return one accepted receipt and conflicting text is refused", async () => {
     const submit = (text: string) =>
       api(`/api/conversations/${CONV}/input`, {

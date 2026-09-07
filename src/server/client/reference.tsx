@@ -25,6 +25,7 @@
 
 import type React from "react";
 import { createRoot } from "react-dom/client";
+import { InputRecovery } from "./input-recovery.js";
 import { ELEMENT_ATTR, STYLE } from "./instrument.js";
 
 /** One state: what it is called, what produces it, what it means. */
@@ -626,49 +627,58 @@ const Panel = (): React.ReactElement => (
 
 const Dock = (): React.ReactElement => (
   <Section
-    title="The conversation's status pill"
-    blurb="The counted, clocked telling of what the agent is doing, in the conversation's own 34px row. Five of its six states are progress; only one is a warning, and the thresholds behind it are measured from 47 turns rather than chosen."
+    title="The conversation composer"
+    blurb="Queued notes, prompt entry, and the driver choices stay beside the conversation."
     wide
   >
-    <Case name="The agent is working" classes=".conv-pill.busy" note="A turn is in flight.">
+    <Case
+      name="Send result unknown"
+      classes=".input-recovery"
+      note="The exact saved request waits for an explicit retry. Reload alone does not send it."
+    >
       <div className="ref-pane">
-        <div className="conv-head">
-          <span className="conv-name">Warehouse cutover</span>
-          <span className="conv-pill busy">
-            <span className="dot" />
-            <span className="label">working</span>
-          </span>
-        </div>
+        <InputRecovery
+          busy={false}
+          dead={false}
+          onRetry={() => {}}
+          onDiscard={() => {}}
+          reason={null}
+          state={{
+            status: "unresolved",
+            text: "Keep the deployment instructions clear.",
+            request: {
+              version: 1,
+              conversationId: "reference",
+              artifactId: null,
+              inputId: "saved-send",
+              body: JSON.stringify({
+                id: "saved-send",
+                text: "Keep the deployment instructions clear.",
+              }),
+            },
+          }}
+        />
       </div>
     </Case>
     <Case
-      name="Working, with a count"
-      classes=".conv-pill.busy"
-      note="The elapsed count appears past 8 seconds. Below that it is noise, and a pill that counts every wait teaches you to stop reading it."
+      name="Unusable recovery data"
+      classes=".input-recovery"
+      note="Readable text remains visible. Discard does not cancel an accepted input."
     >
       <div className="ref-pane">
-        <div className="conv-head">
-          <span className="conv-name">Warehouse cutover</span>
-          <span className="conv-pill busy">
-            <span className="dot" />
-            <span className="label">working · 38s</span>
-          </span>
-        </div>
-      </div>
-    </Case>
-    <Case
-      name="Stalled"
-      classes=".conv-pill.stopped"
-      note="Past 180 seconds for a running turn, or 45 for notes that were never delivered. The only waiting state that is a warning - and a stall is not a refusal, so the ink stays neutral."
-    >
-      <div className="ref-pane">
-        <div className="conv-head">
-          <span className="conv-name">Warehouse cutover</span>
-          <span className="conv-pill stopped">
-            <span className="dot" />
-            <span className="label">stopped · 4m 12s ago</span>
-          </span>
-        </div>
+        <InputRecovery
+          busy={false}
+          dead={false}
+          onRetry={() => {}}
+          onDiscard={() => {}}
+          reason={null}
+          state={{
+            status: "invalid",
+            text: "Keep these words visible.",
+            reason:
+              "E-COMP-08: Cannot read this tab's saved send. Inspect the transcript before discarding local recovery data.",
+          }}
+        />
       </div>
     </Case>
     <Case

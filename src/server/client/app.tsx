@@ -23,7 +23,9 @@ import {
   ComposerPrimitive,
   getExternalStoreMessage,
   MessagePrimitive,
+  type ThreadMessage,
   ThreadPrimitive,
+  useExternalMessageConverter,
   useExternalStoreRuntime,
   useMessage,
   useThreadComposer,
@@ -36,6 +38,7 @@ import {
   type AnnotationSpot,
   type AttachedFile,
   clampSnippet,
+  detectAnnotationBatch,
   encodeAnnotationBatch,
   NOTE_QUEUE_MAX,
   queueAdmits,
@@ -78,6 +81,9 @@ import {
   TableDuotone,
   XDuotone,
 } from "./icons.js";
+import { InputRecovery } from "./input-recovery.js";
+import type { InputSubmissionResult } from "./input-submission.js";
+import { createInputSubmission } from "./input-submission.js";
 import { ELEMENT_ID, FRAME_MESSAGE_SOURCE, instrumentArtifact } from "./instrument.js";
 import {
   CONVERSATION_MAX,
@@ -238,17 +244,6 @@ interface Driver {
   readonly model?: string;
   readonly harnessVersion?: string;
 }
-
-/** The driver as the conversation header names it: harness, then model.
- * Derived from the same Driver the line under the composer renders (7a-7d),
- * so the header above and the line below can never disagree about who is
- * driving. Null when the record carries no identity at all; an interactive
- * attachment names no harness (RFC-03), so a model alone still names what
- * is known. */
-const driverHeadline = (driver: Driver): string | null => {
-  const known = [driver.harness, driver.model].filter((p): p is string => p !== undefined);
-  return known.length === 0 ? null : known.join(" · ");
-};
 
 /** The conversation, and now the artifact and the version, are named by the
  * URL and never by the bundle. `route.ts` owns the shape. */
@@ -855,14 +850,13 @@ const DRIVER_MENU_W = 226;
  *
  * Harness, model and effort are controls now (RFC-12): hover takes the
  * accent pill, opening takes the segment solid, and a pick POSTs the whole
- * preference - the line and the header settle from the next poll, because
+ * preference - the line settles from the next poll, because
  * nothing renders because the browser believes it happened. Mode stays a
  * report with its hover gloss: it is not settable from the browser, and a
  * control that cannot act is not drawn as one. Interactive offers no
  * menus at all - the human's session chose the driver and lucid cannot
  * change it mid-run - and its harness and model sit at 55% report ink.
- * The conversation header names the same driver through `driverHeadline`,
- * from the same Driver. */
+ */
 const DriverLine = ({
   driver,
   preference,
@@ -1179,6 +1173,7 @@ const Thread = ({
   location,
   settingsIssue,
   onLocation,
+  recovery,
 }: {
   pending: readonly PendingNote[];
   onSendNotes: () => void;
@@ -1222,6 +1217,7 @@ const Thread = ({
   location: LocationState | null;
   settingsIssue: string | null;
   onLocation: (folder: string, revision: number) => Promise<string | null>;
+  recovery: React.ComponentProps<typeof InputRecovery>;
 }): React.ReactElement => {
   const composerBox = React.useRef<HTMLTextAreaElement | null>(null);
   // 4a: send is ghost at rest and solid the moment there is something to
@@ -1245,6 +1241,7 @@ const Thread = ({
   // file dropped on the composer still attaches: storing one is a lucid
   // act, not a driving act.
   const interactive = driver.profile === "interactive";
+  const inputBlocked = recovery.busy || recovery.state.status !== "idle";
   return (
     <ThreadPrimitive.Root className={dead ? "thread-root dead" : "thread-root"}>
       {/* The half that scrolls. Only messages and note cards are in here, so
@@ -1341,6 +1338,7 @@ const Thread = ({
               </div>
             </div>
           )}
+          <InputRecovery {...recovery} />
         </ThreadPrimitive.Viewport>
         <ThreadPrimitive.ScrollToBottom asChild>
           <button type="button" className="to-bottom">
@@ -1365,12 +1363,18 @@ const Thread = ({
               type="button"
               className="primary"
               onClick={onSendNotes}
-              disabled={sending}
+              disabled={sending || inputBlocked}
               title="Send the queued notes (⌘⏎)"
             >
               {sending ? "Sending…" : "Send ⌘⏎"}
             </button>
-            <button type="button" className="discard" onClick={onDiscardNotes} title="Discard them">
+            <button
+              type="button"
+              className="discard"
+              onClick={onDiscardNotes}
+              title="Discard them"
+              disabled={inputBlocked}
+            >
               ×
             </button>
           </div>
@@ -1454,15 +1458,17 @@ const Thread = ({
             autoFocus
             ref={composerBox}
             className={dragOver ? "drop" : undefined}
-            disabled={dead}
+            disabled={dead || inputBlocked}
             placeholder={
               dead
                 ? "Reload to write…"
-                : dragOver
-                  ? "Drop to attach — the original is kept"
-                  : interactive
-                    ? "Interject…"
-                    : "Send to the conversation…"
+                : inputBlocked
+                  ? "Resolve the saved send to continue…"
+                  : dragOver
+                    ? "Drop to attach — the original is kept"
+                    : interactive
+                      ? "Interject…"
+                      : "Send to the conversation…"
             }
             rows={1}
           />
@@ -1472,7 +1478,7 @@ const Thread = ({
               className="send"
               title="Send"
               aria-label="Send"
-              disabled={dead || !hasToSay}
+              disabled={dead || inputBlocked || !hasToSay}
             >
               <PaperPlaneTiltDuotone size={16} />
             </button>
@@ -2255,6 +2261,32 @@ const App = (): React.ReactElement => {
   /** An artifact the URL named that the record does not hold. */
   const [unknownArtifact, setUnknownArtifact] = React.useState<string | null>(null);
   const [token, setToken] = React.useState<string | null>(null);
+  const composerRestore = React.useRef<{ setText(text: string): void } | null>(null);
+  const [submissionBusy, setSubmissionBusy] = React.useState(false);
+  const submissionActive = React.useRef(false);
+  const [submissionReason, setSubmissionReason] = React.useState<string | null>(null);
+  const [, refreshSubmission] = React.useReducer((revision: number) => revision + 1, 0);
+  const submission = React.useMemo(
+    () =>
+      createInputSubmission({
+        conversationId,
+        mintId: () => `browser-${crypto.randomUUID()}`,
+        // Access inside the guarded operation: even the sessionStorage getter
+        // can throw when this tab cannot use browser storage.
+        storage: {
+          getItem: (key) => window.sessionStorage.getItem(key),
+          setItem: (key, value) => window.sessionStorage.setItem(key, value),
+          removeItem: (key) => window.sessionStorage.removeItem(key),
+        },
+        send: (body) =>
+          fetch(`/api/conversations/${encodeURIComponent(conversationId)}/input`, {
+            method: "POST",
+            headers: { [TOKEN_HEADER]: token ?? "", "content-type": "application/json" },
+            body,
+          }),
+      }),
+    [conversationId, token],
+  );
   const [messages, setMessages] = React.useState<Msg[]>([]);
   const [status, setStatus] = React.useState<string>("");
   /** What is driving: harness, model when known, and profile. */
@@ -2658,6 +2690,70 @@ const App = (): React.ReactElement => {
     [docKey],
   );
 
+  const performSubmission = React.useCallback(
+    async (text?: string, artifactId?: string): Promise<InputSubmissionResult> => {
+      if (submissionActive.current)
+        return { status: "blocked", reason: "Wait for the current send to finish." };
+      submissionActive.current = true;
+      const previous = submission.current();
+      const originalText = text ?? (previous.status === "unresolved" ? previous.text : "");
+      const originalArtifact =
+        artifactId ?? (previous.status === "unresolved" ? previous.request.artifactId : null);
+      setSubmissionBusy(true);
+      try {
+        const result =
+          text === undefined ? await submission.retry() : await submission.submit(text, artifactId);
+        setSubmissionReason(result.status === "accepted" ? null : result.reason);
+        if (result.status === "uncertain" && result.reload) setDead(true);
+        if (result.status === "accepted" || result.status === "refused") {
+          const batch = originalArtifact === null ? null : detectAnnotationBatch(originalText);
+          if (batch && !("malformed" in batch)) {
+            const key = `${batch.artifactId}@${batch.version}`;
+            setNotesByVersion((prior) => {
+              const queued = prior[key] ?? [];
+              const submitted = encodeAnnotationBatch(batch);
+              const prefix = encodeAnnotationBatch({
+                ...batch,
+                notes: queued.slice(0, batch.notes.length).map(({ note, spots, files }) => ({
+                  note,
+                  spots,
+                  ...(files === undefined || files.length === 0 ? {} : { files }),
+                })),
+              });
+              if (result.status === "refused")
+                return prefix === submitted
+                  ? prior
+                  : {
+                      ...prior,
+                      [key]: [
+                        ...batch.notes.map((note) => ({ ...note, at: messages.length })),
+                        ...queued,
+                      ],
+                    };
+              return prefix === submitted
+                ? { ...prior, [key]: queued.slice(batch.notes.length) }
+                : prior;
+            });
+          } else if (result.status === "refused") composerRestore.current?.setText(originalText);
+          if (result.status === "refused") {
+            if (originalArtifact === null) addRefusal(null, `Not sent: ${result.reason}`);
+            else setRefusal(result.reason);
+          }
+        } else if (result.status === "blocked" && submission.current().status === "idle") {
+          if (originalArtifact === null) composerRestore.current?.setText(originalText);
+          if (originalArtifact === null) addRefusal(null, result.reason);
+          else setRefusal(result.reason);
+        }
+        return result;
+      } finally {
+        submissionActive.current = false;
+        setSubmissionBusy(false);
+        refreshSubmission();
+      }
+    },
+    [submission, messages.length, addRefusal],
+  );
+
   React.useEffect(() => {
     let alive = true;
     fetch("/api/session")
@@ -2971,34 +3067,37 @@ const App = (): React.ReactElement => {
     });
     // Where in the timeline this happened, so it stays there when the
     // conversation carries on above and below it.
-    setNotes([
-      ...notes,
-      {
-        note: text,
-        spots: withSelectors,
-        at: messages.length,
-        // The reference travels with the note, never the bytes. `path` is
-        // filled in when the turn is built, because where a file is offered
-        // from is a per-turn copy outside the record.
-        ...(noteFiles.length === 0
-          ? {}
-          : {
-              files: noteFiles.map((f) => ({
-                hash: f.hash,
-                bytes: f.bytes,
-                contentType: f.contentType,
-                name: f.name,
-              })),
-            }),
-      },
-    ]);
+    setNotesByVersion((prior) => ({
+      ...prior,
+      [docKey]: [
+        ...(prior[docKey] ?? []),
+        {
+          note: text,
+          spots: withSelectors,
+          at: messages.length,
+          // The reference travels with the note, never the bytes. `path` is
+          // filled in when the turn is built, because where a file is offered
+          // from is a per-turn copy outside the record.
+          ...(noteFiles.length === 0
+            ? {}
+            : {
+                files: noteFiles.map((f) => ({
+                  hash: f.hash,
+                  bytes: f.bytes,
+                  contentType: f.contentType,
+                  name: f.name,
+                })),
+              }),
+        },
+      ],
+    }));
     setNoteFiles([]);
     setDraft("");
     setSelection([]);
     setSelRect(null);
     setRefusal(null);
     deselect.current?.();
-  }, [draft, selection, notes, setNotes, doc, messages.length, pinnedOld, noteFiles]);
+  }, [draft, selection, notes, docKey, doc, messages.length, pinnedOld, noteFiles]);
 
   const sendNotes = React.useCallback(async (): Promise<void> => {
     if (notes.length === 0 || doc === null || token === null || dead) return;
@@ -3007,7 +3106,8 @@ const App = (): React.ReactElement => {
     // sharing one piece of state, so saving a document disabled sending
     // notes and sending notes showed nothing. A key that sends makes a
     // double press easy, which is what turned this up.
-    if (sendingNotes.current) return;
+    if (sendingNotes.current || submissionActive.current || submission.current().status !== "idle")
+      return;
     sendingNotes.current = true;
     setSending(true);
     try {
@@ -3022,24 +3122,13 @@ const App = (): React.ReactElement => {
           ...(n.files === undefined || n.files.length === 0 ? {} : { files: n.files }),
         })),
       });
-      const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/input`, {
-        method: "POST",
-        headers: { [TOKEN_HEADER]: token, "content-type": "application/json" },
-        body: JSON.stringify({ text: body }),
-      });
-      if (!res.ok) {
-        const said = (await res.json().catch(() => ({}))) as { error?: string };
-        // Nothing is cleared: what was written is still there to send again.
-        setRefusal(said.error === undefined ? `refused (${res.status})` : String(said.error));
-        return;
-      }
-      setNotes([]);
-      setRefusal(null);
+      const result = await performSubmission(body, doc.artifactId);
+      setRefusal(result.status === "accepted" ? null : result.reason);
     } finally {
       sendingNotes.current = false;
       setSending(false);
     }
-  }, [notes, doc, token, dead, conversationId, setNotes]);
+  }, [notes, doc, token, dead, performSubmission, submission]);
 
   // What command-Enter means right now, or null when it means nothing. A
   // ref, so the window listener and the frame's callback both read the
@@ -3049,7 +3138,11 @@ const App = (): React.ReactElement => {
   // nothing at all - which is what it did, leaving a full queue, an open note
   // box, and no way out of either without reaching for the mouse.
   queueSendRef.current =
-    notes.length > 0 && !sending && (selection.length === 0 || notes.length >= NOTE_QUEUE_MAX)
+    notes.length > 0 &&
+    !sending &&
+    !submissionBusy &&
+    submission.current().status === "idle" &&
+    (selection.length === 0 || notes.length >= NOTE_QUEUE_MAX)
       ? sendNotes
       : null;
 
@@ -3517,25 +3610,13 @@ const App = (): React.ReactElement => {
         .filter((p) => p.type === "text")
         .map((p) => p.text ?? "")
         .join("");
-      if (text.trim() === "" || token === null || dead) return;
-      const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/input`, {
-        method: "POST",
-        headers: { [TOKEN_HEADER]: token, "content-type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
-      if (res.status === 401) {
-        setDead(true);
+      if (text.trim() === "" || token === null || dead) {
+        composerRestore.current?.setText(text);
         return;
       }
-      if (!res.ok) {
-        // G2: the substrate refused the send, drawn where the refused act
-        // happened - a magenta chip at the composer, not a toast and not a
-        // page-level banner.
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        addRefusal(null, `not sent — ${body.error ?? res.status}`);
-      }
+      await performSubmission(text);
     },
-    [conversationId, token, dead, addRefusal],
+    [token, dead, performSubmission],
   );
 
   // A save is an artifact version entry, not an input, so it is not in the
@@ -3571,34 +3652,41 @@ const App = (): React.ReactElement => {
         },
       }));
 
-    if (placed.length === 0) return dead ? weaveNotes(messages, []) : weaveNotes(messages, notes);
-
-    const woven: Msg[] = [];
-    let next = 0;
-    for (const m of messages) {
-      // Every save whose place is at or before this line goes in first.
-      while (next < placed.length && (placed[next]?.after ?? 0) < (m.seq ?? 0)) {
-        woven.push(placed[next++]?.line as Msg);
-      }
-      woven.push(m);
-    }
-    while (next < placed.length) woven.push(placed[next++]?.line as Msg);
     // Dead (3d): queued notes leave the timeline and become one held card
     // under it - "N notes, nothing sent" - because nothing can be sent and
     // a queue that looks live would say otherwise.
-    return dead ? weaveNotes(woven, []) : weaveNotes(woven, notes);
+    return weaveNotes(messages, dead ? [] : notes, placed);
   }, [messages, catalog, notes, dead]);
 
-  const runtime = useExternalStoreRuntime<Msg>({
-    messages: withSaves,
-    setMessages: (next) => setMessages([...next]),
-    onNew,
-    convertMessage: (m: Msg) => ({
+  const convertMessage = React.useCallback(
+    (m: Msg) => ({
       id: m.id,
       role: m.role,
       content: [{ type: "text" as const, text: m.text }],
+      convertConfig: { joinStrategy: "none" as const },
     }),
+    [],
+  );
+  const threadMessages = useExternalMessageConverter({
+    isRunning: false,
+    messages: withSaves,
+    callback: convertMessage,
   });
+  // The projection inserts and removes local notes among durable messages.
+  // Replace this linear view as a whole. Incremental branch relinking in
+  // assistant-ui 0.10 retains old depth values and can hide queued notes.
+  const messageRepository = React.useMemo(
+    () => ({
+      headId: threadMessages.at(-1)?.id ?? null,
+      messages: threadMessages.map((message, index) => ({
+        message,
+        parentId: threadMessages[index - 1]?.id ?? null,
+      })),
+    }),
+    [threadMessages],
+  );
+  const runtime = useExternalStoreRuntime<ThreadMessage>({ messageRepository, onNew });
+  composerRestore.current = runtime.thread.composer;
 
   /** What to do next, in one line.
    *
@@ -3810,14 +3898,6 @@ const App = (): React.ReactElement => {
     (now - since) / 1000,
     status !== "agent-gone" && status !== "no record",
   );
-  const pillLabel = report.disconnected
-    ? "no agent"
-    : report.stalled
-      ? `stopped · ${report.elapsed ?? "a while"} ago`
-      : busy
-        ? `${activity.turn || activity.inFlight > 0 ? "working" : "waiting"}${report.elapsed === null ? "" : ` · ${report.elapsed}`}`
-        : "idle";
-
   /** The header over the document column, in its three states (README \u00a71):
    * reading on the ground, ink while changes are unsaved, and the one
    * magenta state when there is no driver. Everything it shows is decided by
@@ -4522,40 +4602,6 @@ const App = (): React.ReactElement => {
                       : ({ "--conversation-width": `${convWidth}px` } as React.CSSProperties)
                   }
                 >
-                  {/* The conversation's own 34px row, aligned with the document
-              header so both columns top out together: its name, what is
-              driving it, and how it stands - counted and clocked. */}
-                  <div className="conv-head">
-                    <span className="conv-name">
-                      {conversationId === "" ? "no conversation" : conversationId}
-                    </span>
-                    {/* What is driving, named from the same Driver the
-                driver line under the composer renders (7a-7d), so the two
-                surfaces cannot disagree. Identity, not status. */}
-                    {driverHeadline(driver) === null ? null : (
-                      <span
-                        className="conv-driver"
-                        title={
-                          driver.harnessVersion === undefined ? undefined : driver.harnessVersion
-                        }
-                      >
-                        {driverHeadline(driver)}
-                      </span>
-                    )}
-                    <span
-                      className={
-                        report.stalled
-                          ? "conv-pill stopped"
-                          : report.busy
-                            ? "conv-pill busy"
-                            : "conv-pill"
-                      }
-                      title={status === "" ? undefined : status}
-                    >
-                      <span className="dot" aria-hidden="true" />
-                      <span className="label">{pillLabel}</span>
-                    </span>
-                  </div>
                   <Thread
                     pending={notes}
                     onSendNotes={() => void sendNotes()}
@@ -4587,6 +4633,25 @@ const App = (): React.ReactElement => {
                     location={location}
                     settingsIssue={settingsIssue}
                     onLocation={chooseLocation}
+                    recovery={{
+                      state: submission.current(),
+                      busy: submissionBusy,
+                      dead: dead || token === null,
+                      reason:
+                        token === null
+                          ? "Connecting before this send can be checked…"
+                          : submissionReason,
+                      onRetry: () => {
+                        if (!dead && token !== null) void performSubmission();
+                      },
+                      onDiscard: () => {
+                        if (!submission.discardInvalid())
+                          setSubmissionReason(
+                            "Cannot remove local recovery data. Browser storage is still unavailable.",
+                          );
+                        refreshSubmission();
+                      },
+                    }}
                   />
                 </div>
               </div>

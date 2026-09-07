@@ -255,6 +255,40 @@ test("first submission saves compatible legacy settings while keeping an unknown
   expect(r.launches()).toBe(0);
 });
 
+test("an accepted receipt is returned before legacy driver inspection or preference completion", async () => {
+  const r = await rig();
+  const { createConversationRecord } = await import("../../src/store/store.js");
+  const { createConversationHost } = await import("../../src/store/conversation-host.js");
+  const record = createConversationRecord(r.root, "retry-legacy");
+  const host = createConversationHost(record.paths.dir, {
+    now: () => 1,
+    presence: () => false,
+    executorLease: () => false,
+    onEffect: () => {},
+    onRecord: () => {},
+  });
+  const input = {
+    id: "same-request",
+    mode: "queue" as const,
+    text: "Preserve this accepted request",
+  };
+  const accepted = host.acceptInput(input);
+  host.close();
+  if (accepted.verdict !== "accepted") throw new Error("acceptance failed");
+  let inspected = 0;
+  r.runner.inspect = async () => {
+    inspected++;
+    throw new Error("driver unavailable");
+  };
+  const reply = await r.request("conversations/retry-legacy/input", {
+    id: input.id,
+    text: input.text,
+  });
+  expect(reply.status).toBe(200);
+  expect(await reply.json()).toEqual({ ...accepted.receipt, verdict: "accepted" });
+  expect(inspected).toBe(0);
+});
+
 test("a created headless-turn choice is retained when the terminal explicitly opens its driver", async () => {
   const r = await rig();
   const created = await r

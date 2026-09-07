@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+.input-recovery-text {
+  max-block-size: 8rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  font-size: 0.875rem;
+}
+
 /* Source Serif 4, the chrome's serif, self-hosted: the page is served from
    this origin and never from a CDN, and a reading surface has to hold its
    type offline. Variable fonts (weight 200-900), latin subset, from Google
@@ -1383,92 +1392,7 @@ body {
   color: color-mix(in srgb, var(--color-text) 62%, transparent);
 }
 
-/* --- the conversation column ---------------------------------------------
- *
- * Its own 34px row - conversation name, driver identity, status pill -
- * aligned with the document header so both top out together. The turn
- * list scrolls; the composer is pinned to the bottom. */
-
-.conv-head {
-  flex: 0 0 34px;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 0 2px;
-  min-width: 0;
-}
-
-.conv-name {
-  flex: none;
-  max-width: 55%;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font: 400 14px / 1 var(--font-body);
-  color: color-mix(in srgb, var(--color-text) 70%, transparent);
-}
-
-/* What is driving, when the record says. Identity, not status. */
-.conv-driver {
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font: 400 12px / 1 var(--font-body);
-  color: color-mix(in srgb, var(--color-text) 45%, transparent);
-}
-
-/* The status pill. Working is the accent family - it is the agent doing
-   something. Idle is neutral ink: waiting, not refusing. */
-.conv-pill {
-  margin-left: auto;
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  height: 24px;
-  padding: 0 11px;
-  border-radius: 20px;
-  background: color-mix(in srgb, var(--color-text) 7%, transparent);
-  white-space: nowrap;
-}
-
-.conv-pill .dot {
-  width: 6px;
-  height: 6px;
-  flex: none;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--color-text) 35%, transparent);
-}
-
-/* Idle is neutral ink: waiting, not refusing. */
-.conv-pill .label {
-  font: 400 12px / 1 var(--font-body);
-  color: color-mix(in srgb, var(--color-text) 55%, transparent);
-}
-
-.conv-pill.busy {
-  background: var(--color-accent-100);
-}
-
-.conv-pill.busy .dot {
-  background: var(--color-accent);
-}
-
-.conv-pill.busy .label {
-  color: var(--color-accent-800);
-}
-
-/* A stall is the one warning, and it is not a refusal: neutral ink, the
-   dot stops moving, and the label says stopped and how long ago. */
-.conv-pill.stopped .dot {
-  background: color-mix(in srgb, var(--color-text) 40%, transparent);
-}
-
-.conv-pill.stopped .label {
-  color: color-mix(in srgb, var(--color-text) 60%, transparent);
-}
+/* The conversation scrolls above its composer. */
 
 .thread-root {
   position: relative;
