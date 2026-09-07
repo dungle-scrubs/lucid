@@ -285,3 +285,14 @@ and rechecks executor authority through the execution reducer. A change
 refuses the stale dispatch without consuming an attempt. Cursor advancement
 and unrelated display metadata do not invalidate prepared content. Folder
 availability is checked by preparation outside the append lock.
+
+Managed preparation derives native coverage from the same locked state as
+its context capture. It verifies the saved route and working folder, accounts
+for the complete request, and returns summary provenance with the prepared
+prompt. Unknown context or driver support records a prerequisite hold.
+A native identity or resume hold can authorize explicit fresh continuation of
+the same input. A refused hold write returns its issue to the owning driver.
+Preparation reserves each turn ID until it settles; a repeated ID cannot
+replace a working turn's offered copy. Releasing a pending preparation cancels
+its accounting. Cleanup failures retain owned copies for a later cleanup
+attempt and do not prevent cleanup of the other copies.

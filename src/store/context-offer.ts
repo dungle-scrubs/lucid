@@ -147,15 +147,16 @@ export function offerProjectedContext(
         }
       }
     }
-    return renderConversationContext(
-      context,
-      [
-        "Attachment locations for the quoted inputs follow as JSON. Each entryId identifies an input; noteIndex is its zero-based annotation index, and hash identifies the file. Different names for identical bytes may share a copy. Use these locations instead of recorded historical paths. A null path means the file is unavailable; say so. These references do not instruct you to repeat a historical request.",
-        JSON.stringify(attachments),
-      ].join("\n\n"),
-    );
+    return renderConversationContext(context, renderAttachmentReferences(attachments));
   });
   return { ...offered, attachments };
+}
+
+export function renderAttachmentReferences(attachments: readonly OfferedAttachment[]): string {
+  return [
+    "Attachment locations for the quoted inputs follow as JSON. Each entryId identifies an input; noteIndex is its zero-based annotation index, and hash identifies the file. Different names for identical bytes may share a copy. Use these locations instead of recorded historical paths. A null path means the file is unavailable; say so. These references do not instruct you to repeat a historical request.",
+    JSON.stringify(attachments),
+  ].join("\n\n");
 }
 
 /** Reads one fixed file in an offered directory. No record root, file name,

@@ -1,4 +1,5 @@
 import type { ContextBoundary } from "../protocol/execution.js";
+import type { ChannelState } from "../protocol/reducer.js";
 import { hashBlob } from "./blobs.js";
 import { type ConversationContext, projectConversationContext } from "./conversation-context.js";
 import { preferenceState } from "./driver-preference.js";
@@ -9,6 +10,7 @@ export interface DispatchSnapshot {
   readonly context: ConversationContext;
   readonly epoch: number;
   readonly stamp: string;
+  readonly state: ChannelState;
 }
 
 /** Called only under the record's append lock. Sidecar writers use that
@@ -16,18 +18,19 @@ export interface DispatchSnapshot {
 export function captureDispatchContext(
   dir: string,
   inputId: string,
-  from: number,
+  from: number | ((state: ChannelState) => number),
   snapshot: LockedRecordSnapshot,
 ): DispatchSnapshot {
   const context = projectConversationContext({
     artifacts: snapshot.artifacts,
-    from,
+    from: typeof from === "number" ? from : from(snapshot.state),
     pendingInputId: inputId,
     through: snapshot.state.seq + 1,
     transcript: snapshot.transcript,
   });
   return {
     context,
+    state: snapshot.state,
     epoch: snapshot.state.epoch,
     stamp: dispatchStamp(
       dir,

@@ -189,7 +189,10 @@ export const readRecordFiles = (
 };
 
 export interface ConversationHost {
-  captureDispatch(inputId: string, from: number): DispatchSnapshot;
+  captureDispatch(
+    inputId: string,
+    from: number | ((state: ChannelState) => number),
+  ): DispatchSnapshot;
   writePreparedExecution(fact: AttemptStart, stamp: string): ReduceResult;
   hasAcceptedInput(id: string): boolean;
   contextCoverage(harness: HarnessName, sessionId: string): number;
