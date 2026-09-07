@@ -106,6 +106,11 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
     const turnMap =
       turn !== null && typeof turn === "object" ? (turn as Record<string, unknown>) : {};
     return {
+      aliases: Object.fromEntries(
+        Object.entries((v as { aliases?: object }).aliases ?? {}).filter(
+          (entry): entry is [string, string] => typeof entry[1] === "string",
+        ),
+      ),
       models: strings((v as Record<string, unknown>).models),
       efforts: strings((v as Record<string, unknown>).efforts),
       extensible: (v as Record<string, unknown>).extensible === true,
@@ -113,7 +118,30 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
     };
   };
 
-  const inspect = async (harness: HarnessName): Promise<HarnessFacts> => {
+  const inspect: HarnessRunner["inspect"] = async (harness, choice) => {
+    if (choice) {
+      const check = await runToCompletion([
+        "inspect",
+        harness,
+        "--argv",
+        "--prompt",
+        "Validate settings",
+        ...flag("--model", choice.model),
+        ...flag("--effort", choice.effort),
+        ...flag("--provider", choice.provider),
+      ]);
+      if (check.code !== 0)
+        throw new HarnessRefusal("invalid-settings", check.err.join("\n") || check.out.join("\n"));
+    }
+    let pending = factCache.get(harness);
+    if (!pending) {
+      pending = readFacts(harness);
+      factCache.set(harness, pending);
+    }
+    return pending;
+  };
+  const factCache = new Map<HarnessName, Promise<HarnessFacts>>();
+  const readFacts = async (harness: HarnessName): Promise<HarnessFacts> => {
     const { out, err, code } = await runToCompletion(["inspect", harness, "--json"]);
     if (code !== 0) {
       throw new HarnessRefusal("inspect-failed", err.join("\n") || `hcn inspect exited ${code}`);

@@ -1,3 +1,4 @@
+import { type ConfigLocation, readUserConfig, resolveRecordRoot } from "../config/user-config.js";
 import { readRecordFiles } from "../store/conversation-host.js";
 import { readRecordIdentity } from "../store/record-identity.js";
 /**
@@ -171,6 +172,7 @@ export const resolveVerifiedRecord = (): ResolverResult => {
 export interface Conversations {
   readonly rootDir: string;
   list(): Discovery;
+  readonly discoveryIndex: DiscoveryIndex;
   /** Resolve the record directory for `conversationId`. Refuses missing and ambiguous identities. */
   dirFor(conversationId: string): string;
   /** Resolve the full `RecordPaths` for `conversationId`. Refuses missing and ambiguous identities. */
@@ -186,9 +188,8 @@ export interface Conversations {
  * Not `~/.lucid`: that is v1's live state directory — its hub log, its
  * registry, its roots — and v1 is still in use. Defaulting there put a
  * `records/` subdirectory inside a running program's own directory. */
-export const conversations = (rootDir?: string): Conversations => {
-  const root =
-    rootDir ?? process.env.LUCID_ROOT ?? join(process.env.HOME ?? "/tmp", ".lucid2", "records");
+export const conversations = (rootDir?: string, configLocation?: ConfigLocation): Conversations => {
+  const root = resolveRecordRoot(rootDir, () => readUserConfig(configLocation));
   const index = new DiscoveryIndex(root);
   const catalog = (): Discovery => index.scan();
   const find = (id: string): string | undefined => {
@@ -204,6 +205,7 @@ export const conversations = (rootDir?: string): Conversations => {
   };
   return {
     rootDir: root,
+    discoveryIndex: index,
     list: catalog,
     dirFor: resolve,
     pathsFor: (conversationId: string) => pathsForDir(resolve(conversationId)),

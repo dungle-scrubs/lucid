@@ -8,6 +8,7 @@ import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { ConversationPage, ListedConversation } from "../../protocol/conversations.js";
 import { TOKEN_HEADER } from "../constants.js";
+import { NewConversation, PENDING_CREATION } from "./new-conversation.js";
 import { Button } from "./ui/button.js";
 
 class SessionExpired extends Error {}
@@ -26,21 +27,31 @@ const queries = new QueryClient({
   defaultOptions: { queries: { retry: false, staleTime: 0, refetchOnWindowFocus: "always" } },
 });
 
-async function fetchPage(cursor: string | null, signal: AbortSignal): Promise<ConversationPage> {
-  const getToken = async (): Promise<string> => {
-    const response = await fetch("/api/session", { signal });
-    if (!response.ok) throw new Error("Cannot connect to Lucid. Refresh to try again.");
-    const session = (await response.json()) as { token: string };
-    return session.token;
-  };
-  const url = `/api/conversations?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+async function apiFetch(path: string, body?: string, signal?: AbortSignal): Promise<Response> {
   const token = await queries.fetchQuery({
     queryKey: ["session"],
-    queryFn: getToken,
     staleTime: Infinity,
+    queryFn: async () => {
+      const response = await fetch("/api/session");
+      if (!response.ok) throw new Error("Cannot connect to Lucid. Refresh to try again.");
+      return ((await response.json()) as { token: string }).token;
+    },
   });
-  const response = await fetch(url, { headers: { [TOKEN_HEADER]: token }, signal });
+  const response = await fetch(`/api/${path}`, {
+    method: body === undefined ? "GET" : "POST",
+    headers: { [TOKEN_HEADER]: token, "content-type": "application/json" },
+    ...(body === undefined ? {} : { body }),
+    signal,
+  });
   if (response.status === 401) throw new SessionExpired("Lucid restarted. Reload to reconnect.");
+  return response;
+}
+async function fetchPage(cursor: string | null, signal: AbortSignal): Promise<ConversationPage> {
+  const response = await apiFetch(
+    `conversations?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+    undefined,
+    signal,
+  );
   if (!response.ok)
     throw new Error(
       "Conversations are unavailable. Check the configured record folder, then refresh.",
@@ -85,6 +96,7 @@ function Project({
 }
 
 function Hub() {
+  const [creating, setCreating] = useState(() => sessionStorage.getItem(PENDING_CREATION) !== null);
   const [search, setSearch] = useState("");
   const query = useInfiniteQuery({
     queryKey: ["conversations"],
@@ -127,6 +139,9 @@ function Hub() {
           <span aria-hidden="true">.</span>lucid
         </a>
         <h1>Conversations</h1>
+        <Button variant="outline" onClick={() => setCreating(!creating)}>
+          {creating ? "Close" : "+ New"}
+        </Button>
         <Button
           variant="ghost"
           onClick={() =>
@@ -138,6 +153,7 @@ function Hub() {
         </Button>
       </header>
       <main className="hub-main">
+        {creating ? <NewConversation request={apiFetch} /> : null}
         <label className="hub-search">
           <span className="sr-only">
             {query.hasNextPage ? "Search loaded conversations" : "Search conversations"}

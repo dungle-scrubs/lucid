@@ -7,10 +7,18 @@ export interface FolderAssociation {
   readonly workingDirectory: string;
 }
 
+export class WorkingFolderError extends Error {}
+
 export const associateFolder = (directory: string): FolderAssociation => {
-  const workingDirectory = realpathSync(directory);
-  if (!statSync(workingDirectory).isDirectory())
-    throw new Error("working folder is not a directory");
+  let workingDirectory: string;
+  try {
+    workingDirectory = realpathSync(directory);
+    if (!statSync(workingDirectory).isDirectory()) throw new Error("not a directory");
+  } catch {
+    throw new WorkingFolderError(
+      "Working folder is missing or inaccessible. Choose an available folder.",
+    );
+  }
   let candidate = workingDirectory;
   while (!existsSync(join(candidate, ".git"))) {
     const parent = dirname(candidate);

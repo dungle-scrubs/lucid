@@ -31,6 +31,7 @@
  */
 
 import type { HarnessName } from "../harness/runner.js";
+import { HarnessRefusal } from "../harness/runner.js";
 import type { Frame } from "../protocol/index.js";
 import type { DriverPreference } from "../store/driver-preference.js";
 import type { createHeadlessHost, HeadlessDeps, SourceChannel, SourceEnd } from "./host.js";
@@ -38,6 +39,7 @@ import type { createHeadlessHost, HeadlessDeps, SourceChannel, SourceEnd } from 
 /** What a source was spawned under: the harness plus the dimensions the
  * preference can set. Absent means the hcn default applies. */
 export interface DriverSpawn {
+  readonly profile?: import("../harness/runner.js").HarnessMode;
   readonly harness: HarnessName;
   readonly model?: string;
   readonly provider?: string;
@@ -101,6 +103,7 @@ const spawnOf = (
   // spawn - a mismatch refuses, surfaces through the failure path, and
   // costs one error event.
   harness: pinned ? currentHarness : pref.harness,
+  ...(pref.profile === undefined ? {} : { profile: pref.profile }),
   ...(pref.model === undefined ? {} : { model: pref.model }),
   ...(pref.provider === undefined ? {} : { provider: pref.provider }),
   ...(pref.effort === undefined ? {} : { effort: pref.effort }),
@@ -108,12 +111,14 @@ const spawnOf = (
 
 const sameSpawn = (a: DriverSpawn, b: DriverSpawn): boolean =>
   a.harness === b.harness &&
+  a.profile === b.profile &&
   a.model === b.model &&
   a.provider === b.provider &&
   a.effort === b.effort;
 
 const samePreference = (a: DriverPreference, b: DriverPreference): boolean =>
   a.harness === b.harness &&
+  a.profile === b.profile &&
   a.model === b.model &&
   a.provider === b.provider &&
   a.effort === b.effort;
@@ -185,7 +190,18 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
   ): Promise<{ readonly source: SourceChannel; readonly profile: HeadlessProfile }> => {
     const gen = ++generation;
     const session = await deps.sessionCapable(spawn.harness);
-    const nextProfile: HeadlessProfile = session ? "headless-session" : "headless-turn";
+    if (spawn.profile === "interactive")
+      throw new HarnessRefusal(
+        "unsupported-profile",
+        "Interactive mode needs a human-owned terminal session. Choose a headless mode to start here.",
+      );
+    if (spawn.profile === "headless-session" && !session)
+      throw new HarnessRefusal(
+        "unsupported-profile",
+        "This harness cannot run headless-session. Choose a supported mode.",
+      );
+    const nextProfile: HeadlessProfile =
+      spawn.profile ?? (session ? "headless-session" : "headless-turn");
     const host: HeadlessDeps = {
       ...deps.base,
       harness: spawn.harness,

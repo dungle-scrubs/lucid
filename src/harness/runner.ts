@@ -57,6 +57,7 @@ export interface HarnessVocabulary {
   /** `vocabulary.models`, aliases resolved: hcn's list is already the
    * canonical ids, and `vocabulary.aliases` maps pet names onto it, so the
    * list is served as it stands. */
+  readonly aliases?: Readonly<Record<string, string>>;
   readonly models: readonly string[];
   /** `vocabulary.efforts`, the harness's ladder in the dump's own order. */
   readonly efforts: readonly string[];
@@ -156,7 +157,10 @@ export interface HarnessRunner {
    * arrives as a failure event followed by done. */
   streamTurn(opts: StreamTurnOptions): AsyncIterable<HarnessEvent>;
   /** `hcn inspect <h> --json`, projected to what lucid reads. No spawn. */
-  inspect(harness: HarnessName): Promise<HarnessFacts>;
+  inspect(
+    harness: HarnessName,
+    choice?: { readonly model: string; readonly effort: string; readonly provider?: string },
+  ): Promise<HarnessFacts>;
   /** `hcn inspect <h> --capabilities`. No spawn. */
   capabilities(harness: HarnessName, model: string, mode: HarnessMode): Promise<CapabilityResult>;
 }

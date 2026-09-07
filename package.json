@@ -31,6 +31,7 @@
     "@assistant-ui/react": "^0.10",
     "@dungle-scrubs/harness-cli-normalizer": "0.6.1",
     "@radix-ui/react-popover": "^1.1.23",
+    "@tanstack/react-form": "1.33.5",
     "@tanstack/react-query": "^5.102.8",
     "dom-anchor-text-quote": "^4",
     "react": "^18.3.1",

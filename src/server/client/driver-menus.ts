@@ -2,8 +2,8 @@
  * The driver line's menus (RFC-12, design 7a-7d), as derivations - no DOM,
  * no fetch, so the rules are testable without a browser.
  *
- * Three menus: harness, model, effort. Mode is not among them - it is not
- * settable from the browser, and the design's mode gloss stays a tooltip.
+ * Compact menus: harness, model, effort. The full settings editor also
+ * changes mode and provider, with complete revisioned bundles.
  * The rules this module owns:
  *
  * - **Absent, not disabled.** A dimension that cannot act - a model list
@@ -34,6 +34,9 @@ export interface DriverChoices {
 
 /** The wire shape of `driverPreference`: what the person chose. */
 export interface DriverPreference {
+  readonly profile?: string;
+  readonly revision?: number;
+  readonly expectedRevision?: number;
   readonly v: 1;
   readonly harness: string;
   readonly provider?: string;
@@ -43,6 +46,9 @@ export interface DriverPreference {
 
 /** What a POST body may carry - the five fields the endpoint accepts. */
 export interface DriverChoiceBody {
+  readonly profile?: string;
+  readonly revision?: number;
+  readonly expectedRevision?: number;
   readonly v: 1;
   readonly harness: string;
   readonly provider?: string;
@@ -177,14 +183,15 @@ export const chooseModel = (
     v: 1,
     harness: current.harness,
     model: next,
-    ...(keep?.effort === undefined ? {} : { effort: keep.effort }),
+    effort: keep?.effort ?? EFFORT_DEFAULT,
+    profile: keep?.profile ?? "headless-turn",
+    expectedRevision: keep?.revision ?? 0,
     ...(keep?.provider === undefined ? {} : { provider: keep.provider }),
   };
 };
 
 /** The bundle for choosing an effort: the model stands, and picking the
- * default level writes an absent field rather than the name - absent IS the
- * default, and the file should not carry a choice that says nothing. Null
+ * default level still saves its name so later defaults cannot change it. Null
  * when nothing would change. */
 export const chooseEffort = (
   next: string,
@@ -198,7 +205,9 @@ export const chooseEffort = (
     v: 1,
     harness: current.harness,
     ...(current.model === null ? {} : { model: current.model }),
-    ...(next === EFFORT_DEFAULT ? {} : { effort: next }),
+    effort: next,
+    profile: keep?.profile ?? "headless-turn",
+    expectedRevision: keep?.revision ?? 0,
     ...(keep?.provider === undefined ? {} : { provider: keep.provider }),
   };
 };

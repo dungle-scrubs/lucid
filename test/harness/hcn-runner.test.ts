@@ -369,6 +369,7 @@ describe("inspection, which never spawns a harness", () => {
       session: true,
       verifiedAgainst: "0.84.2",
       vocabulary: {
+        aliases: { glm: "zai/glm-5.2" },
         // models as the dump lists them - the canonical ids the aliases
         // resolve onto, served as they stand.
         models: ["zai/glm-5.2"],
@@ -426,6 +427,7 @@ describe("inspection, which never spawns a harness", () => {
     );
     r.proc.exit(0);
     expect((await pending).vocabulary).toEqual({
+      aliases: {},
       models: ["gpt-5.6-sol"],
       efforts: [],
       extensible: false,
@@ -614,4 +616,39 @@ test("a refused child that ignores SIGTERM is killed before the refusal returns"
     clearTimeout(cleanup);
     proc.exit(2);
   }
+});
+
+test("settings inspection validates argv, propagates refusal, and reuses descriptor facts", async () => {
+  // Inline inspection responses: these are command results, not fabricated NDJSON fixtures.
+  const facts = new FakeHcnProcess();
+  const valid = new FakeHcnProcess();
+  const refused = new FakeHcnProcess();
+  const r = rig([facts, valid, refused]);
+  const first = r.runner.inspect("claude");
+  facts.emitRaw(JSON.stringify({ name: "claude", sessionMode: {}, verifiedAgainst: "fake" }));
+  facts.exit(0);
+  await first;
+  const checked = r.runner.inspect("claude", { model: "concrete-opus", effort: "high" });
+  valid.emitRaw("[]");
+  valid.exit(0);
+  expect(await checked).toMatchObject({ name: "claude", session: true });
+  expect(r.spawner.calls[1]?.argv).toEqual([
+    BIN,
+    "inspect",
+    "claude",
+    "--argv",
+    "--prompt",
+    "Validate settings",
+    "--model",
+    "concrete-opus",
+    "--effort",
+    "high",
+  ]);
+  expect(await r.runner.inspect("claude")).toMatchObject({ name: "claude" });
+  expect(r.spawner.calls).toHaveLength(2);
+  const rejected = r.runner.inspect("claude", { model: "invalid", effort: "high" });
+  refused.emitRaw("invalid settings");
+  refused.exit(2);
+  await expect(rejected).rejects.toBeInstanceOf(HarnessRefusal);
+  expect(r.spawner.calls).toHaveLength(3);
 });

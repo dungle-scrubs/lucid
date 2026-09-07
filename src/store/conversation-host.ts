@@ -1,3 +1,4 @@
+import { completeLegacyPreference, type DriverChoice } from "./driver-preference.js";
 /**
  * ConversationHost — the deep module that owns the durable store's
  * read and write discipline.
@@ -169,12 +170,15 @@ export interface ConversationHost {
   readonly status: () => ChannelStatus;
   readonly close: () => void;
   handleFrame(line: string): ReduceResult | { verdict: "refused"; wire: true; issue: DecodeIssue };
-  enqueueInput(input: {
-    readonly id: string;
-    readonly text: string;
-    readonly mode: InputMode;
-    readonly turnId?: string;
-  }): ReduceResult;
+  enqueueInput(
+    input: {
+      readonly id: string;
+      readonly text: string;
+      readonly mode: InputMode;
+      readonly turnId?: string;
+    },
+    completeSettings?: DriverChoice,
+  ): ReduceResult;
   grantCredit(tokens: number): ReduceResult;
   /** Fold the log under the append lock and collect effects from `fromOffset`.
    * Thin delegation to the log's seam — the lock, repair, and return-
@@ -376,16 +380,21 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
         return { result: r, frame: decoded.frame };
       });
     },
-    enqueueInput: (input: {
-      readonly id: string;
-      readonly text: string;
-      readonly mode: InputMode;
-      readonly turnId?: string;
-    }): ReduceResult => {
+    enqueueInput: (
+      input: {
+        readonly id: string;
+        readonly text: string;
+        readonly mode: InputMode;
+        readonly turnId?: string;
+      },
+      completeSettings?: DriverChoice,
+    ): ReduceResult => {
       const at = deps.now();
       const entry: LogEntry = { v: 1, at, src: "input", input };
       return transact(entry, (s) => {
         const r = enqueueInput(s, input, at);
+        if (r.verdict === "accepted" && completeSettings)
+          completeLegacyPreference(dir, completeSettings);
         return { result: r, frame: null };
       });
     },

@@ -1,8 +1,13 @@
 import { readdirSync, statSync, watch } from "node:fs";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import type { ConversationSummary, DiscoveryIssue } from "../protocol/conversations.js";
 import { pathsForDir } from "./errors.js";
-import { type RecordMetadata, readRecordMetadata } from "./record-identity.js";
+import {
+  decodeRecordMetadata,
+  type RecordMetadata,
+  readRecordMetadata,
+} from "./record-identity.js";
 
 export interface DiscoveredRecord extends ConversationSummary {
   readonly dir: string;
@@ -31,19 +36,12 @@ const availableFolder = (folder: string): boolean => {
 const folderField = (value: unknown): string | null =>
   typeof value === "string" && isAbsolute(value) ? value : null;
 
-export const readRecordSummary = (
-  dir: string,
-  value = readRecordMetadata(dir),
-): DiscoveredRecord => {
+export function folderSummary(
+  value: Record<string, unknown>,
+): Pick<ConversationSummary, "projectDirectory" | "workingDirectory" | "workingDirectoryStatus"> {
   const projectDirectory = folderField(value.projectDirectory);
   const workingDirectory = folderField(value.workingDirectory);
-  if (!statSync(pathsForDir(dir).logPath).isFile()) throw new Error("Record log is unavailable");
   return {
-    conversationId: value.conversationId,
-    ...(typeof value.conversationTitle === "string"
-      ? { conversationTitle: value.conversationTitle }
-      : {}),
-    dir,
     projectDirectory,
     workingDirectory,
     workingDirectoryStatus:
@@ -53,12 +51,60 @@ export const readRecordSummary = (
           ? "available"
           : "missing",
   };
+}
+export const readRecordSummary = (
+  dir: string,
+  value = readRecordMetadata(dir),
+): DiscoveredRecord => {
+  if (!statSync(pathsForDir(dir).logPath).isFile()) throw new Error("Record log is unavailable");
+  return {
+    conversationId: value.conversationId,
+    ...(typeof value.conversationTitle === "string"
+      ? { conversationTitle: value.conversationTitle }
+      : {}),
+    dir,
+    ...folderSummary(value),
+  };
 };
 
 /** Cache metadata bytes, never identity decisions: each scan checks current entries and file identity. */
 export class DiscoveryIndex {
   private readonly metadata = new Map<string, { fingerprint: string; value: RecordMetadata }>();
   constructor(private readonly root: string) {}
+  /** Complete receipt lookup shares metadata fingerprints with listing. Four reads at a time. */
+  async receipts(id: string): Promise<readonly { conversationId: string; request: unknown }[]> {
+    const entries = (await readdir(this.root, { withFileTypes: true })).filter(
+      (entry) => (entry.isDirectory() || entry.isSymbolicLink()) && !entry.name.startsWith("."),
+    );
+    const matches: { conversationId: string; request: unknown }[] = [];
+    let next = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(4, entries.length) }, async () => {
+        for (;;) {
+          const entry = entries[next++];
+          if (!entry) return;
+          const dir = join(this.root, entry.name);
+          if (!(await stat(dir)).isDirectory()) continue;
+          const info = await stat(pathsForDir(dir).metaPath);
+          const fingerprint = [info.dev, info.ino, info.size, info.mtimeMs, info.ctimeMs].join(":");
+          const cached = this.metadata.get(dir);
+          const value =
+            cached?.fingerprint === fingerprint
+              ? cached.value
+              : decodeRecordMetadata(await readFile(pathsForDir(dir).metaPath, "utf8"));
+          this.metadata.set(dir, { fingerprint, value });
+          const receipt = value.creation;
+          if (receipt && typeof receipt === "object" && "id" in receipt && receipt.id === id) {
+            matches.push({
+              conversationId: value.conversationId,
+              request: "request" in receipt ? receipt.request : null,
+            });
+          }
+        }
+      }),
+    );
+    return matches;
+  }
   scan(): Discovery {
     let entries: string[];
     try {

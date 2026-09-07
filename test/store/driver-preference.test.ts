@@ -22,7 +22,9 @@ import { join } from "node:path";
 import {
   isDriverField,
   isDriverHarness,
+  preferenceState,
   readDriverPreference,
+  requireDriverPreference,
   writeDriverPreference,
 } from "../../src/store/driver-preference.js";
 import { createConversationRecord } from "../../src/store/store.js";
@@ -131,13 +133,15 @@ describe("the tolerant read", () => {
     expect(readDriverPreference(dir)).toBeNull();
   });
 
-  test("a known field that fails its shape is treated as unset", () => {
+  test("malformed known fields remain visible and block execution", () => {
     const dir = rec();
     writeFileSync(
       join(dir, "driver.json"),
       JSON.stringify({ v: 1, harness: "pi", model: "x".repeat(129), effort: 5 }),
     );
-    expect(readDriverPreference(dir)).toEqual({ v: 1, harness: "pi" });
+    expect(readDriverPreference(dir)).toBeNull();
+    expect(preferenceState(dir).error).toContain("malformed");
+    expect(() => requireDriverPreference(dir)).toThrow("malformed");
   });
 });
 

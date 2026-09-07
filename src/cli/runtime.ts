@@ -48,7 +48,7 @@ import type { ChannelStatus, Frame } from "../protocol/index.js";
 import { inputFrame } from "../protocol/index.js";
 import { channelStatus } from "../protocol/liveness.js";
 import { createTurnIds } from "../protocol/turn-id.js";
-import { readDriverPreference } from "../store/driver-preference.js";
+import { requireDriverPreference } from "../store/driver-preference.js";
 import { acquirePresence, type PresenceEvent, type PresenceHandle } from "../store/presence.js";
 import { type HostRecord, openConversation } from "../store/store.js";
 import { followRecord } from "../store/tailer.js";
@@ -251,12 +251,23 @@ export const openDrivenConversation = async (
   // have no spawn-flag surface, so the preference is their only source
   // besides hcn's defaults.
   const startup = resolveStartupHarness({ harness: opts.harness, harnessName: opts.harnessName });
-  const preference = readDriverPreference(dir);
+  let preference: ReturnType<typeof requireDriverPreference>;
+  let runner: HarnessRunner;
+  try {
+    preference = requireDriverPreference(dir);
+    runner = opts.runner ?? createHcnRunner(nodeHarnessDeps());
+  } catch (cause) {
+    try {
+      host.close();
+    } finally {
+      doRelease();
+    }
+    throw cause;
+  }
   const harness = startup.pinned ? startup.harness : (preference?.harness ?? startup.harness);
   // Runtime-verified, not guessed: hcn reads the descriptor and answers
   // whether a harness holds a persistent session (PLAN D-008), once per
   // spawn through the honoring driver below.
-  const runner = opts.runner ?? createHcnRunner(nodeHarnessDeps());
   // Wire termination: done resolves when the source is closed or the
   // signal aborts. No polling, no monkey-patch.
   let resolveDone!: () => void;
@@ -337,7 +348,7 @@ export const openDrivenConversation = async (
       sessionCapable: (h) => supportsSession(runner, h),
       initialHarness: harness,
       harnessPinned: startup.pinned,
-      readPreference: () => readDriverPreference(dir),
+      readPreference: () => requireDriverPreference(dir),
       mintSessionId: uuidFn,
       createHostFn: createHeadlessHostFn,
       onSpawn: () => {

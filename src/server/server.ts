@@ -1,3 +1,5 @@
+import { ConfigurationError } from "../config/user-config.js";
+import { HubError } from "../protocol/hub-errors.js";
 /**
  * The loopback server — one command, every record, a record chosen by URL.
  *
@@ -45,15 +47,9 @@ import {
   viewArtifactVersion,
   viewSnapshot,
 } from "../store/conversation-host.js";
+import { CreationError } from "../store/creation.js";
 import { RecordLookupError, watchConversations } from "../store/discovery.js";
-import {
-  DRIVER_BODY_FIELDS,
-  DRIVER_FIELD_MAX,
-  isDriverField,
-  isDriverHarness,
-  readDriverPreference,
-  writeDriverPreference,
-} from "../store/driver-preference.js";
+import { readDriverPreference } from "../store/driver-preference.js";
 import { classifyStoreFailure, validConversationId } from "../store/errors.js";
 import {
   ARTIFACT_TITLE_MAX,
@@ -62,6 +58,8 @@ import {
   validArtifactId,
 } from "../store/log.js";
 import { presenceHeld } from "../store/presence.js";
+import { WorkingFolderError } from "../store/project-directory.js";
+import { preferenceState, replaceLocation } from "../store/settings.js";
 // The projection is `buildView`'s, not a second one written for the
 // browser. Terminal and browser disagreeing about what a conversation says
 // would be a defect with no owner, so there is one derivation and both read
@@ -71,10 +69,12 @@ import hub from "./client/hub.html";
 import index from "./client/index.html";
 import { SERVER_PORT, TOKEN_HEADER } from "./constants.js";
 import { createConversationListing } from "./conversation-list.js";
-import { driverChoices } from "./driver-choices.js";
+import { createHubSettings } from "./hub-settings.js";
 import { mintToken } from "./token.js";
 
 export interface ServerOpts {
+  readonly configLocation?: import("../config/user-config.js").ConfigLocation;
+  readonly runner?: import("../harness/runner.js").HarnessRunner;
   readonly rootDir?: string;
   readonly port?: number;
   readonly token?: string;
@@ -151,12 +151,49 @@ const withWriter = (
   }
 };
 
+const hubFailure = (error: unknown): Response => {
+  if (error instanceof RecordLookupError) throw error;
+  if (error instanceof WorkingFolderError)
+    return json(
+      { error: "E-HUB-04", reason: error.message, actions: ["Choose a working folder"] },
+      400,
+    );
+  if (error instanceof HubError)
+    return json({ error: error.code, reason: error.message, actions: error.actions }, error.status);
+  if (error instanceof CreationError)
+    return json(
+      {
+        error: error.code,
+        reason: error.message,
+        actions: [error.status === 503 ? "Retry the same request" : "Review creation request"],
+      },
+      error.status,
+    );
+  return json(
+    {
+      error: "E-HUB-03",
+      reason: error instanceof Error ? error.message : "Settings unavailable",
+      actions: [
+        error instanceof ConfigurationError ? "Correct the user configuration" : "Review settings",
+      ],
+    },
+    400,
+  );
+};
+
 export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer> => {
   const port = opts.port ?? SERVER_PORT;
   const token = opts.token ?? mintToken();
-  const records = conversations(opts.rootDir);
+  const records = conversations(opts.rootDir, opts.configLocation);
   const conversationPage = createConversationListing();
   const rootDir = records.rootDir;
+  const settings = createHubSettings(
+    rootDir,
+    opts.configLocation,
+    opts.runner,
+    opts.rootDir !== undefined || process.env.LUCID_ROOT !== undefined,
+    records.discoveryIndex,
+  );
   const discovery = watchConversations(rootDir, { scan: records.list });
 
   /** This server's own origins. A request carrying any other `Origin` is
@@ -234,6 +271,20 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           });
         }
 
+        if (path === "/api/defaults" && req.method === "GET") {
+          try {
+            return json(await settings.defaults());
+          } catch (error) {
+            return hubFailure(error);
+          }
+        }
+        if (path === "/api/conversations" && req.method === "POST") {
+          try {
+            return json(await settings.create(await req.json()), 201);
+          } catch (error) {
+            return hubFailure(error);
+          }
+        }
         if (path === "/api/conversations" && req.method === "GET") {
           try {
             const listing = discovery.refresh();
@@ -301,7 +352,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
               damaged: true,
               error: cause instanceof Error ? cause.message : String(cause),
               driverPreference: readDriverPreference(dir),
-              driverChoices: await driverChoices(),
+              driverChoices: await settings.choices(),
             });
           }
           const view = buildView({
@@ -387,11 +438,15 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             // are never one field: after a refused re-spawn they differ, and
             // the difference is the story the page has to tell. Null is the
             // state of every record no choice has been made in.
-            driverPreference: readDriverPreference(dir),
+            ...(await settings.project(dir, {
+              ...(attached?.harness ? { harness: attached.harness } : {}),
+              ...(attached?.profile ? { profile: attached.profile } : {}),
+              ...(typeof observed.model === "string" ? { model: observed.model } : {}),
+            })),
             // The lists the choice is made from (RFC-12): the four harnesses,
             // each harness's models and efforts. Read once per process through
             // the harness seam, so a poll costs no spawn.
-            driverChoices: await driverChoices(),
+            driverChoices: await settings.choices(),
             // A torn trailing write folds cleanly but short. That is damage
             // too, and the page says so.
             damaged: snapshot.goodBytes < logSize(dir),
@@ -647,65 +702,38 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           });
         }
 
-        // The driver preference (RFC-12). A person's choice of what drives
-        // the conversation, stored in the record and honored by whichever
-        // headless process holds the presence lock - never by this server,
-        // which spawns nothing and takes no lock. This endpoint writes one
-        // file and answers.
-        //
-        // Validation is shape only, in the RFC's pinned order: json, harness,
-        // fields, unknown keys. Membership is hcn's to judge at spawn - the
-        // lists describe a pinned hcn and drift from the one that will spawn,
-        // and a harness whose model vocabulary is extensible accepts ids no
-        // descriptor listed - so a value hcn refuses surfaces later, as an
-        // error event in the record, where the person reads it.
+        const locationRoute = path.match(/^\/api\/conversations\/([^/]+)\/location\/?$/);
+        if (locationRoute && req.method === "POST") {
+          const id = decodeURIComponent(locationRoute[1] ?? "");
+          try {
+            const body = await req.json();
+            if (
+              typeof body.workingDirectory !== "string" ||
+              !body.workingDirectory.startsWith("/") ||
+              !Number.isSafeInteger(body.expectedRevision) ||
+              body.expectedRevision < 0
+            )
+              throw new HubError(
+                "Choose an absolute working folder and supply its revision.",
+                "E-HUB-04",
+                400,
+                ["Choose a working folder"],
+              );
+            return json(
+              replaceLocation(dirForRequest(id), id, body.expectedRevision, body.workingDirectory),
+            );
+          } catch (error) {
+            return hubFailure(error);
+          }
+        }
         const driverPref = path.match(/^\/api\/conversations\/([^/]+)\/driver\/?$/);
         if (driverPref && req.method === "POST") {
           const id = decodeURIComponent(driverPref[1] ?? "");
-          if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
-          let body: unknown;
           try {
-            body = await req.json();
-          } catch {
-            return json({ error: "invalid-json" }, 400);
+            return json(await settings.update(dirForRequest(id), id, await req.json()));
+          } catch (error) {
+            return hubFailure(error);
           }
-          const b = (body ?? {}) as Record<string, unknown>;
-          // A preference without its harness names nothing: model and effort
-          // are values in a harness's vocabulary, and a value without its
-          // domain cannot be honored. Aliases are refused with the rest - the
-          // file holds hcn's canonical names.
-          if (!isDriverHarness(b.harness)) return json({ error: "invalid-harness" }, 400);
-          for (const field of ["provider", "model", "effort"] as const) {
-            const value = b[field];
-            if (value === undefined) continue;
-            if (!isDriverField(value)) {
-              return json({ error: "invalid-field", field, max: DRIVER_FIELD_MAX }, 400);
-            }
-          }
-          // No field outside the five. `mode` and `profile` are unknown
-          // fields: mode is not settable from the browser, and the attach
-          // flow behind an interactive switch is not designed.
-          for (const key of Object.keys(b)) {
-            if (!DRIVER_BODY_FIELDS.has(key)) {
-              return json({ error: "unknown-field", field: key }, 400);
-            }
-          }
-          // The record is created when it does not exist, as an input does:
-          // choosing a driver while nothing runs is the natural moment to
-          // choose one, and the preference is honored by the next headless
-          // driver to start.
-          const dir = dirForRequest(id);
-          const stored = writeDriverPreference(
-            dir,
-            {
-              harness: b.harness,
-              ...(isDriverField(b.provider) ? { provider: b.provider } : {}),
-              ...(isDriverField(b.model) ? { model: b.model } : {}),
-              ...(isDriverField(b.effort) ? { effort: b.effort } : {}),
-            },
-            id,
-          );
-          return json(stored);
         }
 
         const write = path.match(/^\/api\/conversations\/([^/]+)\/input\/?$/);
@@ -814,9 +842,17 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           if (value.length > TEXT_MAX) return json({ error: "text-too-large" }, 413);
 
           const dir = dirForRequest(id);
+          const saved = preferenceState(dir);
+          const completed =
+            !saved.error && !saved.revision
+              ? (await settings.project(dir)).conversationSettings.selected
+              : null;
           return withWriter(dir, id, (host) => {
             const inputId = `browser-${randomUUID()}`;
-            const result = host.enqueueInput({ id: inputId, text: value, mode: "queue" });
+            const result = host.enqueueInput(
+              { id: inputId, text: value, mode: "queue" },
+              completed ?? undefined,
+            );
             if (result.verdict === "refused") {
               return json(
                 { error: result.issue, verdict: "refused" },

@@ -7,9 +7,9 @@ export interface RecordMetadata extends Record<string, unknown> {
   readonly conversationId: string;
 }
 
-export const readRecordMetadata = (dir: string): RecordMetadata => {
+export const decodeRecordMetadata = (text: string): RecordMetadata => {
   try {
-    const meta: unknown = JSON.parse(readFileSync(pathsForDir(dir).metaPath, "utf8"));
+    const meta: unknown = JSON.parse(text);
     if (
       meta &&
       typeof meta === "object" &&
@@ -24,6 +24,14 @@ export const readRecordMetadata = (dir: string): RecordMetadata => {
     /* A missing or invalid identity never falls back to the directory name. */
   }
   throw new StoreError("corrupt-log", "Record identity is unavailable");
+};
+
+export const readRecordMetadata = (dir: string): RecordMetadata => {
+  try {
+    return decodeRecordMetadata(readFileSync(pathsForDir(dir).metaPath, "utf8"));
+  } catch {
+    throw new StoreError("corrupt-log", "Record identity is unavailable");
+  }
 };
 
 export const withRecordLock = <T>(

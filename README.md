@@ -20,7 +20,8 @@ bun run build
 In another terminal, `./dist/lucid2 serve` opens the browser surface at
 [the conversation hub](http://127.0.0.1:17454/). The server binds to loopback.
 The hub lists local conversations by repository or starting folder; selecting
-one opens its artifacts and transcript. It appends inputs
+one opens its artifacts and transcript. **New** creates a conversation with
+a working folder and saved harness, model, effort, and mode. It appends inputs
 but does not start an agent. Keep a driver running to answer those inputs.
 
 | Command | Use |
@@ -35,7 +36,9 @@ In chat, Enter queues input and Alt+Enter steers a running turn where the
 profile supports it. An open question accepts an answer. Ctrl+C restores
 the terminal. Harnesses run through hcn; see [drivers](docs/drivers.md).
 
-Records live in `~/.lucid2/records`; `LUCID_ROOT` overrides that root.
+Records live in `~/.lucid2/records` by default. An explicit root wins over
+`LUCID_ROOT`, then user configuration. [User defaults](docs/drivers.md#user-defaults-and-creation)
+configure new hub conversations and the record root.
 The older lucid installation's `~/.lucid` directory is separate.
 
 ## Working with a document

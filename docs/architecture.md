@@ -28,14 +28,24 @@ attach authorization boundary. An identity stamp is not authentication.
 ## Conversation discovery
 
 The terminal and browser use the same record-root resolver: an explicit root,
-then LUCID_ROOT, then ~/.lucid2/records. User-config defaults are planned in
-RFC 15's next creation slice. A custom root replaces the default.
+then LUCID_ROOT, then the XDG user configuration, then ~/.lucid2/records.
+A custom root replaces the default. A running server keeps its resolved root;
+configuration changes cannot retarget it.
 
 The saved metadata identity selects a record, including after its directory
 is renamed. Unknown and duplicate identities are refused by existing-record
 operations; send, watch, and browser writes cannot create a replacement.
 Explicit terminal creation publishes metadata and its known folder association
 with the record's atomic rename. Dot-prefixed staging directories stay hidden.
+
+Hub creation holds a root allocation lock while it checks all metadata for
+the client creation ID. The stored receipt contains the normalized original
+request, before defaults. Matching retries return the same identity even if
+defaults changed. Different requests sharing an ID are refused. Metadata,
+initial settings, log, and secret publish together through the staging rename;
+files and directories are synced before success. An unreadable receipt lookup
+refuses allocation because creating another identity could duplicate a prior
+request. This does not hide healthy records from listing.
 
 The hub rebuilds discovery from records at startup, on filesystem hints,
 every five seconds while the server runs, and when the browser loads,

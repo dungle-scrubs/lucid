@@ -31,9 +31,18 @@ to the following label on wrap; labels are not truncated. No trailing bullet
 follows the profile. Harness and model menus open above their segment;
 effort aligns to the right. Menu choices come from hcn, not a design list.
 
-Interactive sessions report their driver without respawn controls. A control
-for a dimension the harness cannot express is absent. The headless-turn
-explanation remains visible beneath the line.
+The compact selectors display the saved choice; actual mode is a separate
+report. Saving never respawns a human-owned interactive session. The full
+settings editor handles harness changes, mode, and provider. Its popover
+and the working-folder editor stay within the viewport and scroll when
+needed. A control for a dimension the harness cannot express is absent.
+The headless-turn explanation remains visible beneath the line. Selected
+menu rows use background color without a checkbox. Opening a menu does not
+change the composer placeholder color.
+
+Hub creation shows the working folder and complete settings before saving.
+A definite refusal preserves the fields and its reason. An uncertain response
+retains the exact request across reload and offers retry or explicit discard.
 
 Queued input says "Waiting for the agent…"; live work says "The agent is
 working…". With saved input and no agent, say "No agent is connected. Your

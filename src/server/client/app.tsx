@@ -51,13 +51,11 @@ import {
   selectorsForQuote,
   sha256Hex,
 } from "./anchor.js";
+import type { DriverChoiceBody, DriverChoices, DriverPreference } from "./driver-menus.js";
 import {
   chooseEffort,
   chooseHarness,
   chooseModel,
-  type DriverChoiceBody,
-  type DriverChoices,
-  type DriverPreference,
   driverLineState,
   effortGloss,
   type MenuKey,
@@ -69,7 +67,6 @@ import {
   ArrowRightDuotone,
   ArrowUpDuotone,
   CaretDownDuotone,
-  CheckDuotone,
   FileDuotone,
   FileTextDuotone,
   ImageDuotone,
@@ -89,8 +86,11 @@ import {
   readConversationWidth,
   writeConversationWidth,
 } from "./layout.js";
+import { LocationControl, type LocationState } from "./location-control.js";
 import { formatRoute, parseRoute, type Route, sameRoute } from "./route.js";
 import { seamsForLost } from "./seams.js";
+import { SettingsForm } from "./settings-form.js";
+import { SettingsPopover } from "./settings-popover.js";
 import { type Msg, type PendingNote, type SentBatch, weaveNotes } from "./timeline.js";
 import { diffVersions, type VersionDiff } from "./version-diff.js";
 import { isReadOnly, versionState } from "./version-state.js";
@@ -797,18 +797,14 @@ const RefusalChip = ({
  * the surface and the docs cannot drift. */
 const MODE_GLOSS: Readonly<Record<string, string>> = {
   interactive:
-    "A terminal session you own. lucid attaches, records everything, and can interject — it does not drive.",
+    "A terminal session you own. lucid attaches, records everything, and can interject - it does not drive.",
   "headless-session":
     "lucid spawns the harness and drives it. The harness recalls its own session across restarts.",
   "headless-turn":
     "No session recall. Each send starts the harness fresh; lucid's record is what carries continuity.",
 };
 
-/** One row of a driver menu (7a): a 12px gutter carries the check when the
- * row is the selected one, so every label aligns whether or not it is
- * chosen. Effort rows carry a gloss under the label - the words alone do
- * not say what is being traded, and only effort rows get one: harness and
- * model name things that name themselves. */
+/** Selection uses background color; effort rows retain their explanatory gloss. */
 const DriverMenuRow = ({
   label,
   gloss,
@@ -837,13 +833,6 @@ const DriverMenuRow = ({
       }
       onClick={onPick}
     >
-      {selected ? (
-        <span aria-hidden="true" className="driver-check">
-          <CheckDuotone size={12} />
-        </span>
-      ) : (
-        <span aria-hidden="true" className="driver-gutter" />
-      )}
       <span className="driver-row-text">
         <span className="driver-row-label">{label}</span>
         {hasGloss ? <span className="driver-gloss">{gloss}</span> : null}
@@ -879,7 +868,6 @@ const DriverLine = ({
   preference,
   choices,
   onChoose,
-  onMenuToggle,
 }: {
   driver: Driver;
   /** What the person chose (RFC-12), beside what is driving. The menus'
@@ -893,17 +881,14 @@ const DriverLine = ({
   /** POST a whole preference. Answers null on success, or why it refused,
    * drawn beside the line that made the choice. */
   onChoose: (body: DriverChoiceBody) => Promise<string | null>;
-  /** The line tells the dock when a menu is open, so the composer can dim
-   * to 40% and stay in place, per the design. */
-  onMenuToggle: (open: boolean) => void;
 }): React.ReactElement | null => {
-  const mode = driver.profile;
+  const mode = preference?.profile ?? driver.profile;
+  const [editor, setEditor] = React.useState<string | null>(null);
   const wrapper = React.useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = React.useState<{ key: MenuKey; left: number } | null>(null);
   const [choiceError, setChoiceError] = React.useState<string | null>(null);
   const [freeModel, setFreeModel] = React.useState("");
   React.useEffect(() => {
-    onMenuToggle(open !== null);
     if (open === null) return;
     // One menu at a time closes on Escape and on a click anywhere outside
     // itself - including on another segment, which opens that one instead.
@@ -919,24 +904,24 @@ const DriverLine = ({
       document.removeEventListener("keydown", close);
       document.removeEventListener("pointerdown", away);
     };
-  }, [open, onMenuToggle]);
-  // A line that unmounts with a menu open must not leave the composer
-  // dimmed behind it.
-  React.useEffect(() => {
-    return () => onMenuToggle(false);
-  }, [onMenuToggle]);
+  }, [open]);
   const pick = React.useCallback(
     async (body: DriverChoiceBody | null): Promise<void> => {
       setOpen(null);
       if (body === null) return;
+      if (!preference?.model || !preference.effort || !preference.profile) {
+        setEditor(body.harness);
+        setChoiceError("Complete the settings before saving this choice.");
+        return;
+      }
       setChoiceError(null);
       const why = await onChoose(body);
       if (why !== null) setChoiceError(why);
     },
-    [onChoose],
+    [onChoose, preference],
   );
   const state = driverLineState({
-    profile: mode,
+    profile: undefined,
     driverHarness: driver.harness,
     driverModel: driver.model,
     preference,
@@ -1017,10 +1002,7 @@ const DriverLine = ({
       : state.model === null
         ? []
         : [{ key: "model", el: seg("model", state.model) }]),
-    ...(state.effort === null
-      ? []
-      : [{ key: "effort", el: seg("effort", `${state.effort} effort`) }]),
-    ...(mode === undefined ? [] : [{ key: "mode", el: seg("mode", mode) }]),
+    ...(state.effort === null ? [] : [{ key: "effort", el: seg("effort", state.effort) }]),
   ];
   const rowsFor = (key: MenuKey): React.ReactElement[] => {
     if (key === "harness") {
@@ -1029,7 +1011,10 @@ const DriverLine = ({
           key={h}
           label={h}
           selected={h === state.harness}
-          onPick={() => void pick(chooseHarness(h, state))}
+          onPick={() => {
+            setOpen(null);
+            if (chooseHarness(h, state)) setEditor(h);
+          }}
         />
       ));
     }
@@ -1055,13 +1040,6 @@ const DriverLine = ({
         ? [
             ...listed,
             <div className={freeSelected ? "driver-free selected" : "driver-free"} key="free">
-              {freeSelected ? (
-                <span aria-hidden="true" className="driver-check">
-                  <CheckDuotone size={12} />
-                </span>
-              ) : (
-                <span aria-hidden="true" className="driver-gutter" />
-              )}
               <input
                 aria-label="Another model id"
                 onChange={(e) => setFreeModel(e.currentTarget.value)}
@@ -1094,22 +1072,59 @@ const DriverLine = ({
   if (segments.length === 0) return null;
   return (
     <div className={interactive ? "driver-line interactive" : "driver-line"} ref={wrapper}>
-      {segments.map((s, i) =>
-        // Each middot is bound into one flex item with the label that
-        // follows it, so a wrap can only break BEFORE a separator - a
-        // middot stranded at the end of a row reads as a dropped segment.
-        // Labels are never shortened to force one row.
-        i === 0 ? (
-          <React.Fragment key={s.key}>{s.el}</React.Fragment>
-        ) : (
-          <span className="driver-pair" key={s.key}>
-            <span aria-hidden="true" className="driver-sep">
-              ·
+      {segments
+        .filter((s) => s.key !== "mode")
+        .map((s, i) =>
+          // Each middot is bound into one flex item with the label that
+          // follows it, so a wrap can only break BEFORE a separator - a
+          // middot stranded at the end of a row reads as a dropped segment.
+          // Labels are never shortened to force one row.
+          i === 0 ? (
+            <React.Fragment key={s.key}>{s.el}</React.Fragment>
+          ) : (
+            <span className="driver-pair" key={s.key}>
+              <span aria-hidden="true" className="driver-sep">
+                ·
+              </span>
+              {s.el}
             </span>
-            {s.el}
-          </span>
-        ),
-      )}
+          ),
+        )}
+      <SettingsPopover
+        label="Settings"
+        open={editor !== null}
+        onOpenChange={(value) => setEditor(value ? (state.harness ?? "") : null)}
+      >
+        <SettingsForm
+          key={`${preference?.revision ?? 0}:${editor}`}
+          initial={{
+            harness: editor ?? "",
+            model: editor === state.harness ? (state.model ?? "") : "",
+            effort: editor === state.harness ? (state.effort ?? "") : "",
+            profile: mode ?? "headless-turn",
+            ...(editor === state.harness && preference?.provider
+              ? { provider: preference.provider }
+              : {}),
+          }}
+          choices={choices}
+          submitLabel="Save settings"
+          onSave={async (settings) => {
+            const error = await onChoose({
+              v: 1,
+              ...settings,
+              expectedRevision: preference?.revision ?? 0,
+            });
+            if (!error) setEditor(null);
+            return error;
+          }}
+        />
+      </SettingsPopover>
+      <span className="driver-note" title={gloss}>
+        {mode ? seg("mode", mode) : "No mode recorded"}.{" "}
+        {driver.profile
+          ? `Actual mode: ${driver.profile}.`
+          : "The mode is reported when an agent attaches."}
+      </span>
       {noRecall ? (
         <span className="driver-note">
           Each send starts the harness fresh. This record is what carries continuity.
@@ -1161,6 +1176,9 @@ const Thread = ({
   driverPreference,
   driverChoices,
   onDriverChoice,
+  location,
+  settingsIssue,
+  onLocation,
 }: {
   pending: readonly PendingNote[];
   onSendNotes: () => void;
@@ -1201,6 +1219,9 @@ const Thread = ({
   driverChoices: DriverChoices | null;
   /** POST a whole driver preference; answers null or why it refused. */
   onDriverChoice: (body: DriverChoiceBody) => Promise<string | null>;
+  location: LocationState | null;
+  settingsIssue: string | null;
+  onLocation: (folder: string, revision: number) => Promise<string | null>;
 }): React.ReactElement => {
   const composerBox = React.useRef<HTMLTextAreaElement | null>(null);
   // 4a: send is ghost at rest and solid the moment there is something to
@@ -1217,8 +1238,6 @@ const Thread = ({
   /** Whether one of the driver line's menus is open: the composer dims to
    * 40% and stays in place while it is, per 7a. Lifted here because the
    * composer and the line are siblings. */
-  const [driverMenuOpen, setDriverMenuOpen] = React.useState(false);
-  const onDriverMenu = React.useCallback((open: boolean): void => setDriverMenuOpen(open), []);
   const stalled = report.stalled;
   // 7c: the mode governs the composer too. interactive means a human owns
   // the session - lucid attaches, records, and can interject, it does not
@@ -1392,15 +1411,7 @@ const Thread = ({
         )}
 
         <ComposerPrimitive.Root
-          className={
-            dragOver
-              ? "composer dragover"
-              : invite
-                ? "composer inviting"
-                : driverMenuOpen
-                  ? "composer driver-open"
-                  : "composer"
-          }
+          className={dragOver ? "composer dragover" : invite ? "composer inviting" : "composer"}
           onDragOver={(e) => {
             // Without the preventDefault the drop never fires and the
             // browser navigates to the file instead.
@@ -1430,6 +1441,7 @@ const Thread = ({
               <PaperclipDuotone size={16} />
               <input
                 type="file"
+                className="sr-only"
                 multiple
                 onChange={(e) => {
                   if (e.currentTarget.files !== null) onAttach(e.currentTarget.files);
@@ -1471,13 +1483,20 @@ const Thread = ({
             the same projection the header names. Dead hides it: 3d's
             composer says Reload and names no driver, and a stale one
             would. */}
+        {settingsIssue ? (
+          <p role="alert" className="settings-error">
+            {settingsIssue}
+          </p>
+        ) : null}
+        {!dead && location ? (
+          <LocationControl key={location.revision} location={location} onSave={onLocation} />
+        ) : null}
         {dead ? null : (
           <DriverLine
             driver={driver}
             preference={driverPreference}
             choices={driverChoices}
             onChoose={onDriverChoice}
-            onMenuToggle={onDriverMenu}
           />
         )}
       </div>
@@ -2242,6 +2261,8 @@ const App = (): React.ReactElement => {
   const [driver, setDriver] = React.useState<Driver>({});
   /** What the person chose (RFC-12), beside what is driving, and the lists
    * to choose from. Both ride on the poll the page already makes. */
+  const [location, setLocation] = React.useState<LocationState | null>(null);
+  const [settingsIssue, setSettingsIssue] = React.useState<string | null>(null);
   const [driverPreference, setDriverPreference] = React.useState<DriverPreference | null>(null);
   const [driverChoices, setDriverChoices] = React.useState<DriverChoices | null>(null);
   const [activity, setActivity] = React.useState<Activity>({
@@ -2681,6 +2702,12 @@ const App = (): React.ReactElement => {
           damaged?: boolean;
           driver?: Driver;
           driverPreference?: DriverPreference | null;
+          location?: LocationState;
+          conversationSettings?: {
+            selected: DriverPreference | null;
+            revision: number;
+            error: string | null;
+          };
           driverChoices?: DriverChoices | null;
           activity?: Activity;
         };
@@ -2695,7 +2722,17 @@ const App = (): React.ReactElement => {
         });
         setStatus(data.status);
         setDriver(data.driver ?? {});
-        setDriverPreference(data.driverPreference ?? null);
+        setLocation(data.location ?? null);
+        setSettingsIssue(data.conversationSettings?.error ?? null);
+        setDriverPreference(
+          data.conversationSettings?.selected
+            ? {
+                ...data.conversationSettings.selected,
+                v: 1,
+                revision: data.conversationSettings.revision,
+              }
+            : (data.driverPreference ?? null),
+        );
         setDriverChoices(data.driverChoices ?? null);
         setActivity(data.activity ?? { turn: false, inFlight: 0, waiting: 0 });
         setDamaged(data.damaged === true);
@@ -3021,6 +3058,24 @@ const App = (): React.ReactElement => {
    * so nothing here changes the line - it settles from the next poll, the
    * same discipline as sending. Answers null on success, or why it was
    * refused, so the line can say so beside itself. */
+  const chooseLocation = React.useCallback(
+    async (folder: string, revision: number): Promise<string | null> => {
+      if (!token) return "Not connected";
+      const response = await fetch(
+        `/api/conversations/${encodeURIComponent(conversationId)}/location`,
+        {
+          method: "POST",
+          headers: { [TOKEN_HEADER]: token, "content-type": "application/json" },
+          body: JSON.stringify({ workingDirectory: folder, expectedRevision: revision }),
+        },
+      );
+      const result = await response.json();
+      if (!response.ok) return result.reason ?? "Cannot save folder";
+      setLocation(result);
+      return null;
+    },
+    [token, conversationId],
+  );
   const chooseDriver = React.useCallback(
     async (body: DriverChoiceBody): Promise<string | null> => {
       if (token === null) return "not connected";
@@ -3029,9 +3084,12 @@ const App = (): React.ReactElement => {
         headers: { [TOKEN_HEADER]: token, "content-type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (res.ok) return null;
-      const said = (await res.json().catch(() => ({}))) as { error?: string };
-      return said.error === undefined ? `refused (${res.status})` : said.error;
+      if (res.ok) {
+        setDriverPreference(await res.json());
+        return null;
+      }
+      const said = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+      return said.reason ?? said.error ?? `refused (${res.status})`;
     },
     [token, conversationId],
   );
@@ -3889,7 +3947,7 @@ const App = (): React.ReactElement => {
                       <div className="doc-ground">
                         <div className="empty-panel">
                           <div className="empty-line">
-                            Nothing here yet. Ask on the right, or attach a file — either way lucid
+                            Nothing here yet. Send a prompt, or attach a file. Either way lucid
                             writes v1 and keeps it.
                           </div>
                           {/* Attaching here is the composer's own act: the file
@@ -3900,6 +3958,7 @@ const App = (): React.ReactElement => {
                           <label className="v choose">
                             Choose a file
                             <input
+                              className="sr-only"
                               type="file"
                               multiple
                               onChange={(e) => {
@@ -4525,6 +4584,9 @@ const App = (): React.ReactElement => {
                     driverPreference={driverPreference}
                     driverChoices={driverChoices}
                     onDriverChoice={chooseDriver}
+                    location={location}
+                    settingsIssue={settingsIssue}
+                    onLocation={chooseLocation}
                   />
                 </div>
               </div>

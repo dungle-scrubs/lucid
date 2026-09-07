@@ -2471,8 +2471,7 @@ body {
  * with white text and flips the caret; the menu opens upward from the
  * line - the row is bottom-docked - on paper with an edge, radius 10px,
  * 5px padding and no shadow, elevation being paper-on-pattern and never
- * shade. The composer dims to 40% while a menu is open, and stays in
- * place. Harness and model menus left-align to their segment; effort
+ * shade. Opening a menu leaves the composer color unchanged. Harness and model menus left-align to their segment; effort
  * right-aligns, being the last segment in a 352px column. */
 
 .driver-seg.pick {
@@ -2563,20 +2562,6 @@ body {
   appearance: none;
 }
 
-/* The 12px gutter: empty on every row but the selected one, so labels
-   align whichever row carries the check. */
-.driver-gutter {
-  width: 12px;
-  flex: none;
-}
-
-.driver-check {
-  width: 12px;
-  flex: none;
-  display: inline-flex;
-  color: var(--color-accent);
-}
-
 .driver-row-text {
   display: flex;
   flex-direction: column;
@@ -2584,14 +2569,9 @@ body {
   min-width: 0;
 }
 
-/* A glossed row is two lines, so its check tops-aligns with the label
-   rather than centering against the block. */
+/* Effort glosses align beneath the label. */
 .driver-row.glossed {
   align-items: flex-start;
-}
-
-.driver-row.glossed .driver-check {
-  margin-top: 1px;
 }
 
 .driver-row:not(.selected):hover {
@@ -2662,11 +2642,6 @@ body {
   padding: 5px 7px 0;
   font: 400 11px / 1.4 var(--font-body);
   color: var(--color-accent-2);
-}
-
-/* While a menu is open the composer dims to 40% and stays in place (7a). */
-.composer.driver-open {
-  opacity: 0.4;
 }
 
 .driver-line.interactive .driver-tip {
