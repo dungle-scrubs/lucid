@@ -37,6 +37,9 @@ export interface CapabilityResult {
 
 /** Descriptor facts, plus optional uncached results for this inspection request. */
 export interface HarnessFacts {
+  /** hcn declares an accounting mechanism. A count still verifies the
+   * selected model, executable and profile before it is usable. */
+  readonly contextAccounting?: true;
   readonly runtime?: {
     readonly executable: { readonly path: string | null; readonly version: string | null };
     readonly resume: { readonly status: "supported" | "unknown"; readonly reason: string | null };
@@ -158,6 +161,9 @@ export interface StreamTurnOptions {
 }
 
 export interface HarnessRunner {
+  /** Count the complete prepared request through hcn, including recalled
+   * native history. An unavailable result never authorizes dispatch. */
+  countContext(opts: ContextCountOptions): Promise<ContextCount>;
   /** `hcn session <h> --json`. Throws HarnessRefusal when hcn refuses before
    * spawning, HarnessSpawnError when the binary will not start. */
   openSession(opts: OpenSessionOptions): Promise<SessionHandle>;
@@ -182,6 +188,44 @@ export interface HarnessRunner {
   /** `hcn inspect <h> --capabilities`. No spawn. */
   capabilities(harness: HarnessName, model: string, mode: HarnessMode): Promise<CapabilityResult>;
 }
+
+export interface ContextCountOptions extends Omit<StreamTurnOptions, "turnId"> {
+  readonly profile: "headless-turn" | "headless-session";
+}
+
+export type ContextCountFailure =
+  | "accounting-refused"
+  | "invalid-accounting-response"
+  | "unknown-accounting-failure"
+  | "model-divergence"
+  | "response-limit"
+  | "auth"
+  | "limit"
+  | "native-exit"
+  | "unverified-adapter"
+  | "unsupported-adapter"
+  | "transport-limit"
+  | "transport"
+  | "protocol"
+  | "timeout"
+  | "cancelled"
+  | "cleanup"
+  | "not-configured";
+
+export type ContextCount =
+  | {
+      readonly executable: { readonly path: string; readonly version: string };
+      readonly inputLimitTokens: number;
+      readonly method: "native-context-estimate";
+      readonly model: string;
+      readonly status: "available";
+      readonly totalTokens: number;
+    }
+  | {
+      readonly issue?: string;
+      readonly reason: ContextCountFailure;
+      readonly status: "unavailable";
+    };
 
 /** hcn refused the invocation itself (exit 2). Not retryable by re-running:
  * the options or the harness have to change. */

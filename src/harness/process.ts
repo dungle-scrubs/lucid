@@ -14,11 +14,14 @@
  */
 
 export interface HcnProcess {
+  readonly inputError?: Promise<void>;
   readonly stdout: AsyncIterable<string>;
   readonly stderr: AsyncIterable<string>;
   readonly exited: Promise<number | null>;
   write(line: string): void;
   endInput(): void;
+  /** End pending output reads during terminal cleanup. */
+  disposeOutput(): void;
   kill(signal?: "SIGTERM" | "SIGKILL"): void;
 }
 
@@ -28,8 +31,51 @@ export interface HarnessDeps {
   readonly spawn: SpawnHcn;
   /** Grace before escalating a refused child from SIGTERM to SIGKILL. */
   readonly refusalGraceMs?: number;
+  /** Context-accounting wall-clock ceiling, including native probe cleanup. */
+  readonly accountingTimeoutMs?: number;
   /** Absolute path to the hcn binary. */
   readonly bin: string;
   /** Structured boundary log, one line per transition. */
   readonly log?: (event: Record<string, unknown>) => void;
+}
+
+export const flag = (name: string, value: string | undefined): string[] =>
+  value === undefined ? [] : [name, value];
+
+/** One escalation policy. The caller chooses whether process exit or its
+ * output pump is the terminal evidence it needs to await. */
+export async function terminateHcn(
+  proc: HcnProcess,
+  graceMs: number,
+  settled: Promise<unknown> = proc.exited,
+): Promise<boolean> {
+  try {
+    proc.kill("SIGTERM");
+  } catch {
+    /* Exit race. */
+  }
+  if (await settlesWithin(settled, graceMs)) return false;
+  try {
+    proc.kill("SIGKILL");
+  } catch {
+    /* Exit race. */
+  }
+  return true;
+}
+
+export async function settlesWithin(work: Promise<unknown>, graceMs: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work.then(
+        () => true,
+        () => true,
+      ),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), graceMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }

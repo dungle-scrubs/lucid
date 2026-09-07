@@ -81,7 +81,11 @@ export const nodeSpawnHcn: SpawnHcn = (argv, opts): HcnProcess => {
   } catch (cause) {
     throw new HarnessSpawnError(cause);
   }
+  const inputError = new Promise<void>((resolve) => {
+    child.stdin?.once("error", () => resolve());
+  });
   return {
+    inputError,
     stdout: toLines(child.stdout),
     stderr: toLines(child.stderr),
     exited: new Promise<number | null>((res) => {
@@ -93,6 +97,10 @@ export const nodeSpawnHcn: SpawnHcn = (argv, opts): HcnProcess => {
     },
     endInput(): void {
       child.stdin?.end();
+    },
+    disposeOutput(): void {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
     },
     kill(signal: "SIGTERM" | "SIGKILL" = "SIGTERM"): void {
       child.kill(signal);

@@ -11,8 +11,11 @@
  * lock, or the protocol. It converts a subprocess's stdout into events.
  */
 
+import { countContext } from "./context-accounting.js";
 import { decodeHarnessLine, type HarnessEvent } from "./events.js";
+import { inspectedExecutable, verifiedExecutable } from "./inspection-facts.js";
 import type { HarnessDeps } from "./process.js";
+import { flag, settlesWithin, terminateHcn } from "./process.js";
 import { AsyncQueue } from "./queue.js";
 import {
   type CapabilityResult,
@@ -54,26 +57,6 @@ async function* lines(chunks: AsyncIterable<string>): AsyncIterable<string> {
  * the open. Generous: a cold harness start is slow, and the turn-level
  * budget (`--stall`) governs everything after this point. */
 const OPEN_TIMEOUT_MS = 30_000;
-
-async function settlesWithin(work: Promise<unknown>, graceMs: number): Promise<boolean> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      work.then(
-        () => true,
-        () => true,
-      ),
-      new Promise<boolean>((resolve) => {
-        timer = setTimeout(() => resolve(false), graceMs);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-const flag = (name: string, value: string | undefined): string[] =>
-  value === undefined ? [] : [name, value];
 
 /** hcn writes provenance and divergence to stderr. lucid does not read it,
  * but something must: an unread pipe fills at 64 KiB and the child then
@@ -183,12 +166,15 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
           parsed.argv.length > 0 &&
           parsed.argv.every((part) => typeof part === "string")
         ) {
-          const path = typeof executable.path === "string" ? executable.path : null;
-          const version = typeof executable.version === "string" ? executable.version : null;
+          const { path, version } = inspectedExecutable(executable);
           runtime = {
             executable: { path, version },
             resume: {
-              status: resume.status === "supported" && path && version ? "supported" : "unknown",
+              status:
+                resume.status === "supported" &&
+                verifiedExecutable(executable, parsed.verifiedAgainst)
+                  ? "supported"
+                  : "unknown",
               reason: typeof resume.reason === "string" ? resume.reason : null,
             },
           };
@@ -212,6 +198,11 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
     const vocabulary = vocabularyOf(parsed);
     return {
       name: String(parsed.name ?? harness),
+      ...(parsed.contextInspection !== null &&
+      typeof parsed.contextInspection === "object" &&
+      !Array.isArray(parsed.contextInspection)
+        ? { contextAccounting: true as const }
+        : {}),
       ...(typeof parsed.bin === "string" ? { binary: parsed.bin } : {}),
       // The descriptor's sessionMode is the runtime-verified answer to
       // "can this harness hold a persistent session" (PLAN D-008).
@@ -263,15 +254,7 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
     const terminate = (): void => {
       if (terminating) return;
       terminating = true;
-      try {
-        proc.kill("SIGTERM");
-      } catch {}
-      void (async () => {
-        if (await settlesWithin(proc.exited, deps.refusalGraceMs ?? 1_000)) return;
-        try {
-          proc.kill("SIGKILL");
-        } catch {}
-      })();
+      void terminateHcn(proc, deps.refusalGraceMs ?? 1_000);
     };
     const removeAbort = (): void => opts.signal?.removeEventListener("abort", terminate);
     opts.signal?.addEventListener("abort", terminate, { once: true });
@@ -465,13 +448,7 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
       closing ??= (async () => {
         const grace = deps.refusalGraceMs ?? 1_000;
         if (await settlesWithin(pump, grace)) return;
-        try {
-          proc.kill("SIGTERM");
-        } catch {}
-        if (await settlesWithin(pump, grace)) return;
-        try {
-          proc.kill("SIGKILL");
-        } catch {}
+        if (!(await terminateHcn(proc, grace, pump))) return;
         await settlesWithin(pump, grace);
       })();
       return closing;
@@ -542,5 +519,11 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
     };
   };
 
-  return { openSession, streamTurn, inspect, capabilities };
+  return {
+    openSession,
+    streamTurn,
+    inspect,
+    capabilities,
+    countContext: (options) => countContext(deps, options),
+  };
 };

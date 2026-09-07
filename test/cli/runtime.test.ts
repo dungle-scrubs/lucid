@@ -36,6 +36,7 @@ const fakeRunner: HarnessRunner = {
       resume: { status: "supported", reason: null },
     },
   }),
+  countContext: async () => ({ status: "unavailable", reason: "not-configured" }),
   capabilities: async () => ({
     vision: false,
     images: false,

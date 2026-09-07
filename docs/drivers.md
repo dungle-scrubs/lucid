@@ -216,6 +216,18 @@ does not require repeating the already acknowledged asking turn.
 These preparation APIs do not yet enable managed dispatch. RFC 15 still
 requires verified hcn budgets, bounded summarization, and worker integration.
 
+`HarnessRunner.countContext` asks the selected hcn executable to account for
+the complete prepared prompt, including native session occupancy when resuming.
+The result names the measured model and verified executable. A changed model,
+unknown budget, malformed response, or failed probe holds preparation. No
+model capacity table or text-to-token estimate lives in Lucid. Accounting
+uses the same cwd, saved choices, resume ID, and isolation as the intended
+operation. Its bounded process has cancellation, output limits, and forced
+cleanup. Structured refusal codes survive; raw process diagnostics do not.
+This optional hcn mechanism is detected separately from mode support. The
+new command is still under local development and is not part of the pinned
+0.6.2 dependency; managed execution remains disabled until integration lands.
+
 Both headless profiles accept a pre-dispatch preparation callback. It supplies
 the complete, accounted prompt, including protocol teaching and current
 artifact bytes. The host appends nothing afterward. A held input keeps its

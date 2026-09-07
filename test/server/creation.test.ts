@@ -29,6 +29,7 @@ async function rig() {
         extensible: false,
       },
     }),
+    countContext: async () => ({ status: "unavailable", reason: "not-configured" }),
     capabilities: async () => ({
       confidence: "high",
       images: false,

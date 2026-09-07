@@ -31,6 +31,7 @@ test("worker defers unresolved settings then names separately without a working 
       inspections.push(choice);
       return { name: "claude", session: true, verifiedAgainst: "fake" };
     },
+    countContext: async () => ({ status: "unavailable", reason: "not-configured" }),
     capabilities: async () => {
       throw new Error("unused");
     },
@@ -95,6 +96,7 @@ test("unsupported isolation is recorded without consuming an attempt or launchin
     inspect: async () => {
       throw new Error("Unsupported tool isolation");
     },
+    countContext: async () => ({ status: "unavailable", reason: "not-configured" }),
     capabilities: async () => {
       throw new Error("unused");
     },
@@ -154,6 +156,7 @@ test("a failed naming operation keeps its fallback and cannot consume another at
   let launches = 0;
   const runner: HarnessRunner = {
     inspect: async () => ({ name: "claude", session: true, verifiedAgainst: "fake" }),
+    countContext: async () => ({ status: "unavailable", reason: "not-configured" }),
     capabilities: async () => {
       throw new Error("unused");
     },
