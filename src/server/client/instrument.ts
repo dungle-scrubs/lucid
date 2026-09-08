@@ -87,27 +87,27 @@ export const AUTHOR_ATTR = "data-lucid-author";
  *
  * The tokens are the chrome's own, redefined here because a sandboxed
  * frame cannot inherit custom properties from the page around it. This
- * block and app.css's :root move together: same names, same values. */
+ * block uses namespaced properties so it cannot overwrite the document's theme. */
 const FRAME_TOKENS = `
 :root {
-  --color-bg: #f3f2f2;
-  --color-surface: #eae9e9;
-  --color-text: #201e1d;
-  --color-accent: #0088b0;
-  --color-accent-2: #d6006c;
+  --lucid-color-bg: #f3f2f2;
+  --lucid-color-surface: #eae9e9;
+  --lucid-color-text: #201e1d;
+  --lucid-color-accent: #0088b0;
+  --lucid-color-accent-2: #d6006c;
 
-  --color-neutral-300: #d7d3d3;
-  --color-neutral-500: #9b9797;
+  --lucid-color-neutral-300: #d7d3d3;
+  --lucid-color-neutral-500: #9b9797;
 
-  --color-accent-100: #e9f8ff;
-  --color-accent-200: #cbeeff;
-  --color-accent-300: #99e0ff;
-  --color-accent-400: #62c5ee;
-  --color-accent-800: #004961;
+  --lucid-color-accent-100: #e9f8ff;
+  --lucid-color-accent-200: #cbeeff;
+  --lucid-color-accent-300: #99e0ff;
+  --lucid-color-accent-400: #62c5ee;
+  --lucid-color-accent-800: #004961;
 
-  --color-accent-2-800: #790e3d;
+  --lucid-color-accent-2-800: #790e3d;
 
-  --font-heading: "Source Serif 4", ui-serif, Georgia, serif;
+  --lucid-font-heading: "Source Serif 4", ui-serif, Georgia, serif;
 }
 
 /* The five local tokens, verbatim from the handoff (v2: eggshell, not
@@ -118,11 +118,11 @@ const FRAME_TOKENS = `
    ride along even though the marks today touch three, so a later stage
    adds marks without re-opening the token block. */
 :root {
-  --paper: color-mix(in srgb, #fff 94%, var(--color-bg) 6%);
-  --ground: var(--color-bg);
-  --ground-2: color-mix(in srgb, var(--color-bg) 95%, var(--color-text) 5%);
-  --edge: color-mix(in srgb, var(--color-text) 13%, transparent);
-  --edge-2: color-mix(in srgb, var(--color-text) 22%, transparent);
+  --lucid-paper: color-mix(in srgb, #fff 94%, var(--lucid-color-bg) 6%);
+  --lucid-ground: var(--lucid-color-bg);
+  --lucid-ground-2: color-mix(in srgb, var(--lucid-color-bg) 95%, var(--lucid-color-text) 5%);
+  --lucid-edge: color-mix(in srgb, var(--lucid-color-text) 13%, transparent);
+  --lucid-edge-2: color-mix(in srgb, var(--lucid-color-text) 22%, transparent);
 }
 
 /* The chip is the only text lucid draws inside the frame, and it is digits.
@@ -206,7 +206,7 @@ html.lucid-annotate a[href], html.lucid-annotate a[href] * {
 /* Selection marks the boundary without repainting authored content.
  * An opaque fill would leave light text unreadable on dark documents. */
 [${ELEMENT_ATTR}].lucid-selected {
-  outline: 1.5px solid var(--color-accent) !important;
+  outline: 1.5px solid var(--lucid-color-accent) !important;
   outline-offset: 0 !important;
   border-radius: 6px !important;
 }
@@ -223,7 +223,7 @@ html.lucid-annotate a[href], html.lucid-annotate a[href] * {
   pointer-events: none !important;
   z-index: 2147483646 !important;
   background: transparent !important;
-  outline: 1.5px solid var(--color-accent) !important;
+  outline: 1.5px solid var(--lucid-color-accent) !important;
   border-radius: 3px !important;
 }
 
@@ -240,10 +240,10 @@ html.lucid-annotate a[href], html.lucid-annotate a[href] * {
  * is cyan wherever it lands. */
 [${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]) {
   outline: none !important;
-  caret-color: var(--color-accent) !important;
+  caret-color: var(--lucid-color-accent) !important;
 }
 [${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]):hover {
-  outline: 1px dashed color-mix(in srgb, var(--color-text) 35%, transparent) !important;
+  outline: 1px dashed color-mix(in srgb, var(--lucid-color-text) 35%, transparent) !important;
   outline-offset: 2px !important;
 }
 /* No pointer, so nothing to approach with. The persistent cue comes back:
@@ -251,14 +251,14 @@ html.lucid-annotate a[href], html.lucid-annotate a[href] * {
    for two input devices, not two different decisions. */
 @media (hover: none) {
   [${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]) {
-    outline: 1px dashed color-mix(in srgb, var(--color-text) 35%, transparent) !important;
+    outline: 1px dashed color-mix(in srgb, var(--lucid-color-text) 35%, transparent) !important;
     outline-offset: 2px !important;
   }
 }
 
 /* Edit focus preserves the authored foreground and background too. */
 [${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]):focus {
-  outline: 1.5px solid var(--color-accent) !important;
+  outline: 1.5px solid var(--lucid-color-accent) !important;
   outline-offset: 0 !important;
   border-radius: 6px !important;
 }
@@ -288,17 +288,17 @@ html.lucid-annotate a[href], html.lucid-annotate a[href] * {
   margin-left: 9px;
   border-radius: 9px;
   box-sizing: border-box;
-  background: var(--color-accent-100);
-  color: var(--color-accent-800);
-  font: 600 10.5px / 1 var(--font-heading);
+  background: var(--lucid-color-accent-100);
+  color: var(--lucid-color-accent-800);
+  font: 600 10.5px / 1 var(--lucid-font-heading);
   vertical-align: 2px;
   white-space: nowrap;
 }
 
 /* The selected block's count chip keeps its own complete color pair. */
 [${ELEMENT_ATTR}].lucid-noted.lucid-selected[${COUNT_ATTR}]::after {
-  background: var(--paper);
-  border: 1px solid var(--color-accent-300);
+  background: var(--lucid-paper);
+  border: 1px solid var(--lucid-color-accent-300);
 }
 
 /* Edited, unsaved: a 2px accent-400 rule on the left edge. An inset
@@ -307,17 +307,17 @@ html.lucid-annotate a[href], html.lucid-annotate a[href] * {
    outline: its channel is the edge, and the transient marks above keep
    theirs even while this one is showing (6f, defect 3). */
 [${ELEMENT_ATTR}].lucid-edited {
-  box-shadow: inset 2px 0 0 var(--color-accent-400) !important;
+  box-shadow: inset 2px 0 0 var(--lucid-color-accent-400) !important;
 }
 
 /* Selection and edit focus keep the unsaved edit's edge marker. */
 [${ELEMENT_ATTR}].lucid-edited.lucid-selected {
-  box-shadow: inset 2px 0 0 var(--color-accent-400) !important;
+  box-shadow: inset 2px 0 0 var(--lucid-color-accent-400) !important;
 }
 
 /* Edited with the caret in it: retain the same edge marker. */
 [${ELEMENT_ATTR}][contenteditable].lucid-edited:not([contenteditable="false"]):focus {
-  box-shadow: inset 2px 0 0 var(--color-accent-400) !important;
+  box-shadow: inset 2px 0 0 var(--lucid-color-accent-400) !important;
 }
 
 /* The lost seam: a 2px dashed rule in the gap between blocks, where a
@@ -340,7 +340,7 @@ html.lucid-annotate a[href], html.lucid-annotate a[href] * {
   border-radius: 2px;
   background: repeating-linear-gradient(
     90deg,
-    var(--edge-2) 0 5px,
+    var(--lucid-edge-2) 0 5px,
     transparent 5px 9px
   );
 }
@@ -351,13 +351,13 @@ html.lucid-annotate a[href], html.lucid-annotate a[href] * {
   border-radius: 2px;
   background: repeating-linear-gradient(
     90deg,
-    var(--edge-2) 0 5px,
+    var(--lucid-edge-2) 0 5px,
     transparent 5px 9px
   );
 }
 .lucid-seam .lucid-seam-label {
   font: 400 11.5px / 1 ui-sans-serif, system-ui, sans-serif;
-  color: var(--color-neutral-500);
+  color: var(--lucid-color-neutral-500);
   white-space: nowrap;
 }
 
@@ -367,12 +367,12 @@ html.lucid-annotate a[href], html.lucid-annotate a[href] * {
    third and four percent. Inset overlays, like every other edge mark, so
    nothing shifts when the marks land. */
 [${ELEMENT_ATTR}].lucid-diff-new {
-  box-shadow: inset 2px 0 0 var(--color-accent),
-    inset 0 0 0 9999px var(--color-accent-100) !important;
+  box-shadow: inset 2px 0 0 var(--lucid-color-accent),
+    inset 0 0 0 9999px var(--lucid-color-accent-100) !important;
 }
 [${ELEMENT_ATTR}].lucid-diff-old {
-  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--color-text) 30%, transparent),
-    inset 0 0 0 9999px color-mix(in srgb, var(--color-text) 4%, transparent) !important;
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--lucid-color-text) 30%, transparent),
+    inset 0 0 0 9999px color-mix(in srgb, var(--lucid-color-text) 4%, transparent) !important;
 }
 
 /* --- arrivals -------------------------------------------------------- */
@@ -392,12 +392,12 @@ html.lucid-annotate a[href], html.lucid-annotate a[href] * {
  * 2.6s. */
 @keyframes lucid-new-a {
   0% { box-shadow: inset 0 0 0 9999px transparent; outline-color: transparent; }
-  20% { box-shadow: inset 0 0 0 9999px var(--color-accent-100); outline-color: var(--color-accent); }
+  20% { box-shadow: inset 0 0 0 9999px var(--lucid-color-accent-100); outline-color: var(--lucid-color-accent); }
   100% { box-shadow: inset 0 0 0 9999px transparent; outline-color: transparent; }
 }
 @keyframes lucid-new-b {
   0% { box-shadow: inset 0 0 0 9999px transparent; outline-color: transparent; }
-  20% { box-shadow: inset 0 0 0 9999px var(--color-accent-100); outline-color: var(--color-accent); }
+  20% { box-shadow: inset 0 0 0 9999px var(--lucid-color-accent-100); outline-color: var(--lucid-color-accent); }
   100% { box-shadow: inset 0 0 0 9999px transparent; outline-color: transparent; }
 }
 [${ELEMENT_ATTR}].lucid-new-a,
@@ -411,7 +411,7 @@ html.lucid-annotate a[href], html.lucid-annotate a[href] * {
   [${ELEMENT_ATTR}].lucid-new-a,
   [${ELEMENT_ATTR}].lucid-new-b {
     animation: none !important;
-    outline: 1.5px solid var(--color-accent) !important;
+    outline: 1.5px solid var(--lucid-color-accent) !important;
     outline-offset: 0 !important;
   }
 }
@@ -427,11 +427,11 @@ html.lucid-annotate a[href], html.lucid-annotate a[href] * {
    element that already carries it does nothing - and focusing the same
    note twice is the ordinary case. */
 @keyframes lucid-focus-a {
-  0%, 92% { box-shadow: inset 0 0 0 9999px var(--color-accent-200); outline-color: var(--color-accent); }
+  0%, 92% { box-shadow: inset 0 0 0 9999px var(--lucid-color-accent-200); outline-color: var(--lucid-color-accent); }
   100% { box-shadow: inset 0 0 0 9999px transparent; outline-color: transparent; }
 }
 @keyframes lucid-focus-b {
-  0%, 92% { box-shadow: inset 0 0 0 9999px var(--color-accent-200); outline-color: var(--color-accent); }
+  0%, 92% { box-shadow: inset 0 0 0 9999px var(--lucid-color-accent-200); outline-color: var(--lucid-color-accent); }
   100% { box-shadow: inset 0 0 0 9999px transparent; outline-color: transparent; }
 }
 [${ELEMENT_ATTR}].lucid-focus-a,
@@ -446,7 +446,7 @@ html.lucid-annotate a[href], html.lucid-annotate a[href] * {
   [${ELEMENT_ATTR}].lucid-focus-a,
   [${ELEMENT_ATTR}].lucid-focus-b {
     animation: none !important;
-    outline: 2px solid var(--color-accent) !important;
+    outline: 2px solid var(--lucid-color-accent) !important;
     outline-offset: 0 !important;
   }
 }

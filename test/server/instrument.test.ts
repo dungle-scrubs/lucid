@@ -13,11 +13,21 @@ import {
   ELEMENT_ID,
   FRAME_MESSAGE_SOURCE,
   instrumentArtifact,
+  STYLE,
 } from "../../src/server/client/instrument.js";
 
 const DOC = "<!doctype html><html><body><h1>title</h1><p>text</p></body></html>";
 
 describe("instrumentation is added to the render, not to the document", () => {
+  test("annotation styles cannot replace authored theme properties", () => {
+    const declarations = [...STYLE.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((match) => match[1]);
+    expect(declarations.length).toBeGreaterThan(0);
+    expect(declarations.every((name) => name?.startsWith("--lucid-"))).toBe(true);
+    const authored =
+      "<style>:root{--paper:#211d15;--color-accent:gold}body{background:var(--paper)}</style><p>Plan</p>";
+    expect(instrumentArtifact(authored, "plan", 1)).toContain(authored);
+  });
+
   test("the document's own bytes survive it unchanged", () => {
     const out = instrumentArtifact(DOC, "doc-1", 1);
     expect(out).toContain("<h1>title</h1><p>text</p>");
@@ -330,7 +340,7 @@ describe("no focus rings", () => {
     const out = instrumentArtifact(DOC, "doc-1", 1);
     const at = out.indexOf('[contenteditable]:not([contenteditable="false"]):focus');
     const rule = out.slice(at, out.indexOf("}", at));
-    expect(rule).toContain("outline: 1.5px solid var(--color-accent)");
+    expect(rule).toContain("outline: 1.5px solid var(--lucid-color-accent)");
     expect(rule).not.toContain("box-shadow:");
     expect(rule).not.toContain("background:");
   });
@@ -350,7 +360,7 @@ describe("no focus rings", () => {
     };
     // Transient: on the block.
     expect(rule("lucid-hover")).toContain("outline: 2px dotted #b8b8b8");
-    expect(rule("lucid-selected")).toContain("outline: 1.5px solid var(--color-accent)");
+    expect(rule("lucid-selected")).toContain("outline: 1.5px solid var(--lucid-color-accent)");
     // Persistent: at the edge or past it, never over the words. The noted
     // rule declares no outline of its own - a later `outline: none` would
     // take the selection outline off an annotated block, and selection
@@ -359,7 +369,7 @@ describe("no focus rings", () => {
     expect(out.indexOf(".lucid-noted.lucid-selected")).toBeGreaterThan(
       out.indexOf(".lucid-selected {"),
     );
-    expect(rule("lucid-edited")).toContain("inset 2px 0 0 var(--color-accent-400)");
+    expect(rule("lucid-edited")).toContain("inset 2px 0 0 var(--lucid-color-accent-400)");
   });
 });
 
@@ -464,10 +474,10 @@ describe("the mark language", () => {
     // values app.css defines, which is what lets one mark style hold in the
     // frame and on the reference page without a second vocabulary.
     for (const token of [
-      "--color-accent: #0088b0",
-      "--color-accent-100: #e9f8ff",
-      "--paper: color-mix(in srgb, #fff 94%, var(--color-bg) 6%)",
-      "--font-heading:",
+      "--lucid-color-accent: #0088b0",
+      "--lucid-color-accent-100: #e9f8ff",
+      "--lucid-paper: color-mix(in srgb, #fff 94%, var(--lucid-color-bg) 6%)",
+      "--lucid-font-heading:",
     ]) {
       expect(out).toContain(token);
     }
@@ -493,8 +503,8 @@ describe("the mark language", () => {
     const at = out.indexOf(".lucid-noted.lucid-selected");
     expect(at).toBeGreaterThan(-1);
     const rule = out.slice(at, out.indexOf("}", out.indexOf("}", at + 1) + 1));
-    expect(rule).toContain("background: var(--paper)");
-    expect(rule).toContain("border: 1px solid var(--color-accent-300)");
+    expect(rule).toContain("background: var(--lucid-paper)");
+    expect(rule).toContain("border: 1px solid var(--lucid-color-accent-300)");
   });
 
   test("a mark message carries counts, not just presence", () => {
@@ -514,7 +524,7 @@ describe("the mark language", () => {
     expect(at).toBeGreaterThan(-1);
     const rule = out.slice(at, out.indexOf("}", at));
     expect(rule).toContain("repeating-linear-gradient");
-    expect(rule).toContain("var(--edge-2)");
+    expect(rule).toContain("var(--lucid-edge-2)");
     expect(rule).not.toContain("accent");
   });
 
@@ -523,7 +533,7 @@ describe("the mark language", () => {
     expect(both).toBeGreaterThan(-1);
     expect(out.slice(both, out.indexOf("}", both))).not.toContain("9999px");
     expect(out.slice(both, out.indexOf("}", both))).toContain(
-      "inset 2px 0 0 var(--color-accent-400)",
+      "inset 2px 0 0 var(--lucid-color-accent-400)",
     );
   });
 });
