@@ -72,6 +72,11 @@ versions, and restore an older version as a new one. Saving your edits also
 creates a version; it does not start a turn. The agent receives the saved
 state on your next input. A new agent version does not replace unsaved work.
 
+Agents authoring a document inside Lucid can use the
+[artifact-authoring skill](skills/lucid/SKILL.md). It covers emission, revisions,
+and annotation feedback. The supplied protocol and current document determine
+the revision base.
+
 ## Develop and verify
 
 ```sh
