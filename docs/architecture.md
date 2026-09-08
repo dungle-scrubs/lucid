@@ -59,8 +59,8 @@ have their own roots. Metadata retains the exact working directory separately.
 Legacy records appear under No project. A missing working folder does not
 change the saved project. Display titles use saved titles of seven words or
 fewer, or a bounded fallback from the first prompt. An annotation-first
-record uses its typed prompt or its first note. Generated titles and
-folder recovery belong to later RFC 15 slices.
+record uses its typed prompt or its first note. Isolated naming replaces the
+fallback when generation succeeds. Locked location updates repair missing folders.
 
 Every writer checks metadata identity under the append lock before mutation.
 Driver-preference replacement and attachment-file creation use that same lock.

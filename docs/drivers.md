@@ -168,8 +168,8 @@ The record keeps session IDs per harness, reported on identity events.
 Attach returns only the session ID for the requested harness. Same-harness
 reopen uses its own hint; switching harnesses never carries the other
 harness's session ID across. A harness with no recorded session starts fresh
-with outstanding inputs replayed. Transfer of completed history is a separate
-RFC 15 implementation slice.
+with outstanding inputs replayed and the complete recorded context prepared
+through the verified accounting path below.
 
 Every later headless turn resumes the latest native identity for its harness.
 Each launch uses the exact saved working folder. A missing folder blocks
