@@ -25,7 +25,7 @@
 
 import type React from "react";
 import { createRoot } from "react-dom/client";
-import { InputRecovery } from "./input-recovery.js";
+import { InputRecovery } from "./input-submission-recovery.js";
 import { ELEMENT_ATTR, STYLE } from "./instrument.js";
 
 /** One state: what it is called, what produces it, what it means. */
@@ -723,8 +723,23 @@ const Dock = (): React.ReactElement => (
       <div className="ref-pane">
         <div className="dock">
           <form className="composer">
-            <textarea placeholder="Send to the conversation…" rows={1} />
-            <button type="button">Send</button>
+            <textarea placeholder="Send to the conversation…" rows={2} />
+            <div className="composer-toolbar">
+              <button type="button" className="composer-attach" aria-label="Attach a file">
+                +
+              </button>
+              <div className="driver-line">
+                <button type="button" className="driver-seg pick">
+                  codex ⌄
+                </button>
+                <button type="button" className="driver-seg pick">
+                  gpt-6-astra ⌄
+                </button>
+                <button type="button" className="driver-seg pick">
+                  medium ⌄
+                </button>
+              </div>
+            </div>
           </form>
         </div>
       </div>
@@ -815,9 +830,23 @@ const Attaching = (): React.ReactElement => (
       <div className="ref-pane">
         <div className="dock">
           <form className="composer">
-            <span className="attach">+</span>
-            <textarea placeholder="Send to the conversation…" rows={1} />
-            <button type="button">Send</button>
+            <textarea placeholder="Send to the conversation…" rows={2} />
+            <div className="composer-toolbar">
+              <button type="button" className="composer-attach" aria-label="Attach a file">
+                +
+              </button>
+              <div className="driver-line">
+                <button type="button" className="driver-seg pick">
+                  codex ⌄
+                </button>
+                <button type="button" className="driver-seg pick">
+                  gpt-6-astra ⌄
+                </button>
+                <button type="button" className="driver-seg pick">
+                  medium ⌄
+                </button>
+              </div>
+            </div>
           </form>
         </div>
       </div>

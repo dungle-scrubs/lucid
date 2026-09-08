@@ -326,19 +326,12 @@ describe("no focus rings", () => {
     expect(rule).not.toContain("!important");
   });
 
-  test("the block holding the caret takes the ink outline on a paper fill", () => {
-    // Which block you are typing in has to be visible, and the design says
-    // how: a 1.5px ink outline over a paper fill, with a cyan caret. The
-    // fill is still an inset overlay rather than a `background` - laid over
-    // whatever the agent gave the block, composed rather than substituted,
-    // the same paint every other wash in the frame uses.
+  test("edit focus preserves the authored color pair", () => {
     const out = instrumentArtifact(DOC, "doc-1", 1);
     const at = out.indexOf('[contenteditable]:not([contenteditable="false"]):focus');
     const rule = out.slice(at, out.indexOf("}", at));
-    expect(rule).toContain("outline: 1.5px solid var(--color-text)");
-    expect(rule).toContain("var(--paper)");
-    expect(rule).toContain("box-shadow: inset");
-    // The document's own background property is never written to.
+    expect(rule).toContain("outline: 1.5px solid var(--color-accent)");
+    expect(rule).not.toContain("box-shadow:");
     expect(rule).not.toContain("background:");
   });
 
@@ -356,7 +349,7 @@ describe("no focus rings", () => {
       return out.slice(at, out.indexOf("}", at));
     };
     // Transient: on the block.
-    expect(rule("lucid-hover")).toContain("outline: 1px solid");
+    expect(rule("lucid-hover")).toContain("outline: 2px dotted #b8b8b8");
     expect(rule("lucid-selected")).toContain("outline: 1.5px solid var(--color-accent)");
     // Persistent: at the edge or past it, never over the words. The noted
     // rule declares no outline of its own - a later `outline: none` would
@@ -525,15 +518,10 @@ describe("the mark language", () => {
     expect(rule).not.toContain("accent");
   });
 
-  test("edited is an edge rule and selection is a fill, so both compose", () => {
-    // The two channels never share paint: the persistent rule and the
-    // transient wash are declared together rather than left to the cascade,
-    // because a box-shadow in a later rule would replace the earlier one.
+  test("selection preserves the edit edge without covering the authored ground", () => {
     const both = out.indexOf(".lucid-edited.lucid-selected");
     expect(both).toBeGreaterThan(-1);
-    expect(out.slice(both, out.indexOf("}", both))).toContain(
-      "inset 0 0 0 9999px var(--color-accent-100)",
-    );
+    expect(out.slice(both, out.indexOf("}", both))).not.toContain("9999px");
     expect(out.slice(both, out.indexOf("}", both))).toContain(
       "inset 2px 0 0 var(--color-accent-400)",
     );

@@ -1,4 +1,5 @@
 import { ConfigurationError } from "../config/user-config.js";
+import { comparisonMetadata } from "../protocol/comparison-note.js";
 import {
   fallbackConversationTitle,
   storedConversationTitle,
@@ -7,6 +8,7 @@ import {
 import { HubError } from "../protocol/hub-errors.js";
 import { renameConversation } from "../store/conversation-naming.js";
 import { readRecordMetadata } from "../store/record-identity.js";
+
 /**
  * The loopback server — one command, every record, a record chosen by URL.
  *
@@ -41,10 +43,13 @@ import { readRecordMetadata } from "../store/record-identity.js";
 import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { assertServerProcess } from "../cli/invocation.js";
 import { conversations } from "../cli/record-addressing.js";
+import { ownerPresence, terminalPresence } from "../process-owner.js";
 import { detectAnnotationBatch } from "../protocol/annotations.js";
 import { isTextBytes, sniffImageType, withinAttachmentBound } from "../protocol/attachment.js";
 import { EventKind } from "../protocol/events.js";
+import { executionViews } from "../protocol/execution-view.js";
 import { isWireId, TEXT_MAX } from "../protocol/frames.js";
 import { getBlob } from "../store/blobs.js";
 import {
@@ -77,9 +82,14 @@ import index from "./client/index.html";
 import { SERVER_PORT, TOKEN_HEADER } from "./constants.js";
 import { createConversationListing } from "./conversation-list.js";
 import { createHubSettings } from "./hub-settings.js";
+import type { ManagedLaunch } from "./managed-launch.js";
+import { createManagedLaunchReconciler } from "./managed-launch.js";
+import { recoveryStamp } from "./recovery-availability.js";
 import { mintToken } from "./token.js";
 
 export interface ServerOpts {
+  readonly managedLaunch?: ManagedLaunch;
+  readonly reconcileMs?: number;
   readonly configLocation?: import("../config/user-config.js").ConfigLocation;
   readonly wakeNaming?: (root: string) => void;
   readonly runner?: import("../harness/runner.js").HarnessRunner;
@@ -116,7 +126,9 @@ const turnRunning = (
   },
   epoch: number,
 ): boolean => {
-  const events = transcript.events.filter((event) => event.epoch === epoch);
+  const events = transcript.events.filter(
+    (event) => event.epoch === epoch && (event.event as { code?: string }).code !== "E-COMP-07",
+  );
   const last = events[events.length - 1];
   if (last === undefined) return false;
   const turnId = last.turnId;
@@ -190,6 +202,7 @@ const hubFailure = (error: unknown): Response => {
 };
 
 export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer> => {
+  assertServerProcess();
   const port = opts.port ?? SERVER_PORT;
   const token = opts.token ?? mintToken();
   const records = conversations(opts.rootDir, opts.configLocation);
@@ -202,13 +215,26 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
     opts.rootDir !== undefined || process.env.LUCID_ROOT !== undefined,
     records.discoveryIndex,
   );
-  const discovery = watchConversations(rootDir, { scan: records.list });
   const wakeNaming = (): void => {
     try {
       opts.wakeNaming?.(rootDir);
     } catch {}
   };
-  wakeNaming();
+  const launchReconciler = opts.managedLaunch
+    ? createManagedLaunchReconciler(rootDir, opts.managedLaunch)
+    : undefined;
+  const requestManaged = (conversationId: string, inputId: string): void => {
+    setTimeout(() => {
+      try {
+        opts.managedLaunch?.request(rootDir, conversationId, inputId);
+      } catch {}
+    }, 0);
+  };
+  const reconcileManaged = (): void => {
+    if (!launchReconciler) return;
+    const found = discovery.current();
+    if (!(found instanceof RecordLookupError)) launchReconciler(found);
+  };
 
   /** This server's own origins. A request carrying any other `Origin` is
    * refused before it is routed, which is what stops a page you happened to
@@ -378,6 +404,79 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           }
         }
 
+        const recovery = path.match(/^\/api\/conversations\/([^/]+)\/inputs\/([^/]+)\/recovery$/);
+        if (recovery && req.method === "POST") {
+          const id = decodeURIComponent(recovery[1] ?? "");
+          const inputId = decodeURIComponent(recovery[2] ?? "");
+          if (!validConversationId(id) || !isWireId(inputId))
+            return json({ error: "E-HUB-02", reason: "Invalid recovery identity." }, 400);
+          let body: unknown;
+          try {
+            body = await req.json();
+          } catch {
+            return json({ error: "invalid-json" }, 400);
+          }
+          if (!body || typeof body !== "object" || Array.isArray(body))
+            return json({ error: "E-HUB-02" }, 400);
+          const value = body as Record<string, unknown>;
+          if (
+            (value.action !== "retry" && value.action !== "continue-fresh") ||
+            typeof value.actionId !== "string" ||
+            !isWireId(value.actionId) ||
+            !Number.isSafeInteger(value.expectedAttempt) ||
+            typeof value.acknowledgeEffects !== "boolean"
+          )
+            return json(
+              {
+                error: "E-HUB-02",
+                reason:
+                  "Recovery requires an action ID, expected attempt, and effects acknowledgement.",
+              },
+              400,
+            );
+          return await withWriter(dirForRequest(id), id, async (host) => {
+            const state = host.state();
+            const prior = state.executions[inputId];
+            const duplicate = prior && Object.hasOwn(prior.actions, String(value.actionId));
+            const stamp = recoveryStamp(host.dir, state);
+            if (
+              !duplicate &&
+              !(await settings.recovery(host.dir, state)).actions.includes(
+                value.action as "retry" | "continue-fresh",
+              )
+            )
+              return json(
+                {
+                  error: "E-HUB-03",
+                  reason:
+                    "This route cannot perform that recovery. Check the working folder and settings.",
+                },
+                409,
+              );
+            const result = host.writeExecution(
+              {
+                kind: value.action === "retry" ? "retry-authorized" : "fresh-authorized",
+                inputId,
+                attempt: value.expectedAttempt,
+                actionId: value.actionId,
+                acknowledgeEffects: value.acknowledgeEffects,
+              },
+              () => duplicate === true || recoveryStamp(host.dir, host.state()) === stamp,
+            );
+            if (result.verdict === "refused")
+              return json(
+                {
+                  error: "E-HUB-02",
+                  reason: "This action is stale or no longer available. Refresh the conversation.",
+                  issue: result.issue,
+                },
+                409,
+              );
+            requestManaged(id, inputId);
+            return json({ verdict: "accepted", inputId, actionId: value.actionId });
+          });
+        }
+
         const read = path.match(/^\/api\/conversations\/([^/]+)\/?$/);
         if (read && req.method === "GET") {
           const id = decodeURIComponent(read[1] ?? "");
@@ -438,7 +537,24 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           const batchBySeq = new Map<number, unknown>();
           for (const i of snapshot.transcript.inputs) {
             const parsed = detectAnnotationBatch(i.text);
-            if (parsed !== null && !("malformed" in parsed)) batchBySeq.set(i.seq, parsed);
+            if (parsed !== null && !("malformed" in parsed)) {
+              const metadata = comparisonMetadata(i.text);
+              const hold =
+                i.status === "outstanding" || i.status === "queued"
+                  ? [...snapshot.transcript.events]
+                      .reverse()
+                      .find(
+                        (event) => event.event.code === "E-COMP-07" && event.event.inputId === i.id,
+                      )?.event.message
+                  : undefined;
+              batchBySeq.set(i.seq, {
+                ...parsed,
+                inputId: i.id,
+                status: i.status,
+                comparisonUsable: metadata.kind === "comparison",
+                ...(typeof hold === "string" ? { hold } : {}),
+              });
+            }
           }
           const lines = view.lines.map((l) =>
             l.seq !== undefined && batchBySeq.has(l.seq)
@@ -446,6 +562,24 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
               : l,
           );
 
+          let executions = executionViews(
+            snapshot.state,
+            driving,
+            terminalPresence(snapshot.state.terminalParticipations, (owner) =>
+              owner ? ownerPresence(owner) : undefined,
+            ) ?? null,
+          ).filter((entry) => entry.status !== "completed");
+          if (executions.some((entry) => entry.actions.length > 0)) {
+            const available = await settings.recovery(dir, snapshot.state);
+            executions = executions.map((entry) => ({
+              ...entry,
+              actions: entry.actions.filter((action) => available.actions.includes(action)),
+              reason:
+                entry.actions.length > 0 && available.reason
+                  ? `${entry.reason} ${available.reason}`
+                  : entry.reason,
+            }));
+          }
           return json({
             conversationId: id,
             lines,
@@ -453,6 +587,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             // Whether anything is in flight, so the page can say so. Silence
             // and working look identical otherwise, and the question "is
             // something happening?" had no answer on the surface.
+            executions,
             activity: {
               // Whether the NEWEST turn has produced a terminal event.
               //
@@ -924,7 +1059,15 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
                 );
               }
               wakeNaming();
-              return json({ ...result.receipt, verdict: "accepted" });
+              requestManaged(id, inputId);
+              const batch = detectAnnotationBatch(value);
+              return json({
+                ...result.receipt,
+                ...(batch && !("malformed" in batch) && batch.notes.length === 1
+                  ? { noteIndex: 0 }
+                  : {}),
+                verdict: "accepted",
+              });
             };
             // The host compares the original payload under the append lock.
             // An existing receipt does not depend on today's driver defaults.
@@ -936,7 +1079,12 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
               !saved.error && !saved.revision
                 ? (await settings.project(dir)).conversationSettings.selected
                 : null;
-            return reply(host.acceptInput(input, { completeSettings: completed ?? undefined }));
+            return reply(
+              host.acceptInput(input, {
+                completeSettings: completed ?? undefined,
+                managed: opts.managedLaunch !== undefined,
+              }),
+            );
           });
         }
 
@@ -959,11 +1107,21 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
   // port is read back from the server rather than echoed from the request.
   const bound = server.port ?? port;
   ownOrigins = new Set([`http://127.0.0.1:${bound}`, `http://localhost:${bound}`]);
+  // Only a successfully bound server may discover work or launch children.
+  // A failed bind must not create a fresh reconciler that launches on startup.
+  const discovery = watchConversations(rootDir, { scan: records.list });
+  wakeNaming();
+  const managedTimer = opts.managedLaunch
+    ? setInterval(reconcileManaged, Math.min(5000, Math.max(1, opts.reconcileMs ?? 5000)))
+    : undefined;
+  managedTimer?.unref();
+  reconcileManaged();
   return {
     port: bound,
     token,
     url: `http://127.0.0.1:${bound}`,
     close: async () => {
+      clearInterval(managedTimer);
       discovery.close();
       await server.stop(true);
     },

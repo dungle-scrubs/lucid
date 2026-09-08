@@ -2,7 +2,7 @@
 number: 15
 title: "Local hub conversation integration"
 type: feature
-status: Draft
+status: Implemented
 revision: 3
 author: Kevin Frilot and Codex
 date: 2026-09-07

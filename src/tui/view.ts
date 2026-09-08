@@ -190,9 +190,11 @@ export const buildView = (input: {
       seq: e.seq,
       text: eventText(e.event),
       event:
-        typeof (e.event as { kind?: unknown }).kind === "string"
-          ? (e.event as { kind: string }).kind
-          : undefined,
+        e.event.code === "E-COMP-07"
+          ? "comparison-held"
+          : typeof (e.event as { kind?: unknown }).kind === "string"
+            ? (e.event as { kind: string }).kind
+            : undefined,
       aborted: abortedTurns.has(e.turnId) && !completed.has(e.turnId),
     }));
 

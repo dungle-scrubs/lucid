@@ -179,3 +179,31 @@ until isolation succeeds. Each attempt is consumed durably before launch. Only a
 title allows one repair; interrupted and failed attempts are not repeated.
 Naming has its own temporary working folder, a bounded prompt excerpt, and
 no native session resume. Attachment contents are never a naming source.
+
+## Hub launch reconciliation
+
+The managed launch interface lets the loopback server request an
+independent per-conversation worker. HTTP acceptance persists one managed-input
+envelope before requesting a launch. The server never acquires executor
+ownership or drives a harness in a request handler. Startup reconciliation and
+a periodic pass of at most five seconds recover a lost launch request for the
+whole server lifetime, including when no browser is connected.
+
+The worker resolves saved identity, acquires the existing executor lease, and
+uses `openDrivenConversation`. A missing identity never creates a replacement.
+Folder and settings holds retain a fingerprint of their material prerequisites;
+the hold's own sequence number cannot make it eligible again. Correcting a
+prerequisite can release existing authorization, but does not create input or
+a new authorization. Context and external failures require their recorded
+recovery actions. Automatic launch does not release comparison suppression.
+
+Execution recovery is an authenticated append to the same record, keyed by
+original input ID, expected attempt, and stable action ID. An identical repeat
+is idempotent; a changed repeat or stale action is a conflict. Failed or uncertain
+external execution requires acknowledgement of possible workspace effects and
+fresh continuation with the original prompt and partial recorded context.
+`lucid2 serve` installs this interface by default. Embedded test servers can
+supply an inert launcher. The listener binds before discovery, naming, or
+managed reconciliation starts, so a failed bind starts no background work.
+Compiled internal commands route directly to their worker entry point.
+Background workers cannot start a server or recursively launch managed work.

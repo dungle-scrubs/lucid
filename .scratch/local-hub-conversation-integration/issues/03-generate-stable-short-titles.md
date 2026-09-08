@@ -1,6 +1,6 @@
 # Generate stable short conversation titles
 
-Status: implemented and verified locally; hcn 0.6.2 published and integrated
+Status: resolved
 Blocked by: 02
 GitHub: [Generate stable short conversation titles](https://github.com/dungle-scrubs/lucid-v2/issues/207)
 
@@ -17,15 +17,10 @@ Show a useful title immediately after the first prompt, generate it once using t
 - [x] Manual rename uses locked revision checks and always wins over a late generated result. Naming neither delays nor appears as the requested assistant turn.
 - [x] Prove title bounds, no model on open, bounded restart attempts, naming failure, deferred settings, and manual-rename races deterministically. Verify the hub rename interaction and pass repository checks.
 
-## Verification
-
-hcn 0.6.2 is published, pinned exactly, and required by the runtime
-version floor. Fixtures were recaptured through Pi and local Qwen with one clean
-standalone turn and two clean session turns. `bun run check` passes 1,082 tests;
-`bun run build` passes. Native Claude isolation previously showed no tools or MCP
-servers; title generation remains unconfirmed with this machine's bare-mode
-authentication. That failure retains the fallback title as specified.
-
 ## Parent
 
 [Connect the hub to local conversations](https://github.com/dungle-scrubs/lucid-v2/issues/199). Contract: RFC 15, local hub conversation integration.
+
+## Verification
+
+Final integration: 1,330 deterministic tests and 6,780 assertions pass, plus lint, both typechecks, binary build, behavior reference, and diff checks. Browser evidence covers 390, 768, and 1440 pixels, full-width pointer resizing, stable menu placeholder color, tab closure and reload, and explicit failure recovery. hcn 0.6.4 is published and pinned; Pi recordings were recaptured on mini. Installed Claude/Opus context inspection reports a verified native budget. These live observations supplement the deterministic gate. Review findings and process lifecycle regressions are resolved.

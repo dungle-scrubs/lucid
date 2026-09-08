@@ -64,6 +64,7 @@ export interface DispatchDeps {
   readonly watchConversationFn?: (conversationId: string, opts: WatchOpts) => Promise<void>;
   readonly runConversationFn?: (opts: RunOpts) => Promise<RunResult>;
   readonly namingWorkerFn?: (root: string) => Promise<void>;
+  readonly managedWorkerFn?: typeof import("./managed-worker.js").runManagedWorker;
   readonly wakeNamingFn?: (root: string) => void;
   readonly serveFn?: (opts: ServeOpts) => Promise<void>;
   readonly announceFn?: (stdin: string) => Promise<AnnounceResult>;
@@ -90,8 +91,10 @@ export interface DispatchDeps {
 }
 
 export type DispatchResult =
+  | { readonly kind: "hcn-supervisor" }
   | { readonly kind: "context" }
   | { readonly kind: "name-titles" }
+  | { readonly kind: "managed-worker" }
   | { readonly kind: "send"; readonly conversationId: string; readonly inputId: string }
   | { readonly kind: "watch"; readonly conversationId: string }
   | { readonly kind: "run"; readonly conversationId: string; readonly dir: string }
@@ -158,6 +161,15 @@ export const dispatch = async (
     const run = deps.namingWorkerFn ?? (await import("./naming.js")).runNamingWorker;
     await run(mapped.root);
     return { kind: "name-titles" };
+  }
+  if (mapped.kind === "hcn-supervisor") {
+    await (await import("./hcn-supervisor.js")).superviseHcn(mapped.argv);
+    return { kind: "hcn-supervisor" };
+  }
+  if (mapped.kind === "managed-worker") {
+    const run = deps.managedWorkerFn ?? (await import("./managed-worker.js")).runManagedWorker;
+    await run(mapped.root, mapped.conversationId, mapped.inputId, { signal: deps.signal });
+    return { kind: "managed-worker" };
   }
 
   // One root resolution for the three record-touching commands. Not per-branch.

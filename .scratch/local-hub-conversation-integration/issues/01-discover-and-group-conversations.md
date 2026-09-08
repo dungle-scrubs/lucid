@@ -1,6 +1,6 @@
 # Discover and group real conversations
 
-Status: implemented locally on feat/hub-discovery; not pushed
+Status: resolved
 Blocked by: none
 GitHub: [Discover and group real conversations](https://github.com/dungle-scrubs/lucid-v2/issues/205)
 
@@ -23,6 +23,4 @@ Open the hub and find the same local conversations that the terminal creates. Gr
 
 ## Verification
 
-`bun run check`: 1,051 tests pass, plus lint and both typechecks. `bun run build` passes. Browser checks at 390, 768, and 1440 cover search, group collapse, opening a record, version navigation, saved edits, and submitted annotations. Focus reconciliation and stop-and-Reload after a rejected token also pass. Four review axes ran through Opus on Claude; the findings were applied or explicitly dispositioned before commit. Run evidence is under ignored `artifacts/evidence/` in the implementation worktree.
-
-User config, creation defaults, generated titles, managed startup, native resume, context transfer, and recovery remain in tickets 02 through 08.
+Final integration: 1,330 deterministic tests and 6,780 assertions pass, plus lint, both typechecks, binary build, behavior reference, and diff checks. Browser evidence covers 390, 768, and 1440 pixels, full-width pointer resizing, stable menu placeholder color, tab closure and reload, and explicit failure recovery. hcn 0.6.4 is published and pinned; Pi recordings were recaptured on mini. Installed Claude/Opus context inspection reports a verified native budget. These live observations supplement the deterministic gate. Review findings and process lifecycle regressions are resolved.

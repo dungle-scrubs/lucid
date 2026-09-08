@@ -73,19 +73,7 @@ export const resolveRecordDir = (explicitDir?: string): string | undefined => {
   return stamp?.recordDir;
 };
 
-/**
- * Reconstruct how to re-invoke this CLI as a child process, in exec-form.
- * Uses `process.execPath` + `process.argv[1]` when running via `bun run
- * src/cli/main.ts`, otherwise just the exec path. Never a shell string.
- */
-export const selfInvocation = (extraArgs: readonly string[] = []): readonly string[] => {
-  const execPath = process.execPath;
-  const arg1 = process.argv[1];
-  if (arg1 && (arg1.endsWith(".ts") || arg1.endsWith(".js"))) {
-    return [execPath, arg1, ...extraArgs];
-  }
-  return [execPath, ...extraArgs];
-};
+export { selfInvocation } from "./invocation.js";
 
 // ---------------------------------------------------------------------------
 // Record path + verification (from resolver.ts + store/errors.ts shape)

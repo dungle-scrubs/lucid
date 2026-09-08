@@ -5,7 +5,10 @@ import { join } from "node:path";
 import type { ContextCountOptions, HarnessRunner } from "../../src/harness/runner.js";
 import { createManagedPreparation } from "../../src/modes/managed-preparation.js";
 import { offerProjectedContext } from "../../src/store/context-offer.js";
-import { createConversationHost } from "../../src/store/conversation-host.js";
+import {
+  type ConversationHost,
+  createConversationHost,
+} from "../../src/store/conversation-host.js";
 import { replaceSettings } from "../../src/store/settings.js";
 import { createConversationRecord } from "../../src/store/store.js";
 
@@ -204,7 +207,7 @@ test("unknown context accounting persists an actionable hold without dispatch", 
     expect(f.host.state().executions.request).toMatchObject({
       kind: "held",
       attempt: 0,
-      hold: { code: "E-HUB-06" },
+      hold: { code: "E-HUB-03", actions: ["change-settings"] },
     });
   } finally {
     preparation.close();
@@ -367,7 +370,7 @@ test("cleanup failure retains each owned copy for a later cleanup attempt", asyn
   const f = setup();
   const runner: HarnessRunner = {
     ...f.runner,
-    countContext: async () => ({ status: "unavailable", reason: "unsupported-adapter" }),
+    countContext: async () => ({ status: "unavailable", reason: "transport" }),
   };
   const preparation = createManagedPreparation({
     host: f.host,
@@ -387,10 +390,21 @@ test("cleanup failure retains each owned copy for a later cleanup attempt", asyn
     },
   });
   try {
-    for (const turnId of ["turn-1", "turn-2"])
+    for (const turnId of ["turn-1", "turn-2"]) {
+      if (turnId === "turn-2")
+        expect(
+          f.host.writeExecution({
+            kind: "retry-authorized",
+            inputId: input.inputId,
+            attempt: 0,
+            actionId: "retry-cleanup",
+            acknowledgeEffects: false,
+          }).verdict,
+        ).toBe("accepted");
       expect(
         await preparation.prepare({ ...input, turnId, signal: new AbortController().signal }),
       ).toEqual({ kind: "held" });
+    }
     expect(f.offeredPaths).toHaveLength(2);
     for (const path of f.offeredPaths) expect(existsSync(path)).toBe(true);
     preparation.close();
@@ -447,8 +461,8 @@ test("summary provenance survives preparation while the full source remains avai
               role: "assistant",
               text:
                 n <= 8
-                  ? "old-history-marker " + "older evidence ".repeat(70)
-                  : "Recent context " + n,
+                  ? `old-history-marker ${"older evidence ".repeat(70)}`
+                  : `Recent context ${n}`,
             },
           }),
         ).verdict,
@@ -698,5 +712,85 @@ test("cancellation during the attempt append records that dispatch was not calle
   } finally {
     preparation.close();
     f.close();
+  }
+});
+
+test("managed comparison suppression survives automatic attachment and releases only on newer content or a new explicit intent", async () => {
+  const f = setup();
+  const { encodeAnnotationBatch } = await import("../../src/protocol/annotations.js");
+  const { readContentSource } = await import("../../src/protocol/content-comparison.js");
+  f.host.writeArtifact({
+    artifactId: "doc",
+    version: 2,
+    author: "human",
+    contentType: "text/html",
+    bytes: "<p>Reviewed wording</p>",
+  });
+  const current = f.host.comparisonSnapshot("doc").artifact;
+  if (!current) throw new Error("missing artifact");
+  const passage = readContentSource(current.bytes, current.author).passages[0];
+  if (!passage) throw new Error("missing passage");
+  const text = encodeAnnotationBatch({
+    artifactId: "doc",
+    version: 2,
+    comparison: { earlierVersion: 1, reviewedVersion: 2, reviewedHash: current.hash },
+    notes: [
+      {
+        note: "Keep these words",
+        spots: [
+          {
+            id: passage.id,
+            author: passage.author,
+            snippet: passage.text,
+            selectors: passage.selectors,
+            sourceVersion: 2,
+            sourceHash: current.hash,
+          },
+        ],
+      },
+    ],
+  });
+  expect(
+    f.host.acceptInput({ id: "comparison", text, mode: "queue" }, { managed: true }),
+  ).toMatchObject({ verdict: "accepted" });
+  let unavailable = true;
+  const host = {
+    ...f.host,
+    captureDispatch: (...args: Parameters<ConversationHost["captureDispatch"]>) => {
+      if (unavailable) throw new Error("synthetic unreadable");
+      return f.host.captureDispatch(...args);
+    },
+  };
+  let preparation = createManagedPreparation({ host, runner: f.runner, driver, cwd: f.root });
+  const request = { ...input, inputId: "comparison", text, signal: new AbortController().signal };
+  try {
+    expect((await preparation.prepare(request)).kind).toBe("held");
+    expect(f.host.state().executions.comparison).toMatchObject({
+      kind: "held",
+      hold: { code: "E-COMP-07" },
+    });
+    unavailable = false;
+    preparation.close();
+    preparation = createManagedPreparation({ host, runner: f.runner, driver, cwd: f.root });
+    expect((await preparation.prepare(request)).kind).toBe("held");
+    expect(f.counts).toHaveLength(0);
+    f.host.writeArtifact({
+      artifactId: "doc",
+      version: 3,
+      author: "human",
+      contentType: "text/plain",
+      bytes: "Current additions survive",
+    });
+    const ready = await preparation.prepare(request);
+    expect(ready.kind).toBe("ready");
+    if (ready.kind !== "ready") throw new Error("held");
+    expect(ready.prompt).toContain("Dispatch version: 3");
+    expect(ready.prompt).toContain("Current additions survive");
+    expect(ready.prompt.match(/Current additions survive/g)).toHaveLength(1);
+    expect(ready.prompt).not.toContain("set `replaces` to the `version` it names");
+  } finally {
+    preparation.close();
+    f.host.close();
+    rmSync(f.root, { recursive: true, force: true });
   }
 });

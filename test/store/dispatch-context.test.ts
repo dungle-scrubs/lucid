@@ -163,9 +163,9 @@ test.each(["settings", "folder", "input", "lease", "cursor", "range"])(
           },
           captured.stamp,
         ).verdict,
-      ).toBe(change === "cursor" ? "accepted" : "refused");
+      ).toBe(change === "cursor" || change === "input" ? "accepted" : "refused");
       expect(host.state().executions.request?.kind).toBe(
-        change === "cursor" ? "attempt-started" : "requested",
+        change === "cursor" || change === "input" ? "attempt-started" : "requested",
       );
     } finally {
       writer.close();

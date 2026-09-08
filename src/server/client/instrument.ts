@@ -182,27 +182,33 @@ html.lucid-annotate, html.lucid-annotate * {
   user-select: text !important;
 }
 
+html.lucid-annotate .lucid-text-cursor {
+  cursor: text !important;
+}
+
+/* Links navigate in both modes, including their labels and icons. */
+html.lucid-annotate a[href], html.lucid-annotate a[href] * {
+  cursor: pointer !important;
+}
+
 /* --- transient marks, on the block --------------------------------
  *
  * Order carries the precedence: hover first, selection after it, so the
  * thing you are doing now beats the thing you are merely near. */
 
-/* Hover: this block is markable. 1px neutral ink at 45%, radius 6px. */
+/* Hover: this block is markable. 2px light-gray dots, radius 6px. */
 [${ELEMENT_ATTR}].lucid-hover {
-  outline: 1px solid color-mix(in srgb, var(--color-text) 45%, transparent) !important;
+  outline: 2px dotted #b8b8b8 !important;
   outline-offset: 0 !important;
   border-radius: 6px !important;
 }
 
-/* Selected: this block is the subject of what you are about to write.
- * 1.5px accent outline, accent-100 fill. The fill is an inset overlay
- * rather than a background, so a block the agent gave its own ground
- * keeps it under the wash instead of losing it. */
+/* Selection marks the boundary without repainting authored content.
+ * An opaque fill would leave light text unreadable on dark documents. */
 [${ELEMENT_ATTR}].lucid-selected {
   outline: 1.5px solid var(--color-accent) !important;
   outline-offset: 0 !important;
   border-radius: 6px !important;
-  box-shadow: inset 0 0 0 9999px var(--color-accent-100) !important;
 }
 
 /* A text-span selection: a run inside a paragraph, not the whole block.
@@ -210,15 +216,13 @@ html.lucid-annotate, html.lucid-annotate * {
    selection that wraps is three boxes rather than one rectangle covering
    the whole paragraph, and a drag that ends mid-word shows that it did.
 
-   The boxes sit over the words, so the fill multiplies against them: the
-   accent-200 wash tints the paper and leaves the glyphs readable, the same
-   relationship an inline highlight has when it is drawn under the text. */
+   Transparent boxes preserve the text and its original background in
+   both themes, including syntax colors and mixed-color figures. */
 .lucid-range {
   position: absolute !important;
   pointer-events: none !important;
   z-index: 2147483646 !important;
-  mix-blend-mode: multiply !important;
-  background: var(--color-accent-200) !important;
+  background: transparent !important;
   outline: 1.5px solid var(--color-accent) !important;
   border-radius: 3px !important;
 }
@@ -252,15 +256,11 @@ html.lucid-annotate, html.lucid-annotate * {
   }
 }
 
-/* The block holding the caret: 1.5px ink outline on a paper fill, with the
-   2px cyan caret. The fill is an inset overlay, not a background - the
-   words stay on top of it, and whatever ground the agent gave the block
-   gives way to paper only for as long as the caret is in it. */
+/* Edit focus preserves the authored foreground and background too. */
 [${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]):focus {
-  outline: 1.5px solid var(--color-text) !important;
+  outline: 1.5px solid var(--color-accent) !important;
   outline-offset: 0 !important;
   border-radius: 6px !important;
-  box-shadow: inset 0 0 0 9999px var(--paper) !important;
 }
 
 /* --- persistent marks, outside or at the edge ----------------------- */
@@ -295,9 +295,7 @@ html.lucid-annotate, html.lucid-annotate * {
   white-space: nowrap;
 }
 
-/* The one composition that needs help: on a selected block the chip
-   inverts - paper fill, accent-300 border - so it stays readable against
-   the accent wash. Everything else about the two channels composes. */
+/* The selected block's count chip keeps its own complete color pair. */
 [${ELEMENT_ATTR}].lucid-noted.lucid-selected[${COUNT_ATTR}]::after {
   background: var(--paper);
   border: 1px solid var(--color-accent-300);
@@ -312,18 +310,14 @@ html.lucid-annotate, html.lucid-annotate * {
   box-shadow: inset 2px 0 0 var(--color-accent-400) !important;
 }
 
-/* Edited and selected: the selection's fill and the edit's rule are
-   different edges of the same block, so both show. */
+/* Selection and edit focus keep the unsaved edit's edge marker. */
 [${ELEMENT_ATTR}].lucid-edited.lucid-selected {
-  box-shadow: inset 0 0 0 9999px var(--color-accent-100),
-    inset 2px 0 0 var(--color-accent-400) !important;
+  box-shadow: inset 2px 0 0 var(--color-accent-400) !important;
 }
 
-/* Edited with the caret in it: the paper fill the caret block takes, with
-   the rule still at the edge. */
+/* Edited with the caret in it: retain the same edge marker. */
 [${ELEMENT_ATTR}][contenteditable].lucid-edited:not([contenteditable="false"]):focus {
-  box-shadow: inset 0 0 0 9999px var(--paper),
-    inset 2px 0 0 var(--color-accent-400) !important;
+  box-shadow: inset 2px 0 0 var(--color-accent-400) !important;
 }
 
 /* The lost seam: a 2px dashed rule in the gap between blocks, where a
@@ -484,6 +478,47 @@ const script = (artifactId: string, version: number, author: string): string => 
 
   var selected = [];
   var hovered = null;
+  var textCursor = null;
+  var clearTextCursor = function () {
+    if (textCursor) textCursor.classList.remove("lucid-text-cursor");
+    textCursor = null;
+  };
+  var linkAt = function (target) {
+    return target && target.nodeType === 1 ? target.closest("a[href]") : null;
+  };
+
+  // Caret lookup can snap to nearby text even in padding or past a line's
+  // end. Check the characters on either side against the actual pointer.
+  var overText = function (e) {
+    var node = null, offset = 0;
+    if (document.caretPositionFromPoint) {
+      var caret = document.caretPositionFromPoint(e.clientX, e.clientY);
+      if (caret) { node = caret.offsetNode; offset = caret.offset; }
+    } else if (document.caretRangeFromPoint) {
+      var caretRange = document.caretRangeFromPoint(e.clientX, e.clientY);
+      if (caretRange) { node = caretRange.startContainer; offset = caretRange.startOffset; }
+    }
+    if (!node || node.nodeType !== 3 || !e.target.contains(node)) return false;
+    var range = document.createRange();
+    for (var i = Math.max(0, offset - 1); i < Math.min(node.length, offset + 1); i++) {
+      range.setStart(node, i);
+      range.setEnd(node, i + 1);
+      var rects = range.getClientRects();
+      for (var j = 0; j < rects.length; j++) {
+        var r = rects[j];
+        if (r.width > 0 && r.height > 0 && e.clientX >= r.left && e.clientX < r.right &&
+            e.clientY >= r.top && e.clientY < r.bottom) return true;
+      }
+    }
+    return false;
+  };
+  var updateTextCursor = function (e) {
+    var next = !linkAt(e.target) && overText(e) ? e.target : null;
+    if (next === textCursor) return;
+    clearTextCursor();
+    textCursor = next;
+    if (textCursor) textCursor.classList.add("lucid-text-cursor");
+  };
   // A pick is either a set of elements or one stretch of selected text,
   // never both: they are two answers to the same question and showing both
   // would leave the note pointing at two different things.
@@ -492,7 +527,7 @@ const script = (artifactId: string, version: number, author: string): string => 
   var editedCount = 0;
   // "edit" — the document behaves as the agent built it: controls work, text
   // has a caret, drag selects text. "annotate" — clicking picks elements to
-  // write notes about, and a click does NOT also operate a control.
+  // write notes about; links still navigate, while other controls do not operate.
   //
   // The two were one mode, and a single click did both: it ticked a box and
   // selected the row at the same time. Nothing said which was happening.
@@ -535,6 +570,7 @@ const script = (artifactId: string, version: number, author: string): string => 
   };
 
   var applyMode = function () {
+    clearTextCursor();
     var html = document.documentElement;
     if (mode === "annotate" && !readOnly) html.classList.add("lucid-annotate");
     else html.classList.remove("lucid-annotate");
@@ -580,6 +616,11 @@ const script = (artifactId: string, version: number, author: string): string => 
     var copy = document.documentElement.cloneNode(true);
     var added = copy.querySelectorAll("[data-lucid]");
     for (var a = 0; a < added.length; a++) added[a].parentNode.removeChild(added[a]);
+    var cursors = copy.querySelectorAll(".lucid-text-cursor");
+    for (var c = 0; c < cursors.length; c++) {
+      cursors[c].classList.remove("lucid-text-cursor");
+      if (cursors[c].getAttribute("class") === "") cursors[c].removeAttribute("class");
+    }
     var marked = copy.querySelectorAll("[" + ATTR + "]");
     for (var b = 0; b < marked.length; b++) {
       var m = marked[b];
@@ -663,7 +704,8 @@ const script = (artifactId: string, version: number, author: string): string => 
   // Scrolling the document moves what the note box is pointing at, so the
   // rect is sent again rather than left behind on screen.
   var repost = function () {
-    if (selected.length > 0) post();
+    if (picked) paintRange();
+    if (selected.length > 0 || picked) post();
   };
 
   // The frame has its own keyboard, so a key pressed with the caret in the
@@ -1232,6 +1274,7 @@ const script = (artifactId: string, version: number, author: string): string => 
   // happening from one press, in the wrong order.
   document.addEventListener("mousedown", function (e) {
     if (!e.isTrusted || mode !== "annotate" || readOnly) return;
+    if (linkAt(e.target)) return;
     // Cancelling every mousedown also cancels the browser's own text
     // selection, which is what a drag is made of - so annotating a phrase
     // was impossible for as long as this was unconditional.
@@ -1249,15 +1292,22 @@ const script = (artifactId: string, version: number, author: string): string => 
 
   document.addEventListener("mouseover", function (e) {
     if (!e.isTrusted || mode !== "annotate" || readOnly) return;
-    var el = addressable(e.target);
+    updateTextCursor(e);
+    var el = linkAt(e.target) ? null : addressable(e.target);
     if (el === hovered) return;
     if (hovered) hovered.classList.remove("lucid-hover");
     hovered = el;
     if (hovered) hovered.classList.add("lucid-hover");
   }, true);
 
+  document.addEventListener("mousemove", function (e) {
+    if (!e.isTrusted || mode !== "annotate" || readOnly) return;
+    updateTextCursor(e);
+  }, true);
+
   document.addEventListener("mouseout", function (e) {
     if (!e.isTrusted || mode !== "annotate" || readOnly) return;
+    clearTextCursor();
     if (hovered) { hovered.classList.remove("lucid-hover"); hovered = null; }
   }, true);
 
@@ -1297,9 +1347,10 @@ const script = (artifactId: string, version: number, author: string): string => 
       if (live && !live.isCollapsed) { e.preventDefault(); return; }
       picked = null;
     }
-    // In annotate mode a click picks an element and does nothing else. Left
-    // to run, it would also tick the box or follow the link under it, so
-    // one click would do two things and neither would be undoable.
+    // Direct link activation stays native. The drag guard above still
+    // prevents following a link when the person selected its text.
+    if (linkAt(e.target)) return;
+    // Other targets are picked without also operating a control.
     e.preventDefault();
     var el = addressable(e.target);
     if (!el) return;

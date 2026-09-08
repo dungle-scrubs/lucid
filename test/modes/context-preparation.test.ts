@@ -84,66 +84,69 @@ test("fitting context preserves the exact full prompt and native occupancy", asy
   expect(counts).toEqual([{ ...route, prompt: result.prompt }]);
 });
 
-test("long history is summarized separately while current content and recent messages stay whole", async () => {
-  const counts: ContextCountOptions[] = [];
-  const launches: StreamTurnOptions[] = [];
-  const history = Array.from({ length: 12 }, (_, seq) => ({
-    id: `event:${seq}`,
-    kind: "message" as const,
-    provenance: { harness: "previous-harness" },
-    role: seq % 2 ? "assistant" : "user",
-    seq,
-    text: `Message ${seq}: ${"older text ".repeat(70)}`,
-  }));
-  const captured = { ...context, history, through: 20 };
-  const runner: HarnessRunner = {
-    ...fakeRunner(counts),
-    countContext: async (request) => {
-      counts.push(request);
-      return {
-        status: "available",
-        executable: { path: "/fake/harness", version: "verified" },
-        method: "native-context-estimate",
-        model: route.model,
-        inputLimitTokens: request.isolation ? 20000 : 6500,
-        totalTokens: request.prompt.length,
-      };
-    },
-    inspect: async (_harness, choice) => {
-      expect(choice).toMatchObject({ model: route.model, isolation: "tool-free" });
-      return { name: route.harness, verifiedAgainst: "verified", session: true };
-    },
-    streamTurn: async function* (request) {
-      launches.push(request);
-      expect(request.resume).toBeUndefined();
-      expect(request.isolation).toBe("tool-free");
-      expect(request.model).toBe(route.model);
-      expect(request.cwd).not.toBe(route.cwd);
-      expect(existsSync(request.cwd ?? "")).toBe(true);
-      expect(request.prompt).not.toContain(context.pending.text);
-      expect(request.prompt).toContain("previous-harness");
-      expect(
-        counts.some((count) => count.cwd === request.cwd && count.prompt === request.prompt),
-      ).toBe(true);
-      yield {
-        kind: "message",
-        role: "assistant",
-        text: "Keep the document readable. Decision from event:0 remains unresolved; event:7 records the prior result.",
-      };
-      yield { kind: "done", exitCode: 0, cause: "clean" };
-    },
-  };
-  const result = await createContextPreparer(runner)({ context: captured, render, route });
-  expect(launches).toHaveLength(1);
-  expect(result.summary).toMatchObject({ model: route.model, from: 0, through: 8 });
-  for (const entry of history.slice(-4)) expect(result.prompt).toContain(entry.text);
-  expect(result.prompt).toContain(context.pending.text);
-  expect(result.prompt).toContain(context.mandatory[0]?.text ?? "missing");
-  expect(result.prompt).toContain("Full source: external offered copy");
-  expect(result.accounting.totalTokens).toBeLessThanOrEqual(result.accounting.inputLimitTokens);
-  expect(captured.history).toEqual(history);
-  expect(existsSync(launches[0]?.cwd ?? "")).toBe(false);
-});
+test.each(["message", "tool"] as const)(
+  "long %s history is summarized separately while current content and recent entries stay whole",
+  async (entryKind) => {
+    const counts: ContextCountOptions[] = [];
+    const launches: StreamTurnOptions[] = [];
+    const history = Array.from({ length: 12 }, (_, seq) => ({
+      id: `event:${seq}`,
+      kind: entryKind,
+      provenance: { harness: "previous-harness" },
+      role: seq % 2 ? "assistant" : "user",
+      seq,
+      text: `Message ${seq}: ${"older text ".repeat(70)}`,
+    }));
+    const captured = { ...context, history, through: 20 };
+    const runner: HarnessRunner = {
+      ...fakeRunner(counts),
+      countContext: async (request) => {
+        counts.push(request);
+        return {
+          status: "available",
+          executable: { path: "/fake/harness", version: "verified" },
+          method: "native-context-estimate",
+          model: route.model,
+          inputLimitTokens: request.isolation ? 20000 : 6500,
+          totalTokens: request.prompt.length,
+        };
+      },
+      inspect: async (_harness, choice) => {
+        expect(choice).toMatchObject({ model: route.model, isolation: "tool-free" });
+        return { name: route.harness, verifiedAgainst: "verified", session: true };
+      },
+      streamTurn: async function* (request) {
+        launches.push(request);
+        expect(request.resume).toBeUndefined();
+        expect(request.isolation).toBe("tool-free");
+        expect(request.model).toBe(route.model);
+        expect(request.cwd).not.toBe(route.cwd);
+        expect(existsSync(request.cwd ?? "")).toBe(true);
+        expect(request.prompt).not.toContain(context.pending.text);
+        expect(request.prompt).toContain("previous-harness");
+        expect(
+          counts.some((count) => count.cwd === request.cwd && count.prompt === request.prompt),
+        ).toBe(true);
+        yield {
+          kind: "message",
+          role: "assistant",
+          text: "Keep the document readable. Decision from event:0 remains unresolved; event:7 records the prior result.",
+        };
+        yield { kind: "done", exitCode: 0, cause: "clean" };
+      },
+    };
+    const result = await createContextPreparer(runner)({ context: captured, render, route });
+    expect(launches).toHaveLength(1);
+    expect(result.summary).toMatchObject({ model: route.model, from: 0, through: 8 });
+    for (const entry of history.slice(-4)) expect(result.prompt).toContain(entry.text);
+    expect(result.prompt).toContain(context.pending.text);
+    expect(result.prompt).toContain(context.mandatory[0]?.text ?? "missing");
+    expect(result.prompt).toContain("Full source: external offered copy");
+    expect(result.accounting.totalTokens).toBeLessThanOrEqual(result.accounting.inputLimitTokens);
+    expect(captured.history).toEqual(history);
+    expect(existsSync(launches[0]?.cwd ?? "")).toBe(false);
+  },
+);
 
 test.each([false, true])(
   "history larger than one summary request is reduced in counted passes, transport refusal: %s",
@@ -389,7 +392,12 @@ test.each([
   };
   await expect(
     createContextPreparer(runner)({ context: captured, render, route }),
-  ).rejects.toMatchObject({ code: "E-HUB-06" });
+  ).rejects.toMatchObject({
+    code:
+      scenario === "unknown-budget" || scenario === "summary-budget-unknown"
+        ? "E-HUB-03"
+        : "E-HUB-06",
+  });
   expect(JSON.stringify(captured)).toBe(before);
   expect(launches.length).toBeLessThanOrEqual(64);
   if (

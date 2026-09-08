@@ -1,3 +1,4 @@
+import { supportsManagedInput } from "./frames.js";
 /**
  * The pure chat-session reducer: (state, frame, now) -> accepted | refusal.
  * Owns epoch fencing (a takeover increments the epoch; stale-epoch frames
@@ -435,7 +436,9 @@ const accepted = (
  * redelivers armed inputs from state (see `runtime.ts`), and a second
  * hand-built frame there would be a mirror of this one — the thing this
  * repo does not do with wire shapes. */
-export const inputFrame = (input: QueuedInput): Frame => ({
+export const inputFrame = (
+  input: Pick<QueuedInput, "managed" | "id" | "seq" | "text" | "mode" | "turnId">,
+): Frame => ({
   ...(input.managed ? { managed: true } : {}),
   kind: "input",
   seq: input.seq,
@@ -482,7 +485,7 @@ const sendInputs = (
   capabilities?: readonly string[],
 ): readonly Effect[] =>
   inputs
-    .filter((input) => !input.managed || capabilities?.includes("managed-input-v1"))
+    .filter((input) => !input.managed || supportsManagedInput(capabilities))
     .map((i) => ({ type: "send", frame: inputFrame(i) }));
 
 /** Derive the next questionOpen after an accepted event. A `question`
@@ -877,7 +880,7 @@ const reducePostAttach = (
       const target = state.inputs.find((i) => i.id === frame.inputId);
       if (target?.managed) {
         const execution = state.executions[target.id];
-        if (!attachment.capabilities?.includes("managed-input-v1"))
+        if (!supportsManagedInput(attachment.capabilities))
           return refusedButAlive(state, attachment, frame, "unknown-input", now);
         if (
           frame.outcome === "applied" &&
@@ -1119,7 +1122,7 @@ export function enqueueManagedInput(
   if (result.verdict !== "accepted") return result;
   return {
     ...result,
-    effects: state.attachment?.capabilities?.includes("managed-input-v1")
+    effects: supportsManagedInput(state.attachment?.capabilities)
       ? result.effects.map((effect) =>
           effect.type === "send" && effect.frame.kind === "input"
             ? { type: "send", frame: { ...effect.frame, managed: true } }
@@ -1203,3 +1206,11 @@ export const reduce = (
       return refusal(state, frame, "wrong-direction", now);
   }
 };
+
+/** Admission refusals preserve the pre-transaction state and emit the usual wire refusal. */
+export const refuseInputAdmission = (
+  state: ChannelState,
+  input: { id: string; text: string; mode: InputMode },
+  issue: ProtocolIssue,
+  now: number,
+): ReduceResult => refusal(state, { kind: "input", seq: state.seq, ...input }, issue, now);

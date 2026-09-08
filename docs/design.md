@@ -10,9 +10,20 @@ instrumentation stylesheet as the app.
 ## Layout and surfaces
 
 The document has the primary column. The conversation has a narrower reading
-column with a resizable divider. Save and discard belong in the document
-header; guidance stays beneath the document. The conversation has no duplicate
-identity or idle header. Driver choices stay with the composer.
+column with a resizable divider and no header above its transcript. Driver
+selectors sit inside the composer; the profile and its explanation stay
+below it. Activity appears at the end of the
+transcript only when there is something to report. Save and discard belong
+in the document header; guidance stays beneath the document. Center
+the sheet within its column. The artifact can request its maximum width with
+`lucid-width` metadata; without it, the sheet fills the available pane. The
+Document width header control overrides that preference for this reader and
+artifact. Both choices fit the available pane, with a 320px frame floor where
+space permits. Spare width shows the patterned ground. The slider starts at
+the measured width and displays actual pixels and percentage, while keeping
+the requested preference separate. Reset follows the artifact again. The
+control remains available during unsaved edits and read-only viewing; comparison
+columns retain their own layout.
 
 Keep the neutral ground cool, without process-yellow or sepia warming. The
 surrounding surface is darker than the patterned document ground, which is
@@ -26,11 +37,13 @@ refusal. Waiting, read-only history, and restore are not refusals.
 
 ## Driver and activity
 
-The driver line follows the composer's left edge. Provider, model, effort,
-and profile follow the harness where applicable. Separators stay attached
-to the following label on wrap; labels are not truncated. No trailing bullet
-follows the profile. Harness and model menus open above their segment;
-effort aligns to the right. Menu choices come from hcn, not a design list.
+The composer is one rounded surface: text above, a compact control row
+below. The plus button opens the attachment picker. Harness, model, and
+reasoning level selectors share that row, aligned to the right, in 10.5px
+type. Labels omit the word "effort" and show carets. Long labels wrap;
+no selector is truncated. Menus open upward. A background highlight marks
+the selected menu option; there is no checkmark or reserved icon gutter. There is no send button:
+Enter sends and Shift+Enter adds a line.
 
 The compact selectors display the saved choice; actual mode is a separate
 report. Saving never respawns a human-owned interactive session. The full
@@ -59,6 +72,11 @@ admission refusal restores editable text. Malformed recovery data cannot be
 sent or replaced automatically. Discarding it is explicit and does not cancel
 an accepted input. The recovery card must not push the composer off-screen.
 
+The artifact name uses 14px type and keeps its hover edit icon. Version
+tags use 10.5px type, a muted background, no border, and 4px corners.
+Annotate/Edit uses a segmented control with 6px outer and 4px inner
+corners; cyan marks the active mode.
+
 ## Documents and notes
 
 Pinned old versions are read-only, with neutral indicators. Restore appends
@@ -66,6 +84,18 @@ a version; confirmation must describe that, without implying history will
 be deleted. Keep pending edits and notes through version navigation.
 
 In-frame selection, edits, queued notes, and new material have separate marks.
+Annotation hover uses a 2px dotted light-gray (#b8b8b8) outline with a 6px
+radius. Selection keeps its solid cyan outline and takes precedence over hover.
+Block selection, text-range selection, and edit focus preserve the artifact's
+foreground, background, and syntax colors. Use transparent selection interiors;
+never cover authored content with an opaque fill or a blend effect. Count chips
+and other Lucid-owned labels supply their own complete foreground/background pair.
+The annotation cursor is a text cursor directly over text and a crosshair
+over surrounding space and non-text content. Links with an `href`, including
+their child labels and icons, use a pointer cursor in both modes. They receive
+no annotation hover outline, and direct clicks follow the link without selecting
+an annotation target. Dragging across linked text can still select words for a
+note; the click that ends that drag must not also navigate.
 A lost target keeps its note and original snippet. Movement is offered when
 the target is offscreen; do not scroll the document on the person's behalf
 when an in-place mark can communicate the change. The offscreen note pill
@@ -75,9 +105,43 @@ File chips report observed outcomes and actual bounds. Do not claim a file
 was read merely because it was offered to the agent. Uploading must not
 block the rest of the composer or disturb the document being read.
 
+At 900px and below, the panes stack. The document defaults to one-third
+of the available height and scrolls internally. A full-width divider with
+a dotted handle resizes it vertically, from 15% to 70%; Up/Down arrows
+move it too. Desktop width resizing remains independent. The header wraps
+its controls when the document column is narrow.
+
+The composer keeps its full border and bottom spacing in empty records.
+Before a harness is chosen, the harness selector says "Choose harness";
+model and reasoning controls remain visible but disabled. Missing mode
+information says "No mode recorded" with an explanation below.
+
+## Saved content comparison
+
+Comparison replaces the document sheet inside the existing layout. Earlier
+and reviewed versions are labeled in the header and beside their passages.
+The same rows use two columns at 820px of available comparison width and one
+column below it. Conversation width is excluded. Narrow layouts show unchanged
+text once. Additions and removals use explicit labels and distinct surfaces;
+small changes add word-level underline or strike-through. Unsupported content
+is disclosed beside the version controls, with saved-source inspection.
+
+One compact note editor sits below the selected source. It starts at one row
+and grows with its text. When explicit review removes that source from the
+pair, its excerpt and editor span the comparison area above the rows. The
+transcript remains in the conversation pane. Accepted source markers link to
+the corresponding note. Stale drafts disable fresh Send until Review latest;
+unresolved sends show recovery controls without changing their payload.
+
+Comparison has light and dark token sets. The surrounding application retains
+its existing light-only theme. Both comparison themes are checked at 390,
+768, and 1440px; the existing narrow-pane height divider remains available.
+
 ## Limits of the design
 
 The interface is light-only. Preserve the existing narrow-window stacking
 and touch editing cues; a full mobile or touch redesign is not specified.
+The artifact iframe declares both color schemes so an authored document can
+respond to the system preference independently of the surrounding interface.
 There is no shared-user ownership mode. Do not copy another person's locked
 document state from an old handoff into this single-user product.

@@ -11,6 +11,7 @@ import { isDriverField, isDriverHarness, preferenceState } from "../store/driver
 import { readRecordMetadata } from "../store/record-identity.js";
 import { locationProjection, replaceSettings } from "../store/settings.js";
 import { driverChoices } from "./driver-choices.js";
+import { createRecoveryAvailability } from "./recovery-availability.js";
 
 const objectBody = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -156,6 +157,7 @@ export function createHubSettings(
   return {
     choices,
     project,
+    recovery: createRecoveryAvailability(runner),
     async defaults() {
       const lists = await choices();
       try {

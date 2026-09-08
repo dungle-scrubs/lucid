@@ -7,6 +7,7 @@ import type { LockedRecordSnapshot } from "./log.js";
 import { readRecordMetadata } from "./record-identity.js";
 
 export interface DispatchSnapshot {
+  readonly artifacts: LockedRecordSnapshot["artifacts"];
   readonly context: ConversationContext;
   readonly epoch: number;
   readonly stamp: string;
@@ -29,6 +30,7 @@ export function captureDispatchContext(
     transcript: snapshot.transcript,
   });
   return {
+    artifacts: snapshot.artifacts,
     context,
     state: snapshot.state,
     epoch: snapshot.state.epoch,

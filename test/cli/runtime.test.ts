@@ -78,6 +78,7 @@ test("legacy runtime does not drain managed inputs armed during lease expiry", a
   const running = await openDrivenConversation({
     rootDir: root,
     conversationId: "managed-fence",
+    managed: false,
     runner: fakeRunner,
     acquirePresenceFn: fakePresence().acquire,
     presence: () => false,

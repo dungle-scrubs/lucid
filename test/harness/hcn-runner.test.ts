@@ -188,7 +188,11 @@ describe("openSession over hcn session --json", () => {
     // Answer them out of order: each waiter is keyed by its own id.
     r.proc.emit({ kind: "disposition", id: "in-2", disposition: "rejected", reason: "busy" });
     r.proc.emit({ kind: "disposition", id: "in-1", disposition: "started" });
-    expect(await second).toEqual({ disposition: "rejected", reason: "busy" });
+    expect(await second).toEqual({
+      disposition: "rejected",
+      reason: "busy",
+      rejectionEvidence: "harness-refusal",
+    });
     expect(await first).toEqual({ disposition: "started" });
   });
 
@@ -237,7 +241,11 @@ describe("openSession over hcn session --json", () => {
       disposition: "rejected",
       reason: "write-failed",
     });
-    expect(await sent).toEqual({ disposition: "rejected", reason: "write-failed" });
+    expect(await sent).toEqual({
+      disposition: "rejected",
+      reason: "write-failed",
+      rejectionEvidence: "harness-refusal",
+    });
   });
 
   test("answer sends the answer op, so hcn composes the preamble", async () => {

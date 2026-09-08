@@ -28,6 +28,7 @@
 import type { HarnessEvent } from "../harness/events.js";
 import type { HarnessName, HarnessRunner } from "../harness/runner.js";
 import { EventKind } from "../protocol/events.js";
+import { MANAGED_INPUT_CAPABILITY } from "../protocol/frames.js";
 import {
   classOfEventKind,
   coalesceDroppable,
@@ -43,6 +44,8 @@ import {
 type SendResult = ReduceResult | { readonly verdict: "refused"; readonly issue: string };
 
 export interface SequencerDeps {
+  readonly managed?: boolean;
+  readonly explicitAttachmentId?: string;
   readonly owner?: import("../protocol/process-owner.js").ProcessOwner;
   readonly harness: HarnessName;
   readonly conversationId: string;
@@ -98,6 +101,17 @@ export const createSequencer = (
     // refused: it is what attributes this writer's identity events, so a
     // later attach of the same harness can be told which session to resume.
     harness: deps.harness,
+    ...(deps.managed
+      ? {
+          capabilities: [MANAGED_INPUT_CAPABILITY],
+          ...(deps.explicitAttachmentId
+            ? {
+                attachmentOrigin: "explicit" as const,
+                explicitAttachmentId: deps.explicitAttachmentId,
+              }
+            : { attachmentOrigin: "automatic" as const }),
+        }
+      : {}),
     ...(deps.owner === undefined ? {} : { owner: deps.owner }),
     ...(resumeFrom === undefined ? {} : { resumeFrom }),
   });

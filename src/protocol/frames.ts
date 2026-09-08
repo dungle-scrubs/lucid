@@ -32,6 +32,10 @@ export const FRAME_KINDS = [
 ] as const;
 
 export type FrameKind = (typeof FRAME_KINDS)[number];
+export const MANAGED_INPUT_CAPABILITY = "managed-input-v1";
+export function supportsManagedInput(capabilities?: readonly string[]): boolean {
+  return capabilities?.includes(MANAGED_INPUT_CAPABILITY) === true;
+}
 
 export type AttachProfile = "interactive" | "headless-session" | "headless-turn";
 
@@ -78,6 +82,8 @@ export type DecodeIssue = (typeof DECODE_ISSUES)[number];
  * issue vocabulary IS wire vocabulary, and typing it keeps a typo'd issue
  * from compiling. */
 export const REFUSAL_ISSUES = [
+  "E-COMP-02",
+  "E-COMP-03",
   "auth-failed",
   "wrong-conversation",
   "version-unsupported",

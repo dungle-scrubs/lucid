@@ -155,7 +155,14 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
 
   const inspect: HarnessRunner["inspect"] = async (harness, choice) => {
     let runtime: HarnessFacts["runtime"];
-    if (choice) {
+    if (
+      choice &&
+      (choice.model !== undefined ||
+        choice.effort !== undefined ||
+        choice.provider !== undefined ||
+        choice.isolation !== undefined ||
+        choice.runtime !== undefined)
+    ) {
       const check = await runToCompletion(
         [
           "inspect",
@@ -216,20 +223,19 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
         }
       }
     }
-    let pending = factCache.get(harness);
-    if (!pending) {
-      pending = readFacts(harness);
-      factCache.set(harness, pending);
-      const request = pending;
-      void request.catch(() => {
-        if (factCache.get(harness) === request) factCache.delete(harness);
-      });
-    }
-    return runtime === undefined ? pending : { ...(await pending), runtime };
+    if (choice?.signal?.aborted)
+      throw new HarnessRefusal("inspection-cancelled", "hcn inspection cancelled");
+    const facts = factCache.get(harness) ?? (await readFacts(harness, choice?.signal));
+    factCache.set(harness, facts);
+    return runtime === undefined ? facts : { ...facts, runtime };
   };
-  const factCache = new Map<HarnessName, Promise<HarnessFacts>>();
-  const readFacts = async (harness: HarnessName): Promise<HarnessFacts> => {
-    const { out, err, code } = await runToCompletion(["inspect", harness, "--json"]);
+  const factCache = new Map<HarnessName, HarnessFacts>();
+  const readFacts = async (harness: HarnessName, signal?: AbortSignal): Promise<HarnessFacts> => {
+    const { out, err, code } = await runToCompletion(
+      ["inspect", harness, "--json"],
+      undefined,
+      signal,
+    );
     if (code !== 0) {
       throw new HarnessRefusal("inspect-failed", err.join("\n") || `hcn inspect exited ${code}`);
     }
@@ -428,6 +434,9 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
               known
                 ? {
                     disposition: e.disposition as Disposition,
+                    ...(e.disposition === "rejected"
+                      ? { rejectionEvidence: "harness-refusal" as const }
+                      : {}),
                     ...(e.reason === undefined ? {} : { reason: e.reason }),
                   }
                 : { disposition: "rejected", reason: `unknown disposition: ${e.disposition}` },

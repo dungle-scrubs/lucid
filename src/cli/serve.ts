@@ -13,6 +13,7 @@
  */
 
 import { startServer } from "../server/server.js";
+import { requestManagedWorker } from "./managed-worker.js";
 
 export interface ServeOpts {
   readonly rootDir?: string;
@@ -32,6 +33,7 @@ export const startServe = async (opts: ServeOpts = {}) =>
     port: opts.port,
     token: opts.token,
     wakeNaming: opts.wakeNaming,
+    managedLaunch: { request: requestManagedWorker },
   });
 
 /** The command. Starts a server and blocks until the process is asked to

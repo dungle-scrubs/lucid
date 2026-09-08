@@ -1,6 +1,6 @@
 # Create conversations with saved defaults
 
-Status: implemented locally on feat/hub-discovery; not pushed
+Status: resolved
 Blocked by: 01
 GitHub: [Create conversations with saved defaults](https://github.com/dungle-scrubs/lucid-v2/issues/206)
 
@@ -20,3 +20,7 @@ Create a conversation from the hub with a working folder and saved harness, conc
 ## Parent
 
 [Connect the hub to local conversations](https://github.com/dungle-scrubs/lucid-v2/issues/199). Contract: RFC 15, local hub conversation integration.
+
+## Verification
+
+Final integration: 1,330 deterministic tests and 6,780 assertions pass, plus lint, both typechecks, binary build, behavior reference, and diff checks. Browser evidence covers 390, 768, and 1440 pixels, full-width pointer resizing, stable menu placeholder color, tab closure and reload, and explicit failure recovery. hcn 0.6.4 is published and pinned; Pi recordings were recaptured on mini. Installed Claude/Opus context inspection reports a verified native budget. These live observations supplement the deterministic gate. Review findings and process lifecycle regressions are resolved.

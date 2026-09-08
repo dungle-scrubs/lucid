@@ -43,7 +43,14 @@ export type AttemptOutcome =
       readonly failure: ExecutionFailure;
     };
 
+export interface ComparisonPrerequisite {
+  readonly artifactId: string;
+  readonly failedHead: number;
+  readonly explicitEpoch: number;
+}
+
 export interface ExecutionHold {
+  readonly comparison?: ComparisonPrerequisite;
   readonly actions: readonly string[];
   readonly code: "E-HUB-03" | "E-HUB-04" | "E-HUB-06" | "E-COMP-07";
   readonly prerequisite: string;
@@ -52,6 +59,7 @@ export interface ExecutionHold {
 
 export type ExecutionFact =
   | AttemptStart
+  | { readonly attempt: 0; readonly inputId: string; readonly kind: "legacy-adopted" }
   | {
       readonly attempt: number;
       readonly inputId: string;
@@ -96,6 +104,36 @@ export type ExecutionState = ExecutionBase &
       }
   );
 
+export function recoveryPolicy(execution: ExecutionState): {
+  readonly actions: readonly ("retry" | "continue-fresh")[];
+  readonly acknowledgeEffects: boolean;
+} {
+  if (execution.kind === "held")
+    return {
+      actions:
+        execution.hold.code === "E-COMP-07"
+          ? []
+          : execution.hold.actions.filter(
+              (action): action is "retry" | "continue-fresh" =>
+                action === "retry" || action === "continue-fresh",
+            ),
+      acknowledgeEffects: false,
+    };
+  if (execution.kind !== "attempt-ended" || execution.outcome.kind === "completed")
+    return { actions: [], acknowledgeEffects: false };
+  return execution.outcome.kind === "pre-start-failed"
+    ? { actions: ["retry", "continue-fresh"], acknowledgeEffects: false }
+    : { actions: ["continue-fresh"], acknowledgeEffects: true };
+}
+
+export function appliedRecovery(state: ChannelState, inputId: string): boolean {
+  const execution = state.executions[inputId];
+  return (
+    Object.hasOwn(state.appliedInputs, inputId) &&
+    (execution?.kind === "retry-authorized" || execution?.kind === "fresh-authorized")
+  );
+}
+
 const object = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 const id = (v: unknown): v is string => typeof v === "string" && isWireId(v);
@@ -107,6 +145,8 @@ export function parseExecutionFact(value: unknown): ExecutionFact | null {
   if (!object(value) || !id(value.inputId) || !nat(value.attempt)) return null;
   const base = { attempt: value.attempt, inputId: value.inputId };
   switch (value.kind) {
+    case "legacy-adopted":
+      return value.attempt === 0 ? { ...base, attempt: 0, kind: value.kind } : null;
     case "attempt-started": {
       const { context: c, driver: d, native: n, turnId, epoch } = value;
       if (
@@ -156,7 +196,14 @@ export function parseExecutionFact(value: unknown): ExecutionFact | null {
         !text(h.prerequisite) ||
         !Array.isArray(h.actions) ||
         h.actions.length > 8 ||
-        !h.actions.every(id)
+        !h.actions.every(id) ||
+        (h.comparison !== undefined &&
+          (!object(h.comparison) ||
+            !text(h.comparison.artifactId) ||
+            !Number.isSafeInteger(h.comparison.failedHead) ||
+            Number(h.comparison.failedHead) < 1 ||
+            !Number.isSafeInteger(h.comparison.explicitEpoch) ||
+            Number(h.comparison.explicitEpoch) < 0))
       )
         return null;
       return {
@@ -167,6 +214,9 @@ export function parseExecutionFact(value: unknown): ExecutionFact | null {
           reason: h.reason,
           prerequisite: h.prerequisite,
           actions: [...h.actions],
+          ...(h.comparison === undefined
+            ? {}
+            : { comparison: h.comparison as unknown as ComparisonPrerequisite }),
         },
       };
     }
@@ -263,6 +313,41 @@ export function reduceExecution(
   if (!fact) return reject("invalid-execution");
   if (!executor && fact.kind !== "retry-authorized" && fact.kind !== "fresh-authorized")
     return reject("executor-required");
+  if (fact.kind === "legacy-adopted") {
+    const input = state.inputs.find((entry) => entry.id === fact.inputId);
+    // Only a never-applied queued prompt carries authority for first dispatch.
+    if (
+      input?.mode !== "queue" ||
+      Object.hasOwn(state.appliedInputs, fact.inputId) ||
+      Object.hasOwn(state.executions, fact.inputId)
+    )
+      return reject();
+    const next: ChannelState = {
+      ...state,
+      seq: state.seq + 1,
+      inputs: state.inputs.map((entry) =>
+        entry.id === fact.inputId ? { ...entry, managed: true } : entry,
+      ),
+      executions: {
+        ...state.executions,
+        [fact.inputId]: { kind: "requested", attempt: 0, actions: {} },
+      },
+    };
+    return {
+      verdict: "accepted",
+      state: next,
+      effects: [],
+      record: {
+        verdict: "accepted",
+        kind: "input",
+        conversationId: state.conversationId,
+        epoch: state.epoch,
+        seq: next.seq,
+        now,
+        inputId: fact.inputId,
+      },
+    };
+  }
   if (!Object.hasOwn(state.executions, fact.inputId)) return reject("unknown-input");
   const current = state.executions[fact.inputId];
   if (!current) return reject();
@@ -298,22 +383,19 @@ export function reduceExecution(
         ? accept(current, true)
         : reject("execution-stale");
     if (current.attempt !== fact.attempt) return reject("execution-stale");
+    const policy = recoveryPolicy(current);
+    if (
+      !policy.actions.includes(fact.kind === "retry-authorized" ? "retry" : "continue-fresh") ||
+      (policy.acknowledgeEffects && !fact.acknowledgeEffects)
+    )
+      return reject();
     if (current.kind === "held") {
-      const action = fact.kind === "retry-authorized" ? "retry" : "continue-fresh";
-      if (current.hold.code === "E-COMP-07" || !current.hold.actions.includes(action))
-        return reject();
       return accept({
         ...base,
         kind: fact.kind,
         actions: { ...current.actions, [fact.actionId]: signature },
       });
     }
-    if (current.kind !== "attempt-ended" || current.outcome.kind === "completed") return reject();
-    if (
-      current.outcome.kind !== "pre-start-failed" &&
-      (fact.kind !== "fresh-authorized" || !fact.acknowledgeEffects)
-    )
-      return reject();
     return accept({
       ...base,
       kind: fact.kind,
@@ -397,26 +479,43 @@ export function reconcileExecutionFact(
     };
   if (current.kind !== "attempt-started" || state.epoch <= current.epoch)
     return { issue: "execution-ineligible" };
-  const terminalSeq = state.completedTurns[current.turnId];
-  const turn = state.contextTurns[current.turnId];
-  const ended = turn?.ended === true && turn.epoch === current.epoch;
   return {
     kind: "attempt-ended",
     inputId,
     attempt,
     turnId: current.turnId,
-    outcome:
-      terminalSeq === undefined
-        ? {
-            kind: ended ? "failed-after-start" : "uncertain",
-            failure: {
-              code: "E-HUB-07",
-              evidence: ended ? "terminal-error" : "process-lost",
-              reason: ended
-                ? "The recorded turn ended without a successful result. Partial workspace effects may exist. Inspect the workspace before continuing in a new session."
-                : "The worker stopped without a confirmed result. Workspace effects may exist; they are not confirmed. Inspect the workspace before continuing in a new session.",
-            },
-          }
-        : { kind: "completed", terminalSeq },
+    outcome: deriveAttemptOutcome(state, current),
+  };
+}
+
+/** Local settlement and crash recovery interpret terminal proof identically. */
+export function deriveAttemptOutcome(
+  state: ChannelState,
+  start: AttemptStart,
+  refusalBeforeExecution: false | "harness-refusal" | "dispatch-not-called" = false,
+): AttemptOutcome {
+  const terminalSeq = state.completedTurns[start.turnId];
+  if (terminalSeq !== undefined) return { kind: "completed", terminalSeq };
+  if (refusalBeforeExecution)
+    return {
+      kind: "pre-start-failed",
+      failure: {
+        code: "E-HUB-05",
+        evidence: refusalBeforeExecution,
+        reason:
+          "The harness refused the invocation before task execution. The prompt and selected settings are preserved.",
+      },
+    };
+  const turn = state.contextTurns[start.turnId];
+  const ended = turn?.ended === true && turn.epoch === start.epoch;
+  return {
+    kind: ended ? "failed-after-start" : "uncertain",
+    failure: {
+      code: "E-HUB-07",
+      evidence: ended ? "terminal-error" : "process-lost",
+      reason: ended
+        ? "The recorded turn ended without a successful result. Partial workspace effects may exist. Inspect the workspace before continuing in a new session."
+        : "The worker stopped without a confirmed result. Workspace effects may exist; they are not confirmed. Inspect the workspace before continuing in a new session.",
+    },
   };
 }

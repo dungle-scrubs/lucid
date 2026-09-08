@@ -22,11 +22,15 @@ export const presenceLockPath = (recordDir: string): string => join(recordDir, "
 export const acquirePresence = (
   recordDir: string,
   conversationId: string,
-  opts: { onEvent?: (e: PresenceEvent) => void; onLockEvent?: (e: LockEvent) => void } = {},
+  opts: {
+    onEvent?: (e: PresenceEvent) => void;
+    onLockEvent?: (e: LockEvent) => void;
+    timeoutMs?: number;
+  } = {},
 ): PresenceHandle => {
   const lockPath = presenceLockPath(recordDir);
   const flock = new Flock(lockPath, conversationId);
-  const lock = flock.acquire({ onEvent: opts.onLockEvent });
+  const lock = flock.acquire({ onEvent: opts.onLockEvent, timeoutMs: opts.timeoutMs });
   let held = true;
   opts.onEvent?.({ event: "presence.acquire", conversationId });
 

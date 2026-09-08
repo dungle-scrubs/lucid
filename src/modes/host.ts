@@ -1,3 +1,5 @@
+import { comparisonMetadata } from "../protocol/comparison-note.js";
+import { createComparisonDelivery } from "./comparison-delivery.js";
 /**
  * HeadlessHost — the deep module that owns the headless turn lifecycle.
  *
@@ -53,6 +55,7 @@ import { applyPatch, parsePatchBody } from "../protocol/patch.js";
 import { ContextPreparationError } from "../store/conversation-context.js";
 import type { ConversationHost } from "../store/conversation-host.js";
 import { classifyStoreFailure, type StoreFailureCode } from "../store/errors.js";
+import { ExecutionSettlementError } from "./managed-execution.js";
 import { createSequencer } from "./sequencer.js";
 
 /** How long a harness may say nothing after being handed an input before
@@ -167,9 +170,14 @@ export interface ArtifactHost
     | "artifactHeads"
     | "readArtifact"
     | "writeArtifact"
-  > {}
+  > {
+  readonly comparisonSnapshot?: ConversationHost["comparisonSnapshot"];
+  readonly inputStatus?: (id: string) => string | undefined;
+}
 
 export const hostSeamFor = (host: ConversationHost): ArtifactHost => ({
+  comparisonSnapshot: (id) => host.comparisonSnapshot(id),
+  inputStatus: (id) => host.state().inputs.find((input) => input.id === id)?.status,
   cursor: () => host.cursor(),
   collectEffects: (offset) => host.collectEffects(offset),
   advanceCursor: (offset) => host.advanceCursor(offset),
@@ -179,6 +187,14 @@ export const hostSeamFor = (host: ConversationHost): ArtifactHost => ({
 });
 
 export interface HeadlessDeps {
+  readonly onDispatchRejected?: (
+    turnId: string,
+    evidence: "harness-refusal" | "dispatch-not-called",
+  ) => void;
+  readonly managed?: boolean;
+  readonly explicitAttachmentId?: string;
+  readonly onAttached?: () => readonly Frame[];
+  readonly onTurnSettled?: (turnId: string) => void;
   /** Complete context and persist its authorization before external work.
    * A ready prompt includes protocol teaching and every current artifact's
    * bytes, including resynchronization after a refused patch. The host adds
@@ -197,6 +213,7 @@ export interface HeadlessDeps {
         readonly kind: "ready";
         readonly prompt: string;
         readonly native: NativeIntent;
+        readonly notice?: string;
       }
   >;
   /** Validate the exact identity immediately before each external process. */
@@ -246,11 +263,14 @@ export interface HeadlessDeps {
 }
 
 export interface SourceChannel {
+  /** Includes preparation work that has not opened a native turn yet. */
+  readonly busy?: () => boolean;
   /** Built-in sources settle only after their owned process cleanup completes. */
   readonly settled: Promise<void>;
   /** Host -> source frames (input, control, credit, lease, event-ack). */
   readonly receive: (frame: Frame) => void;
   readonly close: () => void;
+  readonly recordChanged?: () => void;
 }
 
 export { HeadlessError } from "./sequencer.js";
@@ -455,6 +475,7 @@ const handleArtifactMessage = (
 // ---------------------------------------------------------------------------
 
 interface HostContext {
+  preparedNotice(message: string | undefined): void;
   handedOver(): void;
   isStopped(): boolean;
   stop(end: Extract<SourceEnd, { kind: "store-failed" }>): void;
@@ -483,9 +504,12 @@ interface HostContext {
    * one process runs several conversations and they must not read each
    * other's debts. */
   readonly owedBytes: Set<string>;
+  readonly comparison: ReturnType<typeof createComparisonDelivery>;
+  delivering(): void;
 }
 
 interface StrategyHandle {
+  recordChanged(): void;
   /** Handle an input arrival — must disposition via sequencer and arrange
    *  the prompt for the runner (send now vs queue). `mode` decides whether
    *  a mid-turn arrival interrupts: `steer` goes through at once, `queue`
@@ -568,6 +592,12 @@ const sessionStrategy = (
   const waiting: Array<{ id: string; text: string; mode: InputMode }> = [];
   let sessionIdentity = ctx.resumeSessionId;
 
+  const arrival = new Map<string, number>();
+  const received = new Set<string>();
+  const reject = (id: string, reason: string): void => {
+    received.delete(id);
+    ctx.sequencer.disposition(id, "rejected", reason);
+  };
   let artifactPreambleSent = false;
 
   const refusePrepared = (cause: unknown, fallbackCode: string): void => {
@@ -585,7 +615,10 @@ const sessionStrategy = (
     const message = cause instanceof Error ? cause.message : String(cause);
     ctx.sequencer.emit(ctx.getTurnId(), {
       kind: EventKind.error,
-      code: cause instanceof HubError ? cause.code : fallbackCode,
+      code:
+        cause instanceof HubError || cause instanceof ExecutionSettlementError
+          ? cause.code
+          : fallbackCode,
       message,
       terminal: true,
     });
@@ -613,8 +646,14 @@ const sessionStrategy = (
       endAsDriverChange();
       return;
     }
-    const due = waiting.splice(0, deps.prepareTurn ? 1 : waiting.length);
-    for (const input of due) sendNow(input.id, input.text, input.mode);
+    const due = waiting.splice(0, waiting.length);
+    let dispatched = false;
+    for (const input of due) {
+      if ((!deps.prepareTurn || !dispatched) && ctx.comparison.eligible(input.id, input.text)) {
+        sendNow(input.id, input.text, input.mode);
+        dispatched = true;
+      } else waiting.push(input);
+    }
   };
 
   const sendNow = (id: string, text: string, mode: InputMode): void => {
@@ -633,7 +672,11 @@ const sessionStrategy = (
     // Not for answers: an answer is raw text through the harness answer
     // path, not a prompt.
     let composed = text;
-    if (mode !== "answer" && !(deps.prepareTurn && mode === "queue")) {
+    if (
+      mode !== "answer" &&
+      !(deps.prepareTurn && mode === "queue") &&
+      comparisonMetadata(text).kind === "none"
+    ) {
       let framed = composeAnnotationPrompt(text);
       if (!artifactPreambleSent) {
         const withProtocol = composeArtifactPrompt(framed, "headless-session");
@@ -676,29 +719,31 @@ const sessionStrategy = (
               .then((session) => session.send(id, text))
               .then((sent) => {
                 if (sent.disposition === "rejected") {
-                  ctx.sequencer.disposition(id, "rejected", sent.reason ?? "send rejected");
+                  reject(id, sent.reason ?? "send rejected");
                   return;
                 }
                 ctx.expected.push({ inputId: id, applied: true });
                 ctx.sequencer.disposition(id, "applied");
               })
               .catch(() => {
-                ctx.sequencer.disposition(id, "rejected", "session closed");
+                reject(id, "session closed");
               });
           }
           if (ans.disposition === "rejected") {
-            ctx.sequencer.disposition(id, "rejected", ans.reason ?? "answer rejected");
+            reject(id, ans.reason ?? "answer rejected");
             return;
           }
           ctx.expected.push({ inputId: id, applied: true });
           ctx.sequencer.disposition(id, "applied");
         })
         .catch(() => {
-          ctx.sequencer.disposition(id, "rejected", "session closed");
+          reject(id, "session closed");
         });
       return;
     }
     const prepare = deps.prepareTurn;
+    const preparedTurnId = ctx.getTurnId();
+    let sendCalled = false;
     let failureCode = "E-HUB-06";
     const delivery =
       prepare && mode === "queue"
@@ -727,6 +772,7 @@ const sessionStrategy = (
               drainWaiting();
               return null;
             }
+            ctx.preparedNotice(prepared.notice);
             const resume =
               prepared.native.kind === "resume" ? prepared.native.sessionId : undefined;
             if (openingStarted && resume !== sessionIdentity)
@@ -739,18 +785,31 @@ const sessionStrategy = (
             if (closed || ctx.isStopped()) return null;
             ctx.owedBytes.clear();
             ctx.handedOver();
+            sendCalled = true;
             return session.send(id, prepared.prompt);
           })()
-        : opening.then((session) => session.send(id, composed));
+        : opening.then((session) => {
+            if (closed) return null;
+            const prepared = ctx.comparison.prepare(id, text);
+            if (prepared.kind === "held") {
+              if (!waiting.some((w) => w.id === id)) waiting.push({ id, text, mode });
+              waiting.sort((a, b) => (arrival.get(a.id) ?? 0) - (arrival.get(b.id) ?? 0));
+              return null;
+            }
+            if (prepared.kind === "ready") ctx.delivering();
+            return session.send(id, prepared.kind === "ready" ? prepared.prompt : composed);
+          });
     void delivery
       .then((sent) => {
         if (sent === null) return;
         if (sent.disposition === "rejected") {
           if (prepare && mode === "queue") {
+            if (sent.rejectionEvidence)
+              deps.onDispatchRejected?.(preparedTurnId, sent.rejectionEvidence);
             refusePrepared(new Error(sent.reason ?? "send rejected"), "E-HUB-05");
             return;
           }
-          ctx.sequencer.disposition(id, "rejected", sent.reason ?? "send rejected");
+          reject(id, sent.reason ?? "send rejected");
           return;
         }
         // Only `started` is left: `rejected` returned above, and hcn has
@@ -762,17 +821,30 @@ const sessionStrategy = (
       })
       .catch((cause: unknown) => {
         if (prepare && mode === "queue") {
+          if (!sendCalled) deps.onDispatchRejected?.(preparedTurnId, "dispatch-not-called");
           refusePrepared(cause, failureCode);
-        } else ctx.sequencer.disposition(id, "rejected", "session closed");
+        } else reject(id, "session closed");
       });
   };
 
+  const drainComparisonWaiting = (): void => {
+    if (closed || turnRunning) return;
+    const due = waiting.splice(0, waiting.length);
+    for (const w of due) {
+      if (ctx.comparison.eligible(w.id, w.text)) sendNow(w.id, w.text, w.mode);
+      else waiting.push(w);
+    }
+  };
   return {
+    recordChanged: drainComparisonWaiting,
     onInput(id: string, text: string, mode: InputMode): void {
       // Before a process exists, a steer starts work rather than interrupting
       // it, so it must pass the same preparation boundary as a queued input.
       if (deps.prepareTurn && !openingStarted && mode === "steer") mode = "queue";
       if (deps.prepareTurn && openingStarted && mode !== "queue") ctx.handedOver();
+      if (received.has(id)) return;
+      received.add(id);
+      arrival.set(id, arrival.size);
       // A steer or answer is a request to interrupt/unblock, so it goes through mid-turn.
       // Everything else waits for the answer in progress to finish, which
       // is what the interactive path already does - the Stop hook fires at
@@ -859,7 +931,11 @@ const sessionStrategy = (
               } finally {
                 // Backstop for a turn that ends without a terminal event: an
                 // abandoned iterator, or a process that died mid-turn.
-                boundary();
+                // There is no safe boundary to dispatch queued work until
+                // the pump settles this unacknowledged turn. Leave it in
+                // the record for explicit recovery after source cleanup.
+                if (!boundaryReached && deps.managed) turnRunning = false;
+                else boundary();
               }
             },
           };
@@ -940,14 +1016,16 @@ const turnStrategy = (
       return {
         async next(): Promise<IteratorResult<AsyncIterable<HarnessEvent>>> {
           while (!closed) {
-            if (queue.length === 0) {
+            if (!queue.some((item) => ctx.comparison.eligible(item.id, item.text))) {
               await new Promise<void>((resolve) => {
                 resolveWaiting = resolve;
               });
               if (closed)
                 return { done: true, value: undefined as unknown as AsyncIterable<HarnessEvent> };
             }
-            const next = queue.shift();
+            const at = queue.findIndex((item) => ctx.comparison.eligible(item.id, item.text));
+            if (at === -1) continue;
+            const next = queue[at];
             if (next === undefined) continue;
             // RFC-12: the moment before the spawn is a turn boundary. A
             // changed preference ends this source instead of spawning: the
@@ -960,6 +1038,12 @@ const turnStrategy = (
               wake();
               return { done: true, value: undefined as unknown as AsyncIterable<HarnessEvent> };
             }
+            const prepared = deps.prepareTurn
+              ? { kind: "ordinary" as const }
+              : ctx.comparison.prepare(next.id, next.text);
+            if (prepared.kind === "held") continue;
+            queue.splice(at, 1);
+            if (prepared.kind === "ready") ctx.delivering();
             const turnId = ctx.getTurnId();
             // Disposition flips queued→applied at turn start — the host's
             // pump will have already shifted expected and dispatched;
@@ -1004,13 +1088,17 @@ const turnStrategy = (
                 continue;
               }
               composedPrompt = prepared.prompt;
+              ctx.preparedNotice(prepared.notice);
               resumeId = prepared.native.kind === "resume" ? prepared.native.sessionId : undefined;
               ctx.owedBytes.clear();
             } else {
-              composedPrompt = composeAvailableState(
-                composeArtifactPrompt(composeAnnotationPrompt(next.text), "headless-turn"),
-                artifactState(deps, ctx),
-              );
+              composedPrompt =
+                prepared.kind === "ready"
+                  ? prepared.prompt
+                  : composeAvailableState(
+                      composeArtifactPrompt(composeAnnotationPrompt(next.text), "headless-turn"),
+                      artifactState(deps, ctx),
+                    );
             }
             const attemptResume = resumeId !== undefined;
             if (ctx.isStopped())
@@ -1110,8 +1198,12 @@ const turnStrategy = (
     },
   };
 
+  const received = new Set<string>();
   return {
+    recordChanged: wake,
     onInput(id: string, text: string, _mode: InputMode): void {
+      if (received.has(id)) return;
+      received.add(id);
       // Turn mode runs one process per turn, so every input already waits
       // for a boundary and there is nothing a steer could interrupt. The
       // reducer refuses `steer` on this profile with `steer-unsupported`
@@ -1195,6 +1287,13 @@ export const createHeadlessHost = (
     },
   };
   const sequencer = createSequencer(deps, profile);
+  let recoveryReplay: readonly Frame[] = [];
+  try {
+    recoveryReplay = deps.onAttached?.() ?? [];
+  } catch (cause) {
+    sequencer.detachOnce("shutdown");
+    throw cause;
+  }
   let currentTurnId = deps.mintTurnId();
   const expected: Array<{ inputId: string; applied: boolean }> = [];
 
@@ -1217,6 +1316,15 @@ export const createHeadlessHost = (
   };
 
   const ctx: HostContext = {
+    preparedNotice: (message) => {
+      if (message)
+        sequencer.emit(currentTurnId, {
+          kind: EventKind.error,
+          code: "context-summarized",
+          message,
+          terminal: false,
+        });
+    },
     handedOver: () => {
       handedOverAt = clock();
       stallReported = false;
@@ -1247,6 +1355,20 @@ export const createHeadlessHost = (
     },
     expected,
     owedBytes: new Set<string>(),
+    comparison: createComparisonDelivery({
+      capable: true,
+      snapshot: deps.host.comparisonSnapshot,
+      head: (id) => deps.host.artifactHeads().get(id),
+      hold: (event) => {
+        if (deps.host.inputStatus?.(event.inputId) !== "queued")
+          sequencer.disposition(event.inputId, "queued");
+        sequencer.emit(currentTurnId, event);
+      },
+    }),
+    delivering: () => {
+      handedOverAt = clock();
+      stallReported = false;
+    },
     boundaryChange: () => deps.driverChangeAtBoundary?.() ?? false,
     driverChange: () => setSourceEnd({ kind: "driver-change" }),
     openRefused: (message: string) => setSourceEnd({ kind: "open-refused", message }),
@@ -1346,10 +1468,14 @@ export const createHeadlessHost = (
         harnessSpoke();
         sequencer.emit(turnId, event);
         if (event.kind === EventKind.done && !advanced) {
+          // A persistent session keeps this iterator open until the next
+          // turn arrives. Its terminal acknowledgement is the boundary.
+          if (profile === "headless-session") deps.onTurnSettled?.(turnId);
           currentTurnId = deps.mintTurnId();
           advanced = true;
         }
       }
+      deps.onTurnSettled?.(turnId);
       if (!advanced) currentTurnId = deps.mintTurnId();
     }
   })();
@@ -1386,7 +1512,11 @@ export const createHeadlessHost = (
         });
         return;
       }
-      if (cause instanceof HubError || cause instanceof ContextPreparationError) {
+      if (
+        cause instanceof HubError ||
+        cause instanceof ContextPreparationError ||
+        cause instanceof ExecutionSettlementError
+      ) {
         ctx.sequencer.emit(ctx.getTurnId(), {
           kind: EventKind.error,
           code: cause.code,
@@ -1476,7 +1606,20 @@ export const createHeadlessHost = (
   // Offset dedup is the store's, tested there, and comes into its own in the
   // tailing work, where effects arrive that attachReplay cannot see because
   // another process appended them.
-  for (const frame of sequencer.attachReplay) receive(frame);
+  try {
+    const replay = [...sequencer.attachReplay, ...recoveryReplay];
+    const inputs = replay
+      .filter((frame): frame is Extract<Frame, { kind: "input" }> => frame.kind === "input")
+      .sort((a, b) => a.seq - b.seq);
+    for (const frame of replay) if (frame.kind !== "input") receive(frame);
+    for (const frame of inputs) receive(frame);
+  } catch (cause) {
+    stop({
+      kind: "store-failed",
+      code: classifyStoreFailure(cause) ?? "record-write-failed",
+      operation: "replay",
+    });
+  }
   if (!stopped) {
     const cur = deps.host.cursor();
     const batch = deps.host.collectEffects(cur);
@@ -1486,6 +1629,9 @@ export const createHeadlessHost = (
   return {
     receive,
     settled,
+    recordChanged: () => {
+      if (!stopped) strategy?.recordChanged();
+    },
     close: (): void => {
       if (stopped) return;
       clearInterval(watchdog);

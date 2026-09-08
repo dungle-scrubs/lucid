@@ -66,6 +66,7 @@ const verify = async (): Promise<void> => {
     "note-card",
     "doc-waiting",
     "input-recovery",
+    "working-row",
     "empty-panel",
   ]) {
     if (!html.includes(needed)) throw new Error(`${OUTFILE} is missing ${needed}.`);

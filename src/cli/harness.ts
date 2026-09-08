@@ -42,7 +42,8 @@ export const harnessNames = (): readonly string[] => Object.keys(BY_NAME);
 export const supportsSession = async (
   runner: HarnessRunner,
   harness: HarnessName,
-): Promise<boolean> => (await runner.inspect(harness)).session;
+  signal?: AbortSignal,
+): Promise<boolean> => (await runner.inspect(harness, signal ? { signal } : undefined)).session;
 
 /** RFC-12 startup resolution. An explicit harness named at spawn - a flag
  * or `LUCID_HARNESS` - pins the harness for the process's life and is

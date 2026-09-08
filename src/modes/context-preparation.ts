@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runIsolatedText } from "../harness/isolated-text.js";
 import type { ContextCount, ContextCountOptions, HarnessRunner } from "../harness/runner.js";
+import { HubError } from "../protocol/hub-errors.js";
 import { hashBlob } from "../store/blobs.js";
 import type { ContextEntry, ConversationContext } from "../store/conversation-context.js";
 import { ContextPreparationError } from "../store/conversation-context.js";
@@ -31,6 +32,18 @@ export interface ContextPreparationRequest {
 
 const fits = (count: Accounting): boolean => count.totalTokens <= count.inputLimitTokens;
 const measured = (count: ContextCount): Accounting => {
+  if (
+    count.status === "unavailable" &&
+    (count.reason === "unsupported-adapter" ||
+      count.reason === "unverified-adapter" ||
+      count.reason === "model-divergence")
+  )
+    throw new HubError(
+      `Context accounting is unavailable for this selection: ${count.reason}. Change the driver settings or verify the installed harness before retrying.`,
+      "E-HUB-03",
+      400,
+      count.reason === "unsupported-adapter" ? ["change-settings"] : ["change-settings", "retry"],
+    );
   if (count.status !== "available")
     throw new ContextPreparationError(`Context accounting is unavailable: ${count.reason}`);
   return count;
@@ -55,7 +68,7 @@ function recentBoundary(history: readonly ContextEntry[], keep = 4): number {
       messages++;
     if (messages === keep) return index;
   }
-  return 0;
+  return messages === 0 ? Math.max(0, history.length - keep) : 0;
 }
 
 function summaryPrompt(source: string): string {
@@ -240,6 +253,7 @@ export function createContextPreparer(
       sameSelection(mandatory, baseline);
       if (!fits(mandatory)) continue;
       await runner.inspect(route.harness, {
+        signal: route.signal,
         model: route.model,
         effort: route.effort,
         provider: route.provider,
@@ -284,7 +298,7 @@ export function createContextPreparer(
     try {
       return await prepare(request);
     } catch (cause) {
-      if (cause instanceof ContextPreparationError) throw cause;
+      if (cause instanceof ContextPreparationError || cause instanceof HubError) throw cause;
       throw new ContextPreparationError("Isolated context preparation could not complete", {
         cause,
       });

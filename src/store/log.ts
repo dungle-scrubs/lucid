@@ -1,4 +1,6 @@
 import { createReadStream } from "node:fs";
+import { comparisonMetadata, validateComparisonSource } from "../protocol/comparison-note.js";
+import { refuseInputAdmission } from "../protocol/reducer.js";
 import { initializeNaming } from "./conversation-naming.js";
 import { pathsForDir } from "./errors.js";
 /**
@@ -438,6 +440,12 @@ export interface TranscriptInput {
   readonly mode: InputMode;
   readonly status: "outstanding" | "queued" | "applied" | "rejected";
 }
+
+/** Repeat-safe acceptance is separate from source-protocol duplicate refusal. */
+export type InputSubmission =
+  | { readonly kind: "replay"; readonly inputId: string }
+  | { readonly kind: "conflict" }
+  | { readonly kind: "transition"; readonly result: ReduceResult };
 
 export interface Transcript {
   readonly events: readonly TranscriptEvent[];
@@ -986,6 +994,10 @@ export interface ConversationLog {
    * not a fold (RFC-06 storage). */
   artifactIndex(): ReadonlyMap<string, number>;
   artifactHeads(): ReadonlyMap<string, number>;
+  comparisonSnapshot(artifactId: string): {
+    readonly head: number | null;
+    readonly artifact: ArtifactVersion | null;
+  };
   artifactVersions(): ArtifactVersions;
   /** artifactId -> its title, for every artifact one has been written for.
    * An id absent from this map has no title and displays as its id. */
@@ -1061,6 +1073,8 @@ export interface ConversationLog {
       frame: import("../protocol/index.js").Frame | null;
     },
   ): ReduceResult;
+  /** Resolve accepted queue-input identity under the same lock as admission. */
+  submitInput(input: { readonly id: string; readonly text: string }, at: number): InputSubmission;
   /** Fold the log under the append lock and collect the effects produced
    * by entries at or after `fromOffset`, in log order. Each effect is
    * paired with the byte offset of the entry that produced it (RFC-04 R4:
@@ -1209,10 +1223,47 @@ export const createLog = (
   };
   const inspect = <TValue>(read: (snapshot: LockedRecordSnapshot) => TValue): TValue =>
     transaction((_folded, raw) => ({ line: null, result: read(lockedSnapshot(raw)) }));
+  const comparisonAdmission = (
+    text: string,
+    mode: InputMode,
+    raw: Buffer,
+  ): "E-COMP-02" | "E-COMP-03" | null => {
+    const metadata = comparisonMetadata(text);
+    if (metadata.kind === "none") return null;
+    if (metadata.kind === "invalid" || mode !== "queue") return "E-COMP-03";
+    const batch = metadata.batch;
+    const read = (version: number): ArtifactVersion | null => {
+      const offset = curArtifactIndex.get(artifactKey(batch.artifactId, version));
+      return offset === undefined ? null : readArtifactAtOffset(raw, offset);
+    };
+    if (
+      !read(batch.comparison.earlierVersion) ||
+      !validateComparisonSource(batch, read(batch.version))
+    )
+      return "E-COMP-03";
+    const reviewed = read(batch.comparison.reviewedVersion);
+    if (
+      curArtifactHeads.get(batch.artifactId) !== batch.comparison.reviewedVersion ||
+      reviewed?.hash !== batch.comparison.reviewedHash
+    )
+      return "E-COMP-02";
+    return null;
+  };
 
   const append: ConversationLog["append"] = (produce) =>
-    transaction(() => {
+    transaction((_folded, raw) => {
       const { entry, result, frame } = produce(curState);
+      if (
+        (entry?.src === "input" || entry?.src === "managed-input") &&
+        result.verdict === "accepted"
+      ) {
+        const issue = comparisonAdmission(entry.input.text, entry.input.mode, raw);
+        if (issue)
+          return {
+            line: null,
+            result: refuseInputAdmission(curState, entry.input, issue, entry.at),
+          };
+      }
       if (entry === null || result.verdict !== "accepted") {
         curState = result.state;
         return { line: null, result };
@@ -1231,6 +1282,34 @@ export const createLog = (
             }
           }
         },
+      };
+    });
+
+  const submitInput: ConversationLog["submitInput"] = (input, at) =>
+    transaction<InputSubmission>((folded, raw) => {
+      const accepted = folded.transcript.inputs.find((item) => item.id === input.id);
+      if (accepted !== undefined) {
+        return {
+          line: null,
+          result:
+            accepted.text === input.text && accepted.mode === "queue"
+              ? { inputId: accepted.id, kind: "replay" }
+              : { kind: "conflict" },
+        };
+      }
+      const queued = { ...input, mode: "queue" as const };
+      const entry: LogEntry = { at, input: queued, src: "input", v: 1 };
+      const issue = comparisonAdmission(input.text, "queue", raw);
+      const result = issue
+        ? refuseInputAdmission(folded.state, queued, issue, at)
+        : enqueueInput(folded.state, queued, at);
+      return {
+        line: result.verdict === "accepted" ? lineOf(entry) : null,
+        onWritten: () => {
+          curState = result.state;
+          collectTranscript(acc, entry, null, result);
+        },
+        result: { kind: "transition", result },
       };
     });
 
@@ -1382,6 +1461,19 @@ export const createLog = (
     goodBytes: () => curGoodBytes,
     artifactIndex: () => new Map(curArtifactIndex),
     artifactHeads: () => new Map(curArtifactHeads),
+    comparisonSnapshot: (artifactId) =>
+      transaction((_folded, raw) => {
+        const head = curArtifactHeads.get(artifactId) ?? null;
+        const offset =
+          head === null ? undefined : curArtifactIndex.get(artifactKey(artifactId, head));
+        return {
+          line: null,
+          result: {
+            head,
+            artifact: offset === undefined ? null : readArtifactAtOffset(raw, offset),
+          },
+        };
+      }),
     artifactVersions: () => copyVersions(curArtifactVersions),
     artifactTitles: () => new Map(curArtifactTitles),
     readArtifact,
@@ -1391,6 +1483,7 @@ export const createLog = (
     cursor: () => curCursor,
     advanceCursor,
     append,
+    submitInput,
     collectEffects,
     view: () => {
       const folded = foldLog(

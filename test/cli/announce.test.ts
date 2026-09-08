@@ -51,3 +51,18 @@ else console.log(JSON.stringify({name:'claude',bin:'claude',sessionMode:{},verif
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("hook attachment intent is stable for explicit starts and absent for compaction", async () => {
+  const { announcementIntent } = await import("../../src/cli/hooks/announce.js");
+  const { readProcessOwner } = await import("../../src/process-owner.js");
+  const owner = readProcessOwner(process.pid);
+  if (!owner) throw new Error("Test owner unavailable");
+  const intent = announcementIntent("startup", "native", owner);
+  expect(intent).toMatchObject({ attachmentOrigin: "explicit" });
+  expect(announcementIntent("startup", "native", owner)).toEqual(intent);
+  expect(announcementIntent("compact", "native", owner)).toEqual({ attachmentOrigin: "automatic" });
+  expect(announcementIntent("unknown", "native", owner)).toEqual({ attachmentOrigin: "automatic" });
+  expect(announcementIntent("resume", "native", undefined)).toEqual({
+    attachmentOrigin: "automatic",
+  });
+});

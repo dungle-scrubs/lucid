@@ -125,3 +125,51 @@ test("an attempt is durable before dispatch and cannot be started twice after re
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("legacy adoption is durable, executor-only, and cannot authorize an already applied input", () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-adoption-"));
+  const { paths, secret } = createConversationRecord(root, "adoption");
+  let lease = false;
+  const open = () =>
+    createConversationHost(paths.dir, {
+      now: () => 1,
+      presence: () => false,
+      executorLease: () => lease,
+      onEffect: () => {},
+      onRecord: () => {},
+    });
+  let host = open();
+  const fact = { kind: "legacy-adopted", inputId: "queued", attempt: 0 } as const;
+  try {
+    host.enqueueInput({ id: "queued", text: "Pending legacy input", mode: "queue" });
+    expect(host.writeExecution(fact).verdict).toBe("refused");
+    lease = true;
+    expect(host.writeExecution(fact).verdict).toBe("accepted");
+    host.close();
+    host = open();
+    expect(host.state().executions.queued).toMatchObject({ kind: "requested", attempt: 0 });
+    expect(host.state().inputs.find((input) => input.id === "queued")?.managed).toBe(true);
+    expect(host.transcript().inputs).toHaveLength(1);
+    expect(host.writeExecution(fact).verdict).toBe("refused");
+    host.handleFrame(
+      JSON.stringify({
+        kind: "attach",
+        conversationId: "adoption",
+        secret,
+        version: 1,
+        harness: "claude",
+        profile: "headless-turn",
+      }),
+    );
+    host.enqueueInput({ id: "applied", text: "Already dispatched", mode: "queue" });
+    expect(
+      host.handleFrame(
+        JSON.stringify({ kind: "disposition", epoch: 1, inputId: "applied", outcome: "applied" }),
+      ).verdict,
+    ).toBe("accepted");
+    expect(host.writeExecution({ ...fact, inputId: "applied" }).verdict).toBe("refused");
+  } finally {
+    host.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -12,9 +12,12 @@
  * the Stop hook.
  */
 
+import { createHash } from "node:crypto";
 import { nativeOwner } from "../../harness/native-owner.js";
 import { guardHookEntry, parseAnnouncePayload } from "../../modes/interactive-host.js";
 import { EventKind } from "../../protocol/events.js";
+import type { AttachmentIntent } from "../../protocol/frames.js";
+import type { ProcessOwner } from "../../protocol/process-owner.js";
 import { createTurnIds } from "../../protocol/turn-id.js";
 import { openWriter, StoreError } from "../../store/store.js";
 import { exitHook, readStdin } from "./delivery.js";
@@ -23,6 +26,23 @@ export interface AnnounceResult {
   readonly ok: boolean;
   readonly code?: "hook-resolution-failed";
   readonly message?: string;
+}
+
+/** SessionStart sources are defined by https://code.claude.com/docs/en/hooks#sessionstart.
+ * Compaction and uncorroborated starts cannot release a managed comparison hold. */
+export function announcementIntent(
+  source: string,
+  sessionId: string,
+  owner: ProcessOwner | undefined,
+): AttachmentIntent {
+  if (!owner || !["startup", "resume", "clear", "fork"].includes(source))
+    return { attachmentOrigin: "automatic" };
+  return {
+    attachmentOrigin: "explicit",
+    explicitAttachmentId: createHash("sha256")
+      .update(JSON.stringify([sessionId, source, owner]))
+      .digest("hex"),
+  };
 }
 
 export const announce = async (stdin: string): Promise<AnnounceResult> => {
@@ -39,6 +59,7 @@ export const announce = async (stdin: string): Promise<AnnounceResult> => {
     const host = openWriter(recordDir, { presence: () => true });
     const frame = {
       kind: "attach" as const,
+      ...announcementIntent(input.source, input.sessionId, owner),
       conversationId,
       secret,
       profile: "interactive" as const,

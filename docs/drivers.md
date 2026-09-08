@@ -39,6 +39,39 @@ Binary resolution happens once: `LUCID_HCN`, then the repository's
 package pin, runtime version floor, and recorded fixtures move together;
 see [AGENTS](../AGENTS.md).
 
+## Comparison delivery
+
+A historical comparison note uses the selected driver and existing queue
+boundary. Headless sessions prepare it immediately before send; headless
+turns prepare it before spawn, including a fresh fallback after refused
+session recall. Interactive hooks prepare it at their delivery boundary.
+Each supplies artifact emission teaching, historical source and reviewed
+versions, and the complete current document. Only the dispatch version is
+the next emission's `replaces` target. Human saves and agent-authored current
+documents are included regardless of prior context delivery.
+
+Preparation verifies a fresh snapshot and hash and applies the existing
+document and encoded transport limits. Missing, busy, unreadable, older,
+unverifiable, oversized, or unsupported context holds the input. It records
+queued disposition and a nonterminal `E-COMP-07` error naming the input,
+artifact, failed head, observed cause, and applicable recovery. It records
+neither applied nor rejected and sends no truncated or historical substitute.
+
+Held inputs keep their original acceptance order while eligible inputs run.
+All-held queues remain idle. Within one participation, only a strictly newer
+artifact head permits another attempt. An explicit new attachment permits
+one attempt on the same repaired head. Replays, heartbeats, timers, and later
+ordinary inputs cannot retry a hold. Hooks reconstruct holds from the current
+attachment epoch's durable errors. Success clears the active held explanation;
+prior errors stay in history. No hold causes automatic takeover or reopening.
+
+Observe-only and cooperative delivery cannot send comparison context. Changing
+a preference does not convert an interactive session into a managed one.
+Hook reasons must fit whole within 4,000 UTF-8 bytes after JSON escaping.
+Ordinary hook delivery also preserves its input identity and full text;
+oversized ordinary input remains pending with an explicit injection refusal.
+Creating chunk inputs is not a substitute for transporting their bytes.
+
 ## Preference and actual driver
 
 New hub conversations save a complete selection in `driver.json`: version 1,
@@ -104,8 +137,8 @@ accepts a client creationId, absolute workingDirectory, and optional settings.
 It returns the same conversationId for an identical retry, including after a
 lost response or restart. The browser retains uncertain requests until retry
 or explicit discard. Discard does not delete a conversation already created.
-Creation and opening start no harness or model call. Automatic workers and
-resume behavior remain later RFC 15 slices.
+Creation and opening start no harness or model call. Submitting an accepted
+prompt requests a worker to start or resume the saved selection.
 
 The working folder and repository project are saved separately. In a nested
 repository the nearest repository owns the project; outside Git the folder
@@ -220,8 +253,8 @@ in the transcript. This does not claim that the person's whole task is
 finished. Their answer is a new input that continues the conversation; it
 does not require repeating the already acknowledged asking turn.
 
-These preparation APIs do not yet enable managed dispatch. RFC 15 still
-requires verified hcn budgets, bounded summarization, and worker integration.
+The production browser server enables managed dispatch through these
+preparation APIs. Accepted input authorizes work; opening a page does not.
 
 `HarnessRunner.countContext` asks the selected hcn executable to account for
 the complete prepared prompt, including native session occupancy when resuming.
@@ -231,9 +264,12 @@ model capacity table or text-to-token estimate lives in Lucid. Accounting
 uses the same cwd, saved choices, resume ID, and isolation as the intended
 operation. Its bounded process has cancellation, output limits, and forced
 cleanup. Structured refusal codes survive; raw process diagnostics do not.
-This optional hcn mechanism is detected separately from mode support. The
-new command is still under local development and is not part of the pinned
-0.6.2 dependency; managed execution remains disabled until integration lands.
+This hcn mechanism is detected separately from mode support. The pinned
+hcn 0.6.4 release supplies native-resume verification and context accounting.
+Its verified accounting adapter currently supports Claude headless-turn.
+Other selections stay held until accounting is supported; an unsupported
+adapter asks for changed settings, while an unverified installation can be
+rechecked after repair. Lucid never substitutes an estimated budget.
 
 Both headless profiles accept a pre-dispatch preparation callback. It supplies
 the complete, accounted prompt, including protocol teaching and current
@@ -272,15 +308,15 @@ history, but the complete resulting prompt is always recounted. The result
 includes summary notice data; the controller must display it and revalidate
 its dispatch snapshot. This module does not authorize or launch the pending
 task. Unknown budgets, unavailable isolation, incomplete summaries, changed
-executables/models, and oversized mandatory content hold with E-HUB-06.
+executables/models, and oversized mandatory content hold preparation.
+Unsupported or unverified adapters use E-HUB-03 settings remedies; other
+preparation failures use E-HUB-06.
 The offered full context copy remains canonical for retrieval; summaries do
-not alter the record. Worker integration and browser notices remain active
-RFC 15 work before managed execution can be enabled.
+not alter the record. The browser records a notice when a turn uses a summary.
 
 All one-turn prompts cross the Lucid-to-hcn boundary over stdin, including
 ordinary task prompts. The native harness transport still belongs to hcn;
-its native argument-size limit must be resolved before enabling large-context
-managed dispatch. Isolated text collection waits for process cleanup before
+hcn 0.6.4 sends large Claude prompts over stdin. Isolated text collection waits for process cleanup before
 returning to the temporary-directory owner. Blank title validation remains
 with the naming store so its repair attempt is preserved.
 
@@ -290,7 +326,9 @@ folder revisions. Preparation runs outside that lock. Immediately before
 recording attempt-started, the writer checks that stamp under the same lock
 and rechecks executor authority through the execution reducer. A change
 refuses the stale dispatch without consuming an attempt. Cursor advancement
-and unrelated display metadata do not invalidate prepared content. Folder
+and unrelated display metadata do not invalidate prepared content. Concurrent
+inputs also preserve the immutable captured range: confirmation stops at that
+gap, and the following turn receives the new recorded context. Folder
 availability is checked by preparation outside the append lock.
 
 Managed preparation derives native coverage from the same locked state as
@@ -303,3 +341,32 @@ Preparation reserves each turn ID until it settles; a repeated ID cannot
 replace a working turn's offered copy. Releasing a pending preparation cancels
 its accounting. Cleanup failures retain owned copies for a later cleanup
 attempt and do not prevent cleanup of the other copies.
+
+## Managed hub workers
+
+Managed execution uses the existing driven-conversation runtime with saved
+settings and the exact recorded working folder. The launch request names
+an existing conversation and accepted input. Inherited harness pins do not
+replace saved choices. Contenders attempt the executor lease without waiting;
+a loser exits before opening a harness.
+
+Preparation counts the complete offered context before recording an attempt.
+The attempt retains its input identity, selected route, native session intent,
+and offered range. Successful settlement confirms coverage only from the
+recorded terminal acknowledgement. A lost process leaves an uncertain attempt;
+reconciliation cannot dispatch it again without explicit fresh authorization.
+An explicit session send refusal is evidence that dispatch did not occur.
+A closed pipe or unknown disposition is not that evidence.
+
+Both headless profiles exit after draining work and a short idle interval.
+Preparation counts as active work. Cleanup finishes before the executor lease
+is released. A persistent session remains available during that interval. Worker
+shutdown does not cancel or remove accepted input from the record.
+
+A compatible source adopts never-applied legacy queued inputs with a durable
+`legacy-adopted` execution fact under the executor lease. It preserves their
+accepted IDs and sequence numbers. Applied legacy inputs cannot be adopted.
+A completed resumed turn reporting a different native identity leaves coverage
+unconfirmed and continues; the next turn receives the missing context.
+Startup lock contention leaves intent eligible. Other pre-start installation
+failures offer Retry after repair without creating another accepted input.

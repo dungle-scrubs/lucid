@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { createHcnRunner } from "../harness/hcn-runner.js";
@@ -12,7 +11,7 @@ import { pathsForDir } from "../store/errors.js";
 import { acquireAppendLock, LockError } from "../store/flock.js";
 import { recoverConversationNaming } from "../store/log.js";
 import { readRecordMetadata } from "../store/record-identity.js";
-import { LUCID_RECORD_DIR, LUCID_TURN_ID, selfInvocation } from "./record-addressing.js";
+import { requestBackgroundWorker } from "./background-worker.js";
 
 const wakePath = (root: string): string => join(root, ".naming-wake");
 const wakeVersion = (root: string): string => {
@@ -28,18 +27,7 @@ export function requestNaming(root: string): void {
   try {
     mkdirSync(root, { recursive: true });
     atomicSidecar(wakePath(root), crypto.randomUUID());
-    const [binary, ...args] = selfInvocation(["_name-titles", root]);
-    if (!binary) return;
-    const env: NodeJS.ProcessEnv = { ...process.env, LUCID_ROOT: root };
-    delete env[LUCID_RECORD_DIR];
-    delete env[LUCID_TURN_ID];
-    const child = spawn(binary, args, {
-      detached: true,
-      stdio: "ignore",
-      env,
-    });
-    child.on("error", () => {});
-    child.unref();
+    requestBackgroundWorker(["_name-titles", root], root);
   } catch {
     // Submission already owns a durable marker. A later wake or server restart retries discovery.
   }

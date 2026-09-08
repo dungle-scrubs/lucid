@@ -38,7 +38,22 @@ export interface Msg {
   readonly sentBatch?: SentBatch;
 }
 
+/** The pinned assistant-ui repository does not recompute a node's depth
+ * after inserting a preceding save or note. Include position in its view ID
+ * so it creates the node at the correct depth. Durable input IDs stay intact
+ * in sentBatch and never depend on this presentation key. */
+export const runtimeMessage = (message: Msg, index: number) => ({
+  id: JSON.stringify([message.id, index]),
+  role: message.role,
+  content: [{ type: "text" as const, text: message.text }],
+});
+
 export interface SentBatch {
+  readonly comparison?: import("../../protocol/comparison-note.js").ComparisonContext;
+  readonly comparisonUsable?: boolean;
+  readonly inputId?: string;
+  readonly status?: string;
+  readonly hold?: string;
   readonly artifactId: string;
   readonly version: number;
   readonly notes: readonly {

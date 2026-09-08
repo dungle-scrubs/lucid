@@ -49,12 +49,14 @@ import {
 } from "../protocol/context-coverage.js";
 import {
   type AttemptStart,
+  appliedRecovery,
   parseExecutionFact,
   reconcileExecutionFact,
   reduceExecution,
   refuseExecution,
 } from "../protocol/execution.js";
-import type { HarnessName } from "../protocol/frames.js";
+import type { Frame, HarnessName } from "../protocol/frames.js";
+import { supportsManagedInput } from "../protocol/frames.js";
 import { HubError } from "../protocol/hub-errors.js";
 import type { Effect } from "../protocol/index.js";
 import {
@@ -71,7 +73,7 @@ import {
   reduce,
   type TransitionRecord,
 } from "../protocol/index.js";
-import { enqueueManagedInput } from "../protocol/reducer.js";
+import { enqueueManagedInput, inputFrame } from "../protocol/reducer.js";
 import {
   captureDispatchContext,
   type DispatchSnapshot,
@@ -195,10 +197,11 @@ export interface ConversationHost {
   ): DispatchSnapshot;
   writePreparedExecution(fact: AttemptStart, stamp: string): ReduceResult;
   hasAcceptedInput(id: string): boolean;
+  recoveryInputs(): readonly Frame[];
   contextCoverage(harness: HarnessName, sessionId: string): number;
   offerConversationContext(offer: ContextOfferRequest): ReduceResult;
   confirmConversationContext(turnId: string): ReduceResult;
-  writeExecution(fact: unknown): ReduceResult;
+  writeExecution(fact: unknown, applicable?: () => boolean): ReduceResult;
   reconcileExecution(inputId: string, expectedAttempt: number): ReduceResult;
   acceptInput(
     input: { readonly id: string; readonly text: string; readonly mode: "queue" },
@@ -227,6 +230,13 @@ export interface ConversationHost {
     },
     completeSettings?: DriverChoice,
   ): ReduceResult;
+  /** Browser-style queue submission with accepted-history reconciliation. */
+  submitInput(input: {
+    readonly id: string;
+    readonly text: string;
+  }):
+    | { readonly inputId: string; readonly verdict: "accepted" }
+    | { readonly issue: string; readonly verdict: "refused" };
   grantCredit(tokens: number): ReduceResult;
   /** Fold the log under the append lock and collect effects from `fromOffset`.
    * Thin delegation to the log's seam — the lock, repair, and return-
@@ -261,6 +271,10 @@ export interface ConversationHost {
     | { verdict: "accepted"; hash: string }
     | { verdict: "refused"; issue: "attachment-too-large" | "attachment-invalid" };
   /** Read an artifact version by seek. */
+  comparisonSnapshot(artifactId: string): {
+    readonly head: number | null;
+    readonly artifact: import("./log.js").ArtifactVersion | null;
+  };
   readArtifact(artifactId: string, version: number): import("./log.js").ArtifactVersion | null;
   /** Append an artifact version. Over-size is refused and the record still
    * opens; hash is written for every version from the first. */
@@ -299,6 +313,12 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     epoch: log.state().epoch,
   });
 
+  const publish = (result: ReduceResult): ReduceResult => {
+    if (deps.executorLease()) for (const effect of result.effects) deps.onEffect(effect);
+    deps.onRecord(result.record);
+    return result;
+  };
+
   const transactDynamic = (produce: Parameters<typeof log.append>[0]): ReduceResult => {
     const result = log.append(produce);
     // RFC-04 R2: only the presence-lock holder acts on effects. A
@@ -307,9 +327,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     // this process hands none to its own sink. The gate reads
     // `executorLease`, never `presence`: that probe reports the
     // interactive process's liveness, not this process's lock ownership.
-    if (deps.executorLease()) for (const effect of result.effects) deps.onEffect(effect);
-    deps.onRecord((result as unknown as { record: HostRecord }).record);
-    return result;
+    return publish(result);
   };
 
   const transact = (
@@ -409,14 +427,24 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     writePreparedExecution: (fact, stamp) =>
       writeExecution((state) => {
         if (
-          dispatchStamp(dir, fact.inputId, fact.context, state.epoch, log.artifactHeads()) !==
-            stamp ||
-          fact.context.through !== state.seq + 1
+          dispatchStamp(dir, fact.inputId, fact.context, state.epoch, log.artifactHeads()) !== stamp
         )
           return { issue: "execution-stale" };
+        // Concurrent appends do not change the captured immutable range.
+        // Confirmation stops at that gap so the next turn receives it.
         return fact;
       }),
     hasAcceptedInput: (id) => log.acceptedInput(id) !== undefined,
+    recoveryInputs: () => {
+      const state = log.state();
+      return Object.entries(state.executions)
+        .filter(([id]) => appliedRecovery(state, id))
+        .flatMap(([id]) => {
+          const input = log.acceptedInput(id);
+          return input ? [inputFrame({ ...input, mode: "queue", managed: true })] : [];
+        })
+        .sort((a, b) => (a.kind === "input" ? a.seq : 0) - (b.kind === "input" ? b.seq : 0));
+    },
     reconcileExecution: (inputId, attempt) =>
       writeExecution((state) => reconcileExecutionFact(state, inputId, attempt)),
     contextCoverage: (harness, sessionId) =>
@@ -483,6 +511,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     collectEffects,
     artifactIndex,
     artifactHeads: () => log.artifactHeads(),
+    comparisonSnapshot: (artifactId) => log.comparisonSnapshot(artifactId),
     artifactVersions: () => log.artifactVersions(),
     readArtifact,
     writeArtifact,
@@ -567,12 +596,26 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
       completeSettings?: DriverChoice,
     ): ReduceResult => {
       const at = deps.now();
-      const entry: LogEntry = { v: 1, at, src: "input", input, namingEligible: true };
-      return transact(entry, (s) => {
-        const r = enqueueInput(s, input, at);
-        if (r.verdict === "accepted" && completeSettings)
+      return transactDynamic((state) => {
+        const managed =
+          input.mode === "queue" && supportsManagedInput(state.attachment?.capabilities);
+        const result = managed
+          ? enqueueManagedInput(state, input, at)
+          : enqueueInput(state, input, at);
+        if (result.verdict === "accepted" && completeSettings)
           completeLegacyPreference(dir, completeSettings);
-        return { result: r, frame: null };
+        const entry: LogEntry = managed
+          ? {
+              v: 1,
+              at,
+              src: "managed-input",
+              payloadVersion: 1,
+              input: { ...input, mode: "queue" },
+              namingEligible: true,
+              intent: { kind: "requested", attempt: 0 },
+            }
+          : { v: 1, at, src: "input", input, namingEligible: true };
+        return { entry, result, frame: null };
       });
     },
     acceptInput: (input, options = {}) => {
@@ -630,8 +673,21 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
         ? { verdict: "accepted", receipt: { inputId: input.id, seq: acceptedSeq } }
         : { verdict: "refused", issue: conflict ? "E-COMP-06" : result.issue };
     },
-    writeExecution: (raw) =>
-      writeExecution(() => parseExecutionFact(raw) ?? { issue: "invalid-execution" }),
+    writeExecution: (raw, applicable) =>
+      writeExecution(() =>
+        applicable && !applicable()
+          ? { issue: "execution-stale" }
+          : (parseExecutionFact(raw) ?? { issue: "invalid-execution" }),
+      ),
+    submitInput: (input) => {
+      const submission = log.submitInput(input, deps.now());
+      if (submission.kind === "replay") return { inputId: submission.inputId, verdict: "accepted" };
+      if (submission.kind === "conflict") return { issue: "E-COMP-06", verdict: "refused" };
+      const result = publish(submission.result);
+      return result.verdict === "accepted"
+        ? { inputId: input.id, verdict: "accepted" }
+        : { issue: result.issue, verdict: "refused" };
+    },
     grantCredit: (tokens: number): ReduceResult => {
       const at = deps.now();
       const entry: LogEntry = { v: 1, at, src: "credit", tokens };
@@ -653,12 +709,18 @@ export const openConversation = createConversationHost;
  */
 export const viewConversation = (
   dir: string,
-): { state: ChannelState; transcript: import("./log.js").Transcript; goodBytes: number } => {
+): {
+  state: ChannelState;
+  transcript: import("./log.js").Transcript;
+  goodBytes: number;
+  artifactHeads: ReadonlyMap<string, number>;
+} => {
   const { secret, conversationId, paths } = readRecordFiles(dir);
   const raw = existsSync(paths.logPath) ? readFileSync(paths.logPath) : Buffer.alloc(0);
   const folded = foldLog(conversationId, secret, raw);
   return {
     state: folded.state,
+    artifactHeads: folded.artifactHeads,
     transcript: {
       events: [...folded.transcript.events],
       inputs: [...folded.transcript.inputs],

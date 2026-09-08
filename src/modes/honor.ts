@@ -48,20 +48,25 @@ export interface DriverSpawn {
 export type HeadlessProfile = "headless-session" | "headless-turn";
 
 export interface HonorDeps {
+  readonly signal?: AbortSignal;
   readonly validateProcess?: (
     spawn: DriverSpawn,
     profile: HeadlessProfile,
     resume: string | undefined,
     signal: AbortSignal,
   ) => Promise<void>;
-  readonly validateSpawn?: (spawn: DriverSpawn, profile: HeadlessProfile) => Promise<void>;
+  readonly validateSpawn?: (
+    spawn: DriverSpawn,
+    profile: HeadlessProfile,
+    signal: AbortSignal,
+  ) => Promise<void>;
   /** The deps every spawn shares (conversation, secret, runner, sendFrame,
    * host seams, turn-id minter). The choice-dependent fields - harness,
    * model, provider, effort, and the honor hooks - are added per spawn. */
   readonly base: Omit<HeadlessDeps, "harness" | "model" | "provider" | "effort">;
   /** Whether a harness holds a persistent session - the same question the
    * startup path asks through `supportsSession`. One inspect per open. */
-  readonly sessionCapable: (harness: HarnessName) => Promise<boolean>;
+  readonly sessionCapable: (harness: HarnessName, signal: AbortSignal) => Promise<boolean>;
   /** The harness this driver resolved at startup: explicit spawn flag, else
    * the preference, else the default. The caller reads the preference for
    * this - the startup honor rule - and names the result here. */
@@ -151,12 +156,21 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
   };
   let pendingSwitch = false;
   let ended = false;
+  const cancellation = new AbortController();
+  const inspectionSignal = deps.signal
+    ? AbortSignal.any([cancellation.signal, deps.signal])
+    : cancellation.signal;
   let openingCount = 0;
   const completion = Promise.withResolvers<void>();
   const cleanups = new Set<Promise<void>>();
+  let cleanupFailure: unknown;
   const settleIfEnded = (): void => {
-    if (ended && openingCount === 0 && cleanups.size === 0) completion.resolve();
+    if (ended && openingCount === 0 && cleanups.size === 0) {
+      if (cleanupFailure !== undefined) completion.reject(cleanupFailure);
+      else completion.resolve();
+    }
   };
+  void completion.promise.catch(() => {});
   const rememberCleanup = (opened: SourceChannel): void => {
     const pending = opened.settled;
     cleanups.add(pending);
@@ -164,7 +178,11 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
       cleanups.delete(pending);
       settleIfEnded();
     };
-    void pending.then(complete, complete);
+    void pending.then(complete, (cause: unknown) => {
+      cleanupFailure ??=
+        cause instanceof Error ? cause : new Error("Source cleanup failed", { cause });
+      complete();
+    });
   };
   let source: SourceChannel;
   let deliver: (frame: Frame) => void;
@@ -185,8 +203,10 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
   ): Promise<{ readonly source: SourceChannel; readonly profile: HeadlessProfile }> => {
     openingCount++;
     try {
+      if (inspectionSignal.aborted)
+        throw new HarnessRefusal("aborted", "Driver start was cancelled");
       const gen = ++generation;
-      const session = await deps.sessionCapable(spawn.harness);
+      const session = await deps.sessionCapable(spawn.harness, inspectionSignal);
       if (spawn.profile === "interactive")
         throw new HarnessRefusal(
           "unsupported-profile",
@@ -199,8 +219,8 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
         );
       const nextProfile: HeadlessProfile =
         spawn.profile ?? (session ? "headless-session" : "headless-turn");
-      if (deps.validateSpawn) await deps.validateSpawn(spawn, nextProfile);
-      if (ended) throw new Error("Driver closed before source start");
+      if (deps.validateSpawn) await deps.validateSpawn(spawn, nextProfile, inspectionSignal);
+      if (ended || inspectionSignal.aborted) throw new Error("Driver closed before source start");
       const validateProcess = deps.validateProcess;
       const host: HeadlessDeps = {
         ...deps.base,
@@ -314,6 +334,8 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
     ended = true;
     try {
       source.close();
+    } catch {
+      // Keep the startup failure; cleanup cannot replace its cause.
     } finally {
       await source.settled.catch(() => {});
     }
@@ -326,6 +348,9 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
 
   return {
     settled: completion.promise,
+    recordChanged: () => {
+      if (!ended && !switching) source.recordChanged?.();
+    },
     receive: (frame: Frame): void => {
       if (ended) return;
       // Inputs are replayed from the record after attach. Credits have no replay.
@@ -337,12 +362,14 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
     },
     close: (): void => {
       ended = true;
+      cancellation.abort();
       pendingCredits.length = 0;
       try {
         source.close();
       } catch {}
       settleIfEnded();
     },
+    busy: () => switching || openingCount > 0 || source.busy?.() === true,
     state: () => ({ spawn: current, profile, ended }),
   };
 };

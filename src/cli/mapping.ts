@@ -11,6 +11,7 @@
  */
 
 export type MappedCommand =
+  | { readonly kind: "hcn-supervisor"; readonly argv: readonly string[] }
   | {
       readonly kind: "context";
       readonly path: string;
@@ -19,6 +20,12 @@ export type MappedCommand =
       readonly json: boolean;
     }
   | { readonly kind: "name-titles"; readonly root: string }
+  | {
+      readonly kind: "managed-worker";
+      readonly root: string;
+      readonly conversationId: string;
+      readonly inputId: string;
+    }
   | { readonly kind: "send"; readonly conversationId: string; readonly text: string }
   | { readonly kind: "watch"; readonly conversationId: string }
   | {
@@ -80,6 +87,14 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
       return rest.length === 1 && rest[0]
         ? { kind: "name-titles", root: rest[0] }
         : { kind: "help", message: "A record root is required" };
+    case "_hcn-supervise":
+      return rest.length > 0
+        ? { kind: "hcn-supervisor", argv: rest }
+        : { kind: "help", message: "A harness command is required" };
+    case "_managed-worker":
+      return rest.length === 3 && rest[0] && rest[1] && rest[2]
+        ? { kind: "managed-worker", root: rest[0], conversationId: rest[1], inputId: rest[2] }
+        : { kind: "help", message: "A record root, conversation, and accepted input are required" };
     case "send": {
       const conversationId = rest[0];
       if (!conversationId)

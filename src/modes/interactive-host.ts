@@ -1,3 +1,6 @@
+import { comparisonMetadata } from "../protocol/comparison-note.js";
+import type { ComparisonHold } from "./comparison-delivery.js";
+import { createComparisonDelivery } from "./comparison-delivery.js";
 /** Hook input delivery and the vocabulary for selecting an interactive rung. */
 
 import { resolveVerifiedRecord, type VerifiedRecord } from "../cli/record-addressing.js";
@@ -120,13 +123,18 @@ export const readQueuedInputs = (recordDir: string): readonly { id: string; text
 };
 
 /**
- * Deliver the oldest queued input, chunked under the hook cap, via
- * `enqueueInput(steer)` per chunk. On success writes the A-002-proven
- * `{decision:"block", reason}` to `process.stdout` (hook output
- * composition is the hook runner's job — we emit only our decision).
- * On per-chunk refusal reports E004 without blind retry.
+ * Deliver the oldest eligible input through the hook reason. Preserve its
+ * original identity and record applied at delivery. A reason must fit whole;
+ * queuing synthetic chunk inputs does not deliver those bytes to the harness.
  */
-export const deliverFirstQueued = (recordDir: string): HookDeliverResult => {
+export const deliverFirstQueued = (
+  recordDir: string,
+  deliveryOptions: {
+    readonly rung?: "hooks" | "observe" | "cooperative";
+    readonly documentLimit?: number;
+    readonly promptLimit?: number;
+  } = {},
+): HookDeliverResult => {
   let queued: readonly { id: string; text: string }[];
   try {
     queued = readQueuedInputs(recordDir);
@@ -134,26 +142,106 @@ export const deliverFirstQueued = (recordDir: string): HookDeliverResult => {
     return { ok: true };
   }
   if (queued.length === 0) return { ok: true };
-  const first = queued[0];
+  let first = queued[0];
   if (!first) return { ok: true };
-  const chunks = chunkHookInput(first.text);
   try {
     const host = openWriter(recordDir, { presence: () => true });
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i] as string;
-      const res = host.enqueueInput({
-        id: `${first.id}-chunk-${i}`,
-        text: chunk,
-        mode: "steer",
-      });
-      if (res.verdict === "refused") {
-        const issue = "issue" in res ? String((res as { issue: string }).issue) : "unknown";
-        return { ok: false, code: "injection-refused", message: `disposition: ${issue}` };
+    const state = host.state();
+    const attachment = state.attachment;
+    const holds = host
+      .transcript()
+      .events.filter((event) => event.epoch === state.epoch && event.event.code === "E-COMP-07")
+      .map((event) => event.event as unknown as ComparisonHold);
+    const comparison = createComparisonDelivery(
+      {
+        capable:
+          (deliveryOptions.rung ?? "hooks") === "hooks" && attachment?.profile === "interactive",
+        documentLimit: deliveryOptions.documentLimit,
+        promptLimit: deliveryOptions.promptLimit ?? HOOK_CHUNK_CAP_BYTES,
+        head: (id) => host.artifactHeads().get(id),
+        snapshot: (id) => host.comparisonSnapshot(id),
+        hold: (event) => {
+          const current = host.state();
+          if (!current.attachment) return;
+          if (current.inputs.find((input) => input.id === event.inputId)?.status !== "queued")
+            host.handleFrame(
+              JSON.stringify({
+                kind: "disposition",
+                epoch: current.epoch,
+                inputId: event.inputId,
+                outcome: "queued",
+              }),
+            );
+          const result = host.handleFrame(
+            JSON.stringify({
+              kind: "event",
+              epoch: current.epoch,
+              n: current.attachment.lastN + 1,
+              turnId: current.turn?.turnId ?? `comparison-hold-${current.epoch}`,
+              event,
+            }),
+          );
+          if (result.verdict !== "accepted")
+            throw new Error("comparison hold could not be recorded");
+        },
+      },
+      holds,
+    );
+    let selected: { id: string; text: string } | undefined;
+    for (const input of queued) {
+      if (comparisonMetadata(input.text).kind !== "none" && !attachment) continue;
+      const prepared = comparison.prepare(input.id, input.text);
+      if (prepared.kind === "held") continue;
+      if (prepared.kind === "ready") {
+        const result = host.handleFrame(
+          JSON.stringify({
+            kind: "disposition",
+            epoch: host.state().epoch,
+            inputId: input.id,
+            outcome: "applied",
+          }),
+        );
+        if (result.verdict !== "accepted")
+          return {
+            ok: false,
+            code: "injection-refused",
+            message: "comparison delivery disposition refused",
+          };
+        process.stdout.write(`${JSON.stringify({ decision: "block", reason: prepared.prompt })}\n`);
+        host.close();
+        return { ok: true, delivered: 1, chunks: 1 };
       }
+      selected = input;
+      break;
     }
-    const reason = `HUMAN FEEDBACK: ${first.text.slice(0, 200)}`;
+    if (!selected) {
+      host.close();
+      return { ok: true, delivered: 0 };
+    }
+    first = selected;
+    const reason = `HUMAN FEEDBACK: ${first.text}`;
+    if (encodedByteLength(reason) > (deliveryOptions.promptLimit ?? HOOK_CHUNK_CAP_BYTES)) {
+      host.close();
+      return {
+        ok: false,
+        code: "injection-refused",
+        message:
+          "The complete input exceeds the hook reason limit. It remains queued and has not been truncated.",
+      };
+    }
+    const applied = host.handleFrame(
+      JSON.stringify({
+        kind: "disposition",
+        epoch: host.state().epoch,
+        inputId: first.id,
+        outcome: "applied",
+      }),
+    );
+    host.close();
+    if (applied.verdict !== "accepted")
+      return { ok: false, code: "injection-refused", message: "hook delivery disposition refused" };
     process.stdout.write(`${JSON.stringify({ decision: "block", reason })}\n`);
-    return { ok: true, delivered: 1, chunks: chunks.length };
+    return { ok: true, delivered: 1, chunks: 1 };
   } catch (e) {
     if (e instanceof LockError) {
       return { ok: false, code: "hook-resolution-failed", message: e.message };

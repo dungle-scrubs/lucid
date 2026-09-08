@@ -2,13 +2,19 @@
 number: 14
 title: "Annotated content comparison"
 type: feature
-status: Accepted
+status: Implemented
 revision: 4
 author: Codex
 date: 2026-09-07
 ---
 
 # RFC-14: Annotated content comparison
+
+Implementation is complete in the working tree. The [local tickets](../../.scratch/annotated-content-comparison/spec.md)
+record verification, and [Artifacts](../artifacts.md#content-comparison) and
+[Drivers](../drivers.md#comparison-delivery) own the current contracts. Keep
+this revised specification until the implementation lands, then retire it
+and its reviews under the documentation lifecycle.
 
 ## Abstract
 

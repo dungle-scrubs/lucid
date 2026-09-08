@@ -90,6 +90,8 @@ export interface AnnotationSpot {
   readonly snippet: string;
   /** Who wrote the content in this spot. */
   readonly author: string;
+  readonly sourceVersion?: number;
+  readonly sourceHash?: string;
   /** Three ways of finding this spot again after the agent has rewritten
    * the document, written when the note was made and tried in order. Absent
    * on a note written before anchoring existed, which is why it is optional
@@ -126,6 +128,11 @@ export interface Annotation {
 }
 
 export interface AnnotationBatch {
+  readonly comparison?: {
+    readonly earlierVersion: number;
+    readonly reviewedVersion: number;
+    readonly reviewedHash: string;
+  };
   readonly artifactId: string;
   readonly version: number;
   readonly notes: readonly Annotation[];
@@ -152,11 +159,11 @@ const isSelectors = (v: unknown): boolean => {
   const p = s.position as Record<string, unknown> | undefined;
   return (
     typeof s.css === "string" &&
-    q !== undefined &&
+    q != null &&
     typeof q.exact === "string" &&
     typeof q.prefix === "string" &&
     typeof q.suffix === "string" &&
-    p !== undefined &&
+    p != null &&
     typeof p.start === "number" &&
     typeof p.end === "number"
   );

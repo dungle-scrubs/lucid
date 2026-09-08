@@ -145,6 +145,20 @@ delivered-but-unfinished inputs, and a send past that is refused
 sent. Finish turns and the bound reopens. The issue is in the `refused`
 vocabulary, so decode it like any other rather than crashing on it.
 
+## Comparison input
+
+A `lucid-annotations` batch with `comparison` metadata is one historical note.
+Batch `version` and each spot's `sourceVersion` identify the saved source;
+`reviewedVersion` is what the person last reviewed. They are historical
+evidence. Use only the complete current document and dispatch version supplied
+at delivery as the revision base. The [artifact contract](artifacts.md#historical-source-and-current-revision)
+defines the additive fields and shared admission guards.
+
+If the current context cannot be prepared, keep the original input queued and
+record nonterminal error `E-COMP-07` with `inputId`, `artifactId`, `failedHead`,
+and the observed cause. Do not record applied or rejected for this hold.
+Delivery attempts and recovery follow [the driver contract](drivers.md#comparison-delivery).
+
 ## Leaving
 
 - `detach { epoch, reason: yield | shutdown }` at a turn boundary. A clean
@@ -185,7 +199,9 @@ Source protocol support is a separate attach declaration: `capabilities`
 contains at most 16 distinct ASCII names, each at most 64 characters.
 `managed-input-v1` declares support for durable execution holds, attempts,
 coverage, and explicit recovery. Absence means unsupported. Built-in
-drivers do not yet declare this capability; managed acceptance remains off.
+managed headless drivers declare this capability. The browser accepts managed
+queue inputs by default; incompatible attached sources receive upgrade/wait
+guidance and cannot consume those inputs.
 
 A declaring source supplies `attachmentOrigin: explicit | automatic`.
 An explicit attachment also supplies a stable `explicitAttachmentId` and
@@ -238,6 +254,9 @@ the cause and resend" is NOT universal:
   `turn-id-reused` (mint a fresh id), `input-id-reused`, `unknown-input`,
   `steer-unsupported` (fall back to `queue`), `answer-unsupported`,
   `stale-answer`.
+- **Review or correct a comparison note** - `E-COMP-02` means its reviewed
+  version is stale; `E-COMP-03` means its historical source metadata is invalid.
+  Neither appends a fresh input. Accepted browser identities reconcile first.
 - **Back off, then resend** - `no-credit`: coalesce and wait for a
   `credit` grant.
 - **A bug, never expected** - `wrong-direction`: you sent a lucid→source
@@ -248,3 +267,11 @@ Before a frame decodes at all, a malformed wire line draws a **decode**
 issue instead - `not-json`, `not-a-frame`, `unknown-kind`,
 `missing-field`, `wrong-type`, `not-serializable`, `answer-needs-turn` - both sets arrive as
 `refused { issue }`, so handle either.
+
+Managed sources retain executor ownership until native cleanup and execution
+settlement finish. `managed-input-v1` sources distinguish execution authorization
+from ordinary applied dispositions: explicitly authorized recovery reuses the
+original input, even when the prior attempt applied it. Automatic workers attach
+with `attachmentOrigin: automatic`; process replacement is not explicit human
+attachment intent. A session's explicit send refusal proves non-delivery, while
+transport closure alone leaves the outcome uncertain.

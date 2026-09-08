@@ -1,10 +1,10 @@
 # Local hub conversation integration
 
-Status: published
+Status: resolved
 
-Source: [RFC 15: Local hub conversation integration](../../docs/rfc/15_local-hub-conversation-integration.rfc.md), revision 3, Draft. Decision map: [Connect the hub to local conversations](https://github.com/dungle-scrubs/lucid-v2/issues/199).
+Source: [RFC 15: Local hub conversation integration](../../docs/rfc/15_local-hub-conversation-integration.rfc.md), revision 3, implemented. Decision map: [Connect the hub to local conversations](https://github.com/dungle-scrubs/lucid-v2/issues/199).
 
-This ticket set renders the five resolved decisions. Kevin approved the eight-ticket breakdown and shared-tracker publication on 2026-09-07. Publication completes the planning handoff; implementation has not started.
+This ticket set renders the five resolved decisions. Kevin approved the eight-ticket breakdown and shared-tracker publication on 2026-09-07. All eight implementation slices are complete.
 
 ## Implementation slices
 
@@ -19,15 +19,15 @@ This ticket set renders the five resolved decisions. Kevin approved the eight-ti
 | [Summarize history within verified context limits](issues/07-summarize-bounded-context.md) | Transfer recorded context across harnesses | Continue a long conversation on a selected route by summarizing older history automatically, retaining recent messages and mandatory current content, and showing when a summary is used. |
 | [Recover failed and interrupted turns](issues/08-recover-failed-and-uncertain-turns.md) | Summarize history within verified context limits | When startup or execution cannot finish, show what happened and only the recovery actions that can work. Preserve the submitted prompt, its partial results, and the selected model while the person chooses how to continue. |
 
-Title generation and native recall can proceed independently after saved defaults. Each remaining dependency supplies behavior its successor consumes: native recall before managed launch; launch before cross-harness coverage; bounded context before complete failure recovery. Each ticket targets one fresh implementation context. Discover and group real conversations is the first unblocked implementation ticket. The RFC retains Draft status; publication approval does not silently change its lifecycle status.
+Title generation and native recall can proceed independently after saved defaults. Each remaining dependency supplies behavior its successor consumes: native recall before managed launch; launch before cross-harness coverage; bounded context before complete failure recovery. Each ticket targets one fresh implementation context. All implementation slices are complete.
 
 ## Delivery boundaries
 
-Each slice keeps the repository checks green and supplies a runnable or independently verifiable behavior. Managed execution remains explicitly gated until supported routes, context transfer, and safe recovery are complete. Early slices expose unavailable paths as holds, not silent fallbacks. The title-generation slice is independently required for release, but it is not a blocker of native recall or failure recovery.
+Each slice keeps the repository checks green and supplies a runnable or independently verifiable behavior. Managed execution is enabled through the production server after route, context, lifecycle, and recovery verification. Early slices expose unavailable paths as holds, not silent fallbacks. The title-generation slice is independently required for release, but it is not a blocker of native recall or failure recovery.
 
 Changes to the hcn public capability contract belong in hcn and reach Lucid through a deliberate pinned update with recorded fixtures; do not recreate descriptors above Lucid's harness seam. Title isolation is part of the naming slice; full context accounting and resume budget handling are part of context transfer; read-only multi-pass preparation is part of summary delivery.
 
-The [independent revision-1 review](../../docs/rfc/15_local-hub-conversation-integration.review-revision-1.md) is answered point by point in revision 2. The [focused revision-2 follow-up](../../docs/rfc/15_local-hub-conversation-integration.review-revision-2.md) is answered in revision 3, including the remaining fact types, hold release, source compatibility, and explicit-attachment intent. The pre-launch crash window remains a documented conservative uncertainty. These documents specify future behavior; no RFC 15 application code or live-model confirmation has been produced by this planning task.
+The [independent revision-1 review](../../docs/rfc/15_local-hub-conversation-integration.review-revision-1.md) is answered point by point in revision 2. The [focused revision-2 follow-up](../../docs/rfc/15_local-hub-conversation-integration.review-revision-2.md) is answered in revision 3, including the remaining fact types, hold release, source compatibility, and explicit-attachment intent. The pre-launch crash window remains a documented conservative uncertainty. The current contracts are implemented and verified.
 
 ## Shared publication
 

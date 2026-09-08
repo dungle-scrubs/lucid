@@ -95,6 +95,8 @@ export type Disposition = "started" | "rejected";
 
 export interface SendResult {
   readonly disposition: Disposition;
+  /** Only an explicit hcn refusal proves that the prompt was not delivered. */
+  readonly rejectionEvidence?: "harness-refusal";
   readonly reason?: string;
 }
 
