@@ -71,6 +71,9 @@ describe("what the pinned hcn serves", () => {
     createConversationRecord(root, "anything");
     const server = await startServe({ rootDir: root, port: 0 });
     try {
+      await fetch(`http://127.0.0.1:${server.port}/api/defaults`, {
+        headers: { "x-lucid-token": server.token },
+      });
       const res = await fetch(`http://127.0.0.1:${server.port}/api/conversations/anything`, {
         headers: { "x-lucid-token": server.token },
       });

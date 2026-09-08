@@ -505,6 +505,18 @@ describe("review fixes: what the cross-family review found", () => {
     expect(r.proc.signals).toEqual(["SIGTERM"]);
   });
 
+  test("a handshake refusal keeps its installation and the handshake's version observation", async () => {
+    const r = rig();
+    const opening = open(r, "0.6.3");
+    await expect(opening).rejects.toMatchObject({
+      diagnostic: {
+        origin: "session-handshake",
+        code: "hcn-version-too-old",
+        hcn: { detected: "0.6.3", minimum: HCN_MIN_VERSION, path: BIN },
+      },
+    });
+  });
+
   test("an event with no turn open is held for the next turn, never dropped", async () => {
     const r = rig();
     const session = await open(r);
@@ -997,4 +1009,34 @@ test("failed descriptor inspection does not poison a later explicit inspection",
   second.exit(0);
   expect(await retried).toMatchObject({ session: false, verifiedAgainst: "test" });
   expect(spawner.calls).toHaveLength(2);
+});
+
+test("structured run refusals retain their issue without forwarding process prose", async () => {
+  const proc = new FakeHcnProcess();
+  const { runner } = rig([proc]);
+  // Synthetic refusal, not a recording. Private text must not become feedback.
+  proc.emit({
+    kind: "failure",
+    class: "rejected",
+    retryable: false,
+    issue: "unsupported-option",
+    message: "synthetic-private-process-output",
+  });
+  proc.emit({ kind: "done", cause: "failed", exitCode: 2 });
+  proc.exit(2);
+  const events = [];
+  for await (const event of runner.streamTurn({
+    harness: "claude",
+    model: "selected",
+    turnId: "test",
+    prompt: "synthetic",
+  }))
+    events.push(event);
+  expect(JSON.stringify(events)).not.toContain("synthetic-private-process-output");
+  expect(events[0]).toMatchObject({
+    kind: "failure",
+    class: "rejected",
+    issue: "unsupported-option",
+    compatibility: { code: "selection-unsupported", origin: "execution-check" },
+  });
 });

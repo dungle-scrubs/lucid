@@ -1004,8 +1004,11 @@ describe("RFC 15: failed recall preserves the submitted prompt", () => {
       .split("\n")
       .map((l) => JSON.parse(l) as { frame?: { event?: { kind?: string; message?: string } } })
       .filter((e) => e.frame?.event?.kind === "error");
+    expect(
+      errors.some((e) => String(e.frame?.event?.message).includes("HCN refused this selection")),
+    ).toBe(true);
     expect(errors.some((e) => String(e.frame?.event?.message).includes("stale-session-id"))).toBe(
-      true,
+      false,
     );
   });
 });

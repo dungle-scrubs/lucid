@@ -1,3 +1,4 @@
+import { failureDiagnostic } from "../harness/compatibility.js";
 import { comparisonMetadata } from "../protocol/comparison-note.js";
 import { createComparisonDelivery } from "./comparison-delivery.js";
 /**
@@ -621,6 +622,7 @@ const sessionStrategy = (
           ? cause.code
           : fallbackCode,
       message,
+      ...(failureDiagnostic(cause) ? { compatibility: failureDiagnostic(cause) } : {}),
       terminal: true,
     });
     ctx.reported();
@@ -888,6 +890,7 @@ const sessionStrategy = (
           ctx.sequencer.emit(ctx.getTurnId(), {
             kind: "error",
             message: `session did not open: ${message}`,
+            ...(failureDiagnostic(cause) ? { compatibility: failureDiagnostic(cause) } : {}),
             terminal: true,
           });
           ctx.reported();
@@ -1526,6 +1529,7 @@ export const createHeadlessHost = (
           kind: EventKind.error,
           code: cause.code,
           message: cause.message,
+          ...(failureDiagnostic(cause) ? { compatibility: failureDiagnostic(cause) } : {}),
           terminal: true,
         });
         ctx.reported();

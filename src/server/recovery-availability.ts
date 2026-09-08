@@ -1,3 +1,9 @@
+import {
+  diagnosticMessage,
+  failureDiagnostic,
+  selectionDiagnostic,
+  selectionProblem,
+} from "../harness/compatibility.js";
 import { verifiedExecutable } from "../harness/inspection-facts.js";
 import type { HarnessRunner } from "../harness/runner.js";
 import { ownerPresence, terminalPresence } from "../process-owner.js";
@@ -16,7 +22,10 @@ export const recoveryStamp = (dir: string, state: ChannelState): string =>
   managedPrerequisite(dir, state, "E-HUB-03");
 
 /** Probe start/resume support, never run a task or summary from a read request. */
-export function createRecoveryAvailability(runner: () => HarnessRunner) {
+export function createRecoveryAvailability(
+  runner: () => HarnessRunner,
+  now: () => number = Date.now,
+) {
   const cache = new Map<
     string,
     { readonly at: number; readonly result: Promise<AvailableRecovery> }
@@ -34,7 +43,7 @@ export function createRecoveryAvailability(runner: () => HarnessRunner) {
       };
     const key = `${dir}:${recoveryStamp(dir, state)}`;
     const prior = cache.get(key);
-    if (prior && Date.now() - prior.at < 1500) return prior.result;
+    if (prior && now() - prior.at < 1500) return prior.result;
     const result = (async (): Promise<AvailableRecovery> => {
       const saved = preferenceState(dir);
       const choice = saved.preference;
@@ -49,6 +58,7 @@ export function createRecoveryAvailability(runner: () => HarnessRunner) {
       const cwd = location.workingDirectory;
       const inspect = (native: string | undefined) =>
         runner().inspect(choice.harness, {
+          diagnosticOrigin: "execution-check",
           model: choice.model,
           effort: choice.effort,
           provider: choice.provider,
@@ -62,8 +72,16 @@ export function createRecoveryAvailability(runner: () => HarnessRunner) {
         )
           return {
             actions: [],
-            reason:
-              "The selected executable or mode cannot be verified. Repair the installation or change settings.",
+            reason: diagnosticMessage(
+              selectionDiagnostic(fresh, choice, runner().installation, "execution-check", false) ??
+                selectionProblem(
+                  choice,
+                  runner().installation,
+                  "selection-unsupported",
+                  "the selected mode cannot be verified",
+                  "execution-check",
+                ),
+            ),
           };
         if (resume === undefined) return { actions: ["retry", "continue-fresh"], reason: null };
         if (!current?.current || current.sessionId !== resume)
@@ -72,26 +90,47 @@ export function createRecoveryAvailability(runner: () => HarnessRunner) {
             reason:
               "Native resume identity is unverified. A new session can receive the recorded context.",
           };
-        const recalled = await inspect(resume).catch(() => null);
+        let recallError: unknown;
+        const recalled = await inspect(resume).catch((error) => {
+          recallError = error;
+          return null;
+        });
         const supported =
           recalled !== null &&
           verifiedExecutable(recalled.runtime?.executable, recalled.verifiedAgainst) &&
           recalled.runtime?.resume.status === "supported";
+        const diagnostic = recalled
+          ? selectionDiagnostic(
+              recalled,
+              choice,
+              runner().installation,
+              "execution-check",
+              verifiedExecutable(recalled.runtime?.executable, recalled.verifiedAgainst) !== null,
+            )
+          : failureDiagnostic(recallError);
         return {
           actions: supported ? ["retry", "continue-fresh"] : ["continue-fresh"],
           reason: supported
             ? null
-            : "Native resume is unavailable. A new session can receive the recorded context.",
+            : `${diagnostic ? `${diagnosticMessage(diagnostic)} ` : ""}Native resume is unavailable. A new session can receive the recorded context.`,
         };
-      } catch {
+      } catch (error) {
         return {
           actions: [],
-          reason:
-            "The selected route cannot start. Repair the executable or change settings before recovery.",
+          reason: diagnosticMessage(
+            failureDiagnostic(error) ??
+              selectionProblem(
+                choice,
+                undefined,
+                "inspection-unavailable",
+                "the selected route could not be inspected for recovery",
+                "execution-check",
+              ),
+          ),
         };
       }
     })();
-    cache.set(key, { at: Date.now(), result });
+    cache.set(key, { at: now(), result });
     if (cache.size > 100) cache.delete(cache.keys().next().value ?? "");
     return result;
   };

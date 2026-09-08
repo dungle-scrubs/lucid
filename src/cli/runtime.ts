@@ -1,3 +1,4 @@
+import { failureDiagnostic } from "../harness/compatibility.js";
 import { LockError } from "../store/flock.js";
 /**
  * HostRuntime — the deep module that owns the headless conversation lifecycle.
@@ -287,6 +288,7 @@ export const openDrivenConversation = async (
         hold: {
           code,
           reason: reason.slice(0, 4096),
+          ...(failureDiagnostic(cause) ? { compatibility: failureDiagnostic(cause) } : {}),
           prerequisite: managedPrerequisite(dir, state, code),
           actions: code === "E-HUB-04" ? ["choose-folder"] : ["change-settings", "retry"],
         },

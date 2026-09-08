@@ -52,8 +52,10 @@ Capability claims retain their provenance:
 
 Binary resolution happens once: `LUCID_HCN`, then the repository's
 `node_modules/.bin/hcn`, then PATH. The chosen binary is logged. The exact
-package pin, runtime version floor, and recorded fixtures move together;
-see [AGENTS](../AGENTS.md).
+package pin and recorded fixtures move together; the runtime floor
+remains a separate admission check. See [AGENTS](../AGENTS.md) and
+[compatibility feedback](compatibility.md) for version identity, retained
+observations, selected-installation repair, and unchanged recovery rules.
 
 ## Comparison delivery
 
@@ -280,8 +282,9 @@ model capacity table or text-to-token estimate lives in Lucid. Accounting
 uses the same cwd, saved choices, resume ID, and isolation as the intended
 operation. Its bounded process has cancellation, output limits, and forced
 cleanup. Structured refusal codes survive; raw process diagnostics do not.
-This hcn mechanism is detected separately from mode support. The pinned
-hcn 0.6.4 release supplies native-resume verification and context accounting.
+This hcn mechanism is detected separately from mode support. HCN 0.6.4
+introduced native-resume verification and context accounting.
+Lucid currently pins HCN 0.6.5.
 Its verified accounting adapter currently supports Claude headless-turn.
 Selections without accounting or declared native management stay held; an unsupported
 adapter asks for changed settings, while an unverified installation can be

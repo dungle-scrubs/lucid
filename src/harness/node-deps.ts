@@ -8,12 +8,20 @@
  * fails loudly here rather than producing a stream lucid cannot read.
  */
 
-import { spawn as nodeSpawn, spawnSync } from "node:child_process";
+import { execFile, spawn as nodeSpawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { selfInvocation } from "../cli/invocation.js";
+import {
+  type CompatibilityDiagnostic,
+  diagnosticMessage,
+  HCN_PIN,
+  type HcnInstallation,
+  hcnDiagnostic,
+  unknownInstallation,
+} from "./compatibility.js";
 import type { HarnessDeps, HcnProcess, SpawnHcn } from "./process.js";
 import { HarnessSpawnError, HarnessVersionError } from "./runner.js";
 import { belowFloor, HCN_MIN_VERSION } from "./version.js";
@@ -71,14 +79,25 @@ export const resolveHcnBin = (opts: HcnBinLookup = {}): { bin: string; source: s
 };
 
 /** Read `hcn --version` once and refuse a binary below the floor. */
-export const assertHcnVersion = (bin: string): string => {
-  const probe = spawnSync(bin, ["--version"], { encoding: "utf8" });
+export const assertHcnVersion = (bin: string, installation?: HcnInstallation): string => {
+  const probe = spawnSync(bin, ["--version"], {
+    encoding: "utf8",
+    timeout: 5000,
+    maxBuffer: 4096,
+    killSignal: "SIGKILL",
+  });
   if (probe.error !== undefined || probe.status !== 0) {
-    throw new HarnessSpawnError(probe.error ?? `hcn --version exited ${probe.status}`);
+    const diagnostic =
+      hcnDiagnostic(
+        installation ?? { ...unknownInstallation, path: isAbsolute(bin) ? bin : null },
+        "execution-check",
+        `${probeFailure(probe.error)}${probe.status === null ? "" : ` (exit ${probe.status})`}`,
+      ) ?? undefined;
+    throw new HarnessSpawnError("HCN version probe failed", diagnostic);
   }
   const found = probe.stdout.trim();
   if (belowFloor(found)) {
-    throw new HarnessVersionError(found, HCN_MIN_VERSION, bin);
+    throw new HarnessVersionError(found, HCN_MIN_VERSION, bin, installation);
   }
   return found;
 };
@@ -144,15 +163,102 @@ const spawnHcn = (
 
 export const nodeSpawnHcn: SpawnHcn = (argv, opts) => spawnHcn(argv, opts, false);
 
+function selectedInstallation(lookup: HcnBinLookup): {
+  readonly bin: string;
+  readonly installation: HcnInstallation;
+} {
+  const selected = resolveHcnBin(lookup);
+  const path = isAbsolute(selected.bin)
+    ? selected.bin
+    : Bun.which(selected.bin, { cwd: lookup.cwd ?? process.cwd() });
+  const bin = path ?? selected.bin;
+  return {
+    bin,
+    installation: {
+      detected: null,
+      lookupRoot:
+        selected.source === "package-dependency"
+          ? dirname(dirname(bin))
+          : selected.source.startsWith("node_modules")
+            ? dirname(dirname(dirname(bin)))
+            : null,
+      minimum: HCN_MIN_VERSION,
+      path,
+      pin: HCN_PIN,
+      source: selected.source,
+    },
+  };
+}
+
+function probeFailure(error: unknown): string {
+  const code = error && typeof error === "object" && "code" in error ? error.code : null;
+  if (code === "ENOENT") return "the selected executable is missing";
+  if (code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" || code === "ENOBUFS")
+    return "the version response exceeded its output limit";
+  if (
+    code === "ETIMEDOUT" ||
+    (error && typeof error === "object" && "killed" in error && error.killed)
+  )
+    return "the version probe timed out or exceeded its output limit";
+  return "the selected version probe failed";
+}
+
+export interface HarnessStartup {
+  readonly deps: HarnessDeps | null;
+  readonly diagnostics: readonly CompatibilityDiagnostic[];
+}
+
+export function prepareNodeHarness(lookup: HcnBinLookup = {}): Promise<HarnessStartup> {
+  const { bin, installation } = selectedInstallation(lookup);
+  return new Promise((done) => {
+    execFile(
+      bin,
+      ["--version"],
+      { encoding: "utf8", timeout: 5000, maxBuffer: 4096, killSignal: "SIGKILL" },
+      (error, stdout) => {
+        const observed = { ...installation, detected: error ? null : stdout.trim() };
+        const diagnostic = hcnDiagnostic(
+          observed,
+          "runtime-start",
+          error ? probeFailure(error) : undefined,
+        );
+        done({
+          deps:
+            error || (observed.detected !== null && belowFloor(observed.detected))
+              ? null
+              : checkedDeps(bin, observed),
+          diagnostics: diagnostic ? [diagnostic] : [],
+        });
+      },
+    );
+  });
+}
+
 /** Production deps: the resolved binary, version-checked, with the choice
  * recorded so evidence names which hcn actually ran. */
-export const nodeHarnessDeps = (log?: (event: Record<string, unknown>) => void): HarnessDeps => {
-  const { bin, source } = resolveHcnBin();
-  const version = assertHcnVersion(bin);
-  log?.({ event: "hcn_resolved", bin, source, version });
+export const nodeHarnessDeps = (
+  log?: (event: Record<string, unknown>) => void,
+  lookup: HcnBinLookup = {},
+  warn: (message: string) => void = (message) => console.error(message),
+): HarnessDeps => {
+  const { bin, installation } = selectedInstallation(lookup);
+  const version = assertHcnVersion(bin, installation);
+  const observed = { ...installation, detected: version };
+  const diagnostic = hcnDiagnostic(observed, "execution-check");
+  if (diagnostic) warn(`Warning: ${diagnosticMessage(diagnostic)}`);
+  log?.({ event: "hcn_resolved", bin, source: installation.source, version });
+  return checkedDeps(bin, observed, log);
+};
+
+function checkedDeps(
+  bin: string,
+  installation: HcnInstallation,
+  log?: (event: Record<string, unknown>) => void,
+): HarnessDeps {
   return {
+    installation,
     spawn: (argv, opts) => spawnHcn(argv, opts, true),
     bin,
     ...(log === undefined ? {} : { log }),
   };
-};
+}

@@ -1,3 +1,4 @@
+import { compatibilityMessage, parseCompatibilityDiagnostic } from "../protocol/compatibility.js";
 /**
  * ConversationView — the deep module that owns the conversation view
  * projection (C1).
@@ -98,6 +99,12 @@ const stripMessageBlocks = (text: string): string => {
 };
 
 const eventText = (event: Record<string, unknown>): string => {
+  const compatibility = parseCompatibilityDiagnostic(event.compatibility);
+  if (compatibility) return `✗ ${compatibilityMessage(compatibility)}`;
+  if (event.kind === EventKind.failure && event.class === "rejected")
+    return "✗ HCN refused this historical selection. Inspection details are unavailable. Check the selected installation and settings, restart Lucid after repair, and try again.";
+  if (event.kind === EventKind.error && (event.code === "E-HUB-03" || event.code === "E-HUB-05"))
+    return "✗ This historical attempt could not start. Inspection details are unavailable. Check the selected installation and settings, restart Lucid after repair, and try again.";
   const kind = typeof event.kind === "string" ? event.kind : "event";
   if (kind === EventKind.message && typeof event.text === "string")
     return stripMessageBlocks(event.text);

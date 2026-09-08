@@ -16,7 +16,16 @@
  * What it is NOT: it is not the protocol reducer, the durable store, or the
  * flock. It is the process boundary and nothing else.
  */
+
+import { CompatibilityError } from "../protocol/compatibility.js";
 import type { HarnessName } from "../protocol/frames.js";
+import {
+  type CompatibilityDiagnostic,
+  diagnosticMessage,
+  HCN_PIN,
+  type HcnInstallation,
+  hcnDiagnostic,
+} from "./compatibility.js";
 import type { HarnessEvent } from "./events.js";
 
 /** A harness as hcn names it. Validated by `src/cli/harness.ts`. */
@@ -44,6 +53,7 @@ export interface HarnessFacts {
    * verify the selected executable and native resume compatibility. */
   readonly nativeContextManagement?: true;
   readonly runtime?: {
+    readonly verifiedAgainst?: string | null;
     readonly executable: { readonly path: string | null; readonly version: string | null };
     readonly resume: { readonly status: "supported" | "unknown"; readonly reason: string | null };
   };
@@ -168,6 +178,8 @@ export interface StreamTurnOptions {
 }
 
 export interface HarnessRunner {
+  readonly installation?: HcnInstallation;
+  readonly reportCompatibility?: (diagnostic: CompatibilityDiagnostic) => void;
   /** Count the complete prepared request through hcn, including recalled
    * native history. An unavailable result never authorizes dispatch. */
   countContext(opts: ContextCountOptions): Promise<ContextCount>;
@@ -181,6 +193,7 @@ export interface HarnessRunner {
   inspect(
     harness: HarnessName,
     choice?: {
+      readonly diagnosticOrigin?: CompatibilityDiagnostic["origin"];
       readonly signal?: AbortSignal;
       readonly model?: string;
       readonly effort?: string;
@@ -237,39 +250,60 @@ export type ContextCount =
 
 /** hcn refused the invocation itself (exit 2). Not retryable by re-running:
  * the options or the harness have to change. */
-export class HarnessRefusal extends Error {
+export class HarnessRefusal extends CompatibilityError {
   constructor(
     readonly issue: string,
     message: string,
     readonly supported?: readonly string[],
+    diagnostic?: CompatibilityDiagnostic,
   ) {
-    super(message);
+    super(message, diagnostic);
     this.name = "HarnessRefusal";
   }
 }
 
 /** The hcn binary itself could not be started. */
-export class HarnessSpawnError extends Error {
-  constructor(cause: unknown) {
-    super(`could not spawn hcn: ${cause instanceof Error ? cause.message : String(cause)}`);
+export class HarnessSpawnError extends CompatibilityError {
+  constructor(cause: unknown, diagnostic?: CompatibilityDiagnostic) {
+    super(
+      diagnostic
+        ? diagnosticMessage(diagnostic)
+        : `could not spawn hcn: ${cause instanceof Error ? cause.message : String(cause)}`,
+      diagnostic,
+    );
     this.name = "HarnessSpawnError";
   }
 }
 
 /** The hcn on PATH is older than the surface lucid depends on. */
-export class HarnessVersionError extends Error {
+export class HarnessVersionError extends CompatibilityError {
   /** Names the binary that was actually used.
    *
    * Without it the message said "run bun install" whatever the cause, and
    * the cause was a stale `hcn` on PATH — `bun install` would have fixed
    * nothing and the advice sent the reader to the wrong place. */
-  constructor(found: string, required: string, bin?: string) {
-    super(
-      bin === undefined
-        ? `hcn ${found} is older than the required ${required}; run bun install`
-        : `hcn ${found} at ${bin} is older than the required ${required}. ` +
-            `Install a newer hcn there, or point LUCID_HCN at one.`,
+  declare readonly diagnostic: CompatibilityDiagnostic;
+  constructor(
+    found: string,
+    required: string,
+    bin?: string,
+    installation?: HcnInstallation,
+    origin: CompatibilityDiagnostic["origin"] = "execution-check",
+  ) {
+    const diagnostic = hcnDiagnostic(
+      {
+        ...installation,
+        detected: found,
+        lookupRoot: installation?.lookupRoot ?? null,
+        minimum: required,
+        path: installation?.path ?? bin ?? null,
+        pin: installation?.pin ?? HCN_PIN,
+        source: installation?.source ?? null,
+      },
+      origin,
     );
+    if (!diagnostic) throw new Error("Expected an HCN version refusal");
+    super(diagnosticMessage(diagnostic), diagnostic);
     this.name = "HarnessVersionError";
   }
 }

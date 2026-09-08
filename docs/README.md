@@ -9,6 +9,7 @@ not beside the instructions for current work.
 | Check scope or choose a domain term | [CONTEXT](../CONTEXT.md) |
 | Change record storage, delivery, or lifecycle | [Architecture](architecture.md) |
 | Attach a source or implement frames | [Source protocol](skill-chat-substrate.md) |
+| Explain agent installation warnings or refusals | [Compatibility feedback](compatibility.md) |
 | Change harness selection or session recall | [Drivers](drivers.md) |
 | Change documents, annotations, saves, or attachments | [Artifacts](artifacts.md) |
 | Understand a lasting tradeoff | [Architecture decisions](adr/README.md) |
