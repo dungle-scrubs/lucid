@@ -167,6 +167,11 @@ and the box you type in.
 
 A draggable divider sits between them on wide screens.
 
+The conversation starts collapsed in each new view. A named button in the
+document header opens it and closes it again without losing drafts or notes.
+The document uses the released space. See [conversation panel visibility](design.md#conversation-panel-visibility)
+for initialization, focus, motion, and preservation rules.
+
 ### The name is edited in place
 
 The artifact's name is an editable field carrying the name, with an edit icon

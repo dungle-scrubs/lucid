@@ -105,7 +105,7 @@ File chips report observed outcomes and actual bounds. Do not claim a file
 was read merely because it was offered to the agent. Uploading must not
 block the rest of the composer or disturb the document being read.
 
-At 900px and below, the panes stack. The document defaults to one-third
+At 900px and below, the panes stack. The document defaults to two-thirds
 of the available height and scrolls internally. A full-width divider with
 a dotted handle resizes it vertically, from 15% to 70%; Up/Down arrows
 move it too. Desktop width resizing remains independent. The header wraps
@@ -145,3 +145,30 @@ The artifact iframe declares both color schemes so an authored document can
 respond to the system preference independently of the surrounding interface.
 There is no shared-user ownership mode. Do not copy another person's locked
 document state from an old handoff into this single-user product.
+
+## Conversation panel visibility
+
+Each browser view starts closed unless its URL contains exactly one
+`conversation-panel=open` parameter. Missing, invalid, or duplicate values
+start closed. `lucid2 serve [conversation] --conversation-panel open|closed`
+prints a link with that initializer; the command does not launch a browser.
+History replacements preserve the query and fragment. Existing saved-version
+links open independent views with the closed default. Reloading reapplies the
+initializer. Manual toggles do not change URLs, storage, or conversation records.
+
+The header's Show conversation / Hide conversation button is available in all
+five header branches, including empty, unsaved, historical, comparison, and
+connection-error views. It exposes the expanded state and controlled panel.
+Closing moves focus to that button, makes the mounted panel inert and hidden
+from accessibility tools, and removes the divider from keyboard access.
+
+The whole panel slides right while its layout space closes over about 180ms.
+The document gains the available width, or full height when panes are stacked.
+The layout clips the moving panel to prevent page overflow. Reduced motion
+removes transitions. No timer or transition event controls usability.
+Reopening uses the prior pane sizes; resizing or receiving updates never
+resets visibility. Comparison columns may reflow with the available space.
+
+The panel, composer, and document remain mounted. Toggling preserves draft
+text, attachments, annotation drafts, queued notes, and unsaved document edits.
+It does not reset transcript scrolling or stop the conversation's subscriptions.

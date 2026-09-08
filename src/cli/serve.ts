@@ -1,3 +1,5 @@
+import type { ConversationPanelVisibility } from "../server/view-options.js";
+import { conversationViewUrl } from "../server/view-options.js";
 /**
  * `lucid2 serve` — start the loopback browser surface.
  *
@@ -16,6 +18,8 @@ import { startServer } from "../server/server.js";
 import { requestManagedWorker } from "./managed-worker.js";
 
 export interface ServeOpts {
+  readonly conversationId?: string;
+  readonly conversationPanel?: ConversationPanelVisibility;
   readonly rootDir?: string;
   /** `0` asks the kernel for a free port. Tests use it; a person does not. */
   readonly port?: number;
@@ -43,6 +47,11 @@ export const serveConversation = async (opts: ServeOpts = {}): Promise<void> => 
   const running = await startServe(opts);
   log(`lucid browser on ${running.url}`);
   log(`open the conversation hub: ${running.url}/`);
+  if (opts.conversationId !== undefined || opts.conversationPanel !== undefined) {
+    log(
+      `open a conversation: ${conversationViewUrl(running.url, opts.conversationId ?? "demo", opts.conversationPanel)}`,
+    );
+  }
 
   await new Promise<void>((resolve) => {
     const stop = (): void => resolve();

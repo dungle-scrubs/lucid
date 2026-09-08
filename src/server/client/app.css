@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./conversation-panel.css";
 @import "./content-comparison.css";
 
 .input-recovery-text {
@@ -204,12 +205,7 @@ body {
   position: relative;
 }
 
-/* The conversation is the margin note beside it: a reading column, not a
-   half of the screen. This is where it starts; the grip decides after
-   that, and an inline width overrides this rule. */
-.pane.conversation {
-  flex: 0 0 var(--conversation-width, 352px);
-}
+/* Conversation allocation and visibility are in conversation-panel.css. */
 
 /* The border between the panes is the grip's, so there is one line and it
    is the thing you grab: 1px --edge-2 with a 3x38 handle centred on it.

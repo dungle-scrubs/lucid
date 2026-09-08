@@ -161,3 +161,13 @@ export const CheckDuotone = ({ size = 12 }: { size?: number }): React.ReactEleme
     <path d="M822.64 342.64l-384 384c-5.792 5.798-13.797 9.385-22.64 9.385s-16.848-3.587-22.64-9.385l-0-0-160-160c-5.794-5.794-9.378-13.799-9.378-22.64 0-17.683 14.335-32.018 32.018-32.018 8.841 0 16.846 3.584 22.64 9.378l137.36 137.4 361.36-361.4c5.794-5.794 13.799-9.378 22.64-9.378 17.683 0 32.018 14.335 32.018 32.018 0 8.841-3.584 16.846-9.378 22.64l0-0z" />
   </Duotone>
 );
+
+/** Phosphor sidebar-simple-duotone, mirrored to match the right-hand panel. */
+export const SidebarSimpleDuotone = (props: { size?: number }): React.ReactElement => (
+  <Duotone size={props.size ?? 18}>
+    <g transform="translate(1024 0) scale(-4 4)">
+      <path d="M88,48V208H40a8,8,0,0,1-8-8V56a8,8,0,0,1,8-8Z" opacity="0.2" />
+      <path d="M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40ZM40,56H80V200H40ZM216,200H96V56H216V200Z" />
+    </g>
+  </Duotone>
+);

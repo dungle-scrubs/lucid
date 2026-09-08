@@ -929,8 +929,8 @@ const Failures = (): React.ReactElement => (
     >
       <div className="empty-panel">
         <p className="empty-line">
-          Nothing here yet. Ask on the right, or attach a file — either way lucid writes v1 and
-          keeps it.
+          Nothing here yet. Open the conversation to ask for a document, or attach a file. Lucid
+          writes v1 and keeps it.
         </p>
         <label className="v choose">
           Choose a file

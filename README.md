@@ -21,8 +21,26 @@ In another terminal, `./dist/lucid2 serve` opens the browser surface at
 [the conversation hub](http://127.0.0.1:17454/). The server binds to loopback.
 The hub lists local conversations by repository or starting folder; selecting
 one opens its artifacts and transcript. **New** creates a conversation with
-a working folder and saved harness, model, effort, and mode. It appends inputs
-but does not start an agent. Keep a driver running to answer those inputs.
+a working folder and saved harness, model, effort, and mode. Creating or opening
+a conversation starts no agent. Submitting a prompt starts or resumes a managed
+worker when the saved folder and route support execution.
+
+Each new browser view starts with the conversation panel closed. Use the
+Show conversation button beside the Lucid mark to open it. Closing the panel
+releases document space and preserves drafts, notes, and the running conversation.
+
+Choose the initial state of the printed link explicitly:
+
+```sh
+./dist/lucid2 serve demo --conversation-panel open
+./dist/lucid2 serve demo --conversation-panel closed
+```
+
+With no arguments, `serve` prints the hub URL. A panel option without a
+conversation selects `demo`. The option accepts only `open`
+and `closed`. Visibility belongs to that browser view; toggles do not save a
+preference. Reloading applies the URL's initial choice again. No record is
+created by selecting a conversation here.
 
 | Command | Use |
 |---|---|
