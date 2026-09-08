@@ -81,11 +81,13 @@ if (!available(harness)) {
   process.exit(0);
 }
 
+// An explicit grant places Claude's variadic tools flag after the prompt.
+// The access preset currently places it before the prompt and consumes it.
 await captureRun("run-clean", [
   "run",
   harness,
   "--json",
-  "--access",
+  "--tools",
   "read",
   "Reply with exactly: ok",
 ]);

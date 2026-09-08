@@ -1,4 +1,13 @@
-{"kind":"identity","sessionId":"01a0754e-e3f3-7bff-9363-7d5bcb69e25c","authority":"harness-minted","capabilities":{"vision":false,"images":false,"streaming":"token","session":true,"source":"curated","confidence":"medium","escalation":{"supported":true,"source":"runtime-verified","confidence":"high","observedOn":{"harness":"pi","model":"","version":"0.84.2","date":"2026-08-19"}}}}
+{"kind":"identity","sessionId":"ceece7f9-6dab-4855-af34-1c374ca7a104","authority":"harness-minted","capabilities":{"vision":true,"images":true,"streaming":"token","session":true,"source":"curated","confidence":"medium","escalation":{"supported":true,"source":"runtime-verified","confidence":"high","observedOn":{"harness":"claude","model":"","version":"2.1.235","date":"2026-08-19"}}}}
+{"kind":"progress","label":"hook_started"}
+{"kind":"progress","label":"hook_started"}
+{"kind":"progress","label":"hook_started"}
+{"kind":"progress","label":"hook_started"}
+{"kind":"progress","label":"hook_response"}
+{"kind":"progress","label":"hook_response"}
+{"kind":"progress","label":"hook_response"}
+{"kind":"progress","label":"hook_response"}
+{"kind":"progress","label":"status"}
 {"kind":"token","text":"ok"}
 {"kind":"message","role":"assistant","text":"ok"}
 {"kind":"done","exitCode":0,"cause":"clean","escalation":{"mode":"ask","detection":"none"}}
