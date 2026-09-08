@@ -27,7 +27,7 @@ bun scripts/smoke-handoff.ts   # handoff oracle, writes artifacts/evidence/hando
 ### The binary is built by a script, not by `bun build`
 
 ```sh
-bun run build      # -> scripts/build.ts -> dist/lucid2
+bun run build      # -> scripts/build.ts -> dist/lucid
 ```
 
 Never change this back to `bun build --compile`. Bundler plugins do not run

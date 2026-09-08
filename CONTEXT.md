@@ -85,7 +85,7 @@ Take nouns from here. One name per thing.
 | **orphan** | A spot whose target is gone. Shown with its note and snippet, never re-pointed |
 | **document mode** | What a click in the document means: `use` operates it, `markup` selects an element to write about. Not a `profile` - that word is taken, and these are unrelated |
 | **note box** | Where a note is written. Opens beside what was selected |
-| **browser surface** | `lucid2 serve`: one loopback server, every record, a record chosen by URL |
+| **browser surface** | `lucid serve`: one loopback server, every record, a record chosen by URL |
 | **driver preference** | `driver.json`, beside `meta.json`. The harness, provider, model and effort a person chose in the browser. Written by the server; honored at the next queue-input boundary. An idle steer or answer stays on the driver in force. Never in the log |
 
 **Not lucid's words.** `hcn` owns harness descriptors, capability claims, and

@@ -1,7 +1,6 @@
 {
-  "name": "lucid-v2",
-  "version": "0.0.0",
-  "private": true,
+  "name": "@dungle-scrubs/lucid",
+  "version": "2.0.0-beta.1",
   "type": "module",
   "engines": {
     "bun": ">=1.3"
@@ -13,7 +12,9 @@
     "test": "bun test",
     "prepare": "test -d .git/hooks && git config --local core.hooksPath .git/hooks && lefthook install --force || true",
     "build": "bun scripts/build.ts",
-    "build:reference": "bun scripts/build-reference.ts"
+    "build:reference": "bun scripts/build-reference.ts",
+    "build:package": "bun scripts/build-package.ts",
+    "prepack": "bun run build:package"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.7",
@@ -29,7 +30,7 @@
   },
   "dependencies": {
     "@assistant-ui/react": "^0.10",
-    "@dungle-scrubs/harness-cli-normalizer": "0.6.4",
+    "@dungle-scrubs/harness-cli-normalizer": "0.6.5",
     "@radix-ui/react-popover": "^1.1.23",
     "@tanstack/react-form": "1.33.5",
     "@tanstack/react-query": "^5.102.8",
@@ -39,9 +40,23 @@
     "react-dom": "^18.3.1"
   },
   "bin": {
-    "lucid2": "./dist/lucid2"
+    "lucid": "./dist/package/main.js"
   },
   "files": [
-    "dist"
-  ]
+    "dist/package",
+    "skills/lucid",
+    "skills/lucid-design"
+  ],
+  "description": "Review, annotate, and revise agent-authored documents with a durable local conversation.",
+  "license": "MIT",
+  "author": "Kevin Frilot",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dungle-scrubs/lucid.git"
+  },
+  "homepage": "https://github.com/dungle-scrubs/lucid#readme",
+  "publishConfig": {
+    "access": "public",
+    "tag": "beta"
+  }
 }

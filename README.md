@@ -4,50 +4,58 @@ Read an agent's document, mark it up, and continue the conversation that
 produced it. lucid keeps the conversation in a durable local record, so it
 survives a process dying or a change of harness.
 
-This workspace builds `lucid2`. It is private and unpublished. It serves
-one person on one machine. Product scope and terms live in
+This is the v2 beta. It serves one person on one machine. Product scope and terms live in
 [CONTEXT.md](CONTEXT.md).
 
 ## Run it
 
-Use Bun 1.3 or later. Install dependencies with `bun install`, then build:
+Install Bun 1.3 or later and Node 24 or later, then install the beta:
 
 ```sh
-bun run build
-./dist/lucid2 chat demo --harness claude
+npm install -g @dungle-scrubs/lucid@beta
+lucid serve
 ```
 
-In another terminal, `./dist/lucid2 serve` opens the browser surface at
+The npm package includes the browser assets and its pinned hcn dependency.
+Install and authenticate the harness you select separately. To build from source:
+
+```sh
+bun install
+bun run build
+./dist/lucid serve
+```
+
+`lucid serve` starts the browser surface at
 [the conversation hub](http://127.0.0.1:17454/). The server binds to loopback.
 The hub lists local conversations by repository or starting folder; selecting
 one opens its artifacts and transcript. **New** creates a conversation with
-a working folder and saved harness, model, effort, and mode. Creating or opening
+an optional project folder and saved harness, model, effort, and mode. Creating or opening
 a conversation starts no agent. Submitting a prompt starts or resumes a managed
 worker when the saved folder and route support execution.
 
-Each new browser view starts with the conversation panel closed. Use the
-Show conversation button beside the Lucid mark to open it. Closing the panel
+An empty document starts with the conversation panel open. Use the
+Show conversation button in the document toolbar to toggle it. Closing the panel
 releases document space and preserves drafts, notes, and the running conversation.
 
 Choose the initial state of the printed link explicitly:
 
 ```sh
-./dist/lucid2 serve demo --conversation-panel open
-./dist/lucid2 serve demo --conversation-panel closed
+./dist/lucid serve demo --conversation-panel open
+./dist/lucid serve demo --conversation-panel closed
 ```
 
 With no arguments, `serve` prints the hub URL. A panel option without a
 conversation selects `demo`. The option accepts only `open`
-and `closed`. Visibility belongs to that browser view; toggles do not save a
-preference. Reloading applies the URL's initial choice again. No record is
+and `closed`. Visibility belongs to that browser tab and survives reload through session storage.
+An explicit URL choice sets the initial state. No record is
 created by selecting a conversation here.
 
 | Command | Use |
 |---|---|
-| `lucid2 chat demo` | Drive a conversation in a terminal window with an input box |
-| `lucid2 run demo` | Drive without the terminal interface |
-| `lucid2 watch demo` | Follow the transcript |
-| `lucid2 send demo "your question"` | Append input to an existing conversation |
+| `lucid chat demo` | Drive a conversation in a terminal window with an input box |
+| `lucid run demo` | Drive without the terminal interface |
+| `lucid watch demo` | Follow the transcript |
+| `lucid send demo "your question"` | Append input to an existing conversation |
 | `bun src/cli/main.ts <command>` | Run from source during development |
 
 In chat, Enter queues input and Alt+Enter steers a running turn where the
@@ -57,7 +65,8 @@ the terminal. Harnesses run through hcn; see [drivers](docs/drivers.md).
 Records live in `~/.lucid2/records` by default. An explicit root wins over
 `LUCID_ROOT`, then user configuration. [User defaults](docs/drivers.md#user-defaults-and-creation)
 configure new hub conversations and the record root.
-The older lucid installation's `~/.lucid` directory is separate.
+The older v1 installation's `~/.lucid` directory is separate. V2 does not read or
+convert v1 records automatically; preserve them before replacing a v1 installation.
 
 ## Working with a document
 

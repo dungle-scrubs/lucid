@@ -227,7 +227,7 @@ filename retain separate copies. The offered text is also returned for budget
 accounting before dispatch.
 
 An offered copy lives in a private temporary directory outside the record.
-`lucid2 context <offered-directory> [--offset BYTE] [--bytes COUNT] [--json]`
+`lucid context <offered-directory> [--offset BYTE] [--bytes COUNT] [--json]`
 reads that copy directly, without HTTP or record access. Each read returns at
 most 65,536 bytes on UTF-8 boundaries, with nextOffset and done. Keep the copy
 for the active execution and remove it when that execution closes.

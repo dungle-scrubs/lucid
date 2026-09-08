@@ -6,7 +6,7 @@
       "name": "lucid-v2",
       "dependencies": {
         "@assistant-ui/react": "^0.10",
-        "@dungle-scrubs/harness-cli-normalizer": "0.6.4",
+        "@dungle-scrubs/harness-cli-normalizer": "0.6.5",
         "@radix-ui/react-popover": "^1.1.23",
         "@tanstack/react-form": "1.33.5",
         "@tanstack/react-query": "^5.102.8",
@@ -70,7 +70,7 @@
 
     "@csstools/css-tokenizer": ["@csstools/css-tokenizer@4.0.0", "", {}, "sha512-QxULHAm7cNu72w97JUNCBFODFaXpbDg+dP8b/oWFAZ2MTRppA3U00Y2L1HqaS4J6yBqxwa/Y3nMBaxVKbB/NsA=="],
 
-    "@dungle-scrubs/harness-cli-normalizer": ["@dungle-scrubs/harness-cli-normalizer@0.6.4", "", { "bin": { "hcn": "dist/cli.js" } }, "sha512-M5tC89ZGCg21lNNBl7hkYY/CqNtizXs2t/qMg8O5aucxl867z0aJJC1tnIsJajWZNIQoO4z6vM4UzOFQpVuaFw=="],
+    "@dungle-scrubs/harness-cli-normalizer": ["@dungle-scrubs/harness-cli-normalizer@0.6.5", "", { "bin": { "hcn": "dist/cli.js" } }, "sha512-vxzWXGCbec08e4WUs5TAiL/dBmDxXsH3EpV4SItLpgfJ3g/iSgVml8C3MiscWJFfOPiJvbAmBzhBUr7bXvWSag=="],
 
     "@exodus/bytes": ["@exodus/bytes@1.15.1", "", { "peerDependencies": { "@noble/hashes": "^1.8.0 || ^2.0.0" }, "optionalPeers": ["@noble/hashes"] }, "sha512-S6mL0yNB/Abt9Ei4tq8gDhcczc4S3+vQ4ra7vxnAf+YHC02srtqxKKZghx2Dq6p0e66THKwR6r8N6P95wEty7Q=="],
 

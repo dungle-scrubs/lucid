@@ -115,7 +115,7 @@ describe("an idle driver still receives what is sent to it", () => {
     expect(running.kind).toBe("running");
     if (running.kind !== "running") return;
 
-    // A separate process appends, exactly as `lucid2 send` and the browser
+    // A separate process appends, exactly as `lucid send` and the browser
     // server both do: no presence lock, no lease, acts on no effect.
     const writer = openConversation(dir, {
       now: nowFn,

@@ -5,8 +5,8 @@ description: >
   conversation. Use for plans, roadmaps, comparisons, checklists, schemas,
   diagrams, specs, walkthroughs, and other structured answers the user may
   want to annotate at an element or phrase. Requires the lucid artifact
-  protocol marker supplied by `lucid2 chat` or `lucid2 run`.
-compatibility: Requires lucid v2 and a conversation started through lucid2.
+  protocol marker supplied by `lucid chat` or `lucid run`.
+compatibility: Requires lucid v2 and a conversation started through lucid.
 ---
 
 # Lucid v2 artifact authoring
@@ -25,7 +25,7 @@ host and means the answer will be captured into the conversation record.
 If the marker is absent, do not emit a `lucid-artifact` fence: an ordinary
 Pi/Claude/Codex/Muse session has no host that can store it. Answer normally
 and, if browser review is essential, tell the user to reopen the work through
-`lucid2 chat <conversation> --harness <name>`.
+`lucid chat <conversation> --harness <name>`.
 
 ## Emit the artifact
 

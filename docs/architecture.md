@@ -229,7 +229,7 @@ original input ID, expected attempt, and stable action ID. An identical repeat
 is idempotent; a changed repeat or stale action is a conflict. Failed or uncertain
 external execution requires acknowledgement of possible workspace effects and
 fresh continuation with the original prompt and partial recorded context.
-`lucid2 serve` installs this interface by default. Embedded test servers can
+`lucid serve` installs this interface by default. Embedded test servers can
 supply an inert launcher. The listener binds before discovery, naming, or
 managed reconciliation starts, so a failed bind starts no background work.
 Compiled internal commands route directly to their worker entry point.

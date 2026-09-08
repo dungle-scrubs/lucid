@@ -1,4 +1,4 @@
-{"kind":"identity","sessionId":"01a07f72-9ca2-7025-b5b1-5994e213e879","authority":"harness-minted","capabilities":{"vision":false,"images":false,"streaming":"none","session":false,"source":"unknown","confidence":"none","escalation":{"supported":false,"source":"unknown","confidence":"none"}}}
+{"kind":"identity","sessionId":"01a08188-032e-7fd8-8740-32239c245fc7","authority":"harness-minted","capabilities":{"vision":false,"images":false,"streaming":"none","session":false,"source":"unknown","confidence":"none","escalation":{"supported":false,"source":"unknown","confidence":"none"}}}
 {"kind":"token","text":"\n\n"}
 {"kind":"token","text":"ok"}
 {"kind":"message","role":"assistant","text":"\n\nok"}

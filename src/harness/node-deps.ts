@@ -10,6 +10,7 @@
 
 import { spawn as nodeSpawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { selfInvocation } from "../cli/invocation.js";
@@ -24,6 +25,7 @@ export interface HcnBinLookup {
   /** Stands in for this module's own directory. */
   readonly moduleDir?: string;
   readonly cwd?: string;
+  readonly executablePath?: string;
 }
 
 /** LUCID_HCN, then the package-local bin, then PATH.
@@ -44,8 +46,25 @@ export const resolveHcnBin = (opts: HcnBinLookup = {}): { bin: string; source: s
   const env = opts.env ?? process.env.LUCID_HCN;
   if (env !== undefined && env !== "") return { bin: env, source: "env" };
   const here = opts.moduleDir ?? dirname(fileURLToPath(import.meta.url));
+  // Resolve the installed dependency from this package, including npm hoisting.
+  try {
+    const manifest = createRequire(resolve(here, "lookup.cjs")).resolve(
+      "@dungle-scrubs/harness-cli-normalizer/package.json",
+    );
+    const bin = resolve(dirname(manifest), "dist/cli.js");
+    if (existsSync(bin)) return { bin, source: "package-dependency" };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "MODULE_NOT_FOUND") throw error;
+  }
   const beside = resolve(here, "..", "..", "node_modules", ".bin", "hcn");
   if (existsSync(beside)) return { bin: beside, source: "node_modules" };
+  const executable =
+    opts.executablePath ??
+    (import.meta.url.startsWith("file:///$bunfs/") ? process.execPath : undefined);
+  if (executable) {
+    const bin = resolve(dirname(executable), "..", "node_modules", ".bin", "hcn");
+    if (existsSync(bin)) return { bin, source: "node_modules(executable)" };
+  }
   const fromCwd = resolve(opts.cwd ?? process.cwd(), "node_modules", ".bin", "hcn");
   if (existsSync(fromCwd)) return { bin: fromCwd, source: "node_modules(cwd)" };
   return { bin: "hcn", source: "path" };

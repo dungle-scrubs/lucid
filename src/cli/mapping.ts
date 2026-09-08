@@ -60,7 +60,7 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
       const help = {
         kind: "help",
         message:
-          "usage: lucid2 context <offered-directory> [--offset BYTE] [--bytes COUNT] [--json]\nRead a bounded slice of offered conversation context. Reports nextOffset and done.",
+          "usage: lucid context <offered-directory> [--offset BYTE] [--bytes COUNT] [--json]\nRead a bounded slice of offered conversation context. Reports nextOffset and done.",
       } as const;
       const path = rest[0];
       if (!path || path.startsWith("--")) return help;
@@ -105,14 +105,14 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
     case "send": {
       const conversationId = rest[0];
       if (!conversationId)
-        return { kind: "help", message: "usage: lucid2 send <conversation> <text>" };
+        return { kind: "help", message: "usage: lucid send <conversation> <text>" };
       const text = rest.slice(1).join(" ");
-      if (!text) return { kind: "help", message: "usage: lucid2 send <conversation> <text>" };
+      if (!text) return { kind: "help", message: "usage: lucid send <conversation> <text>" };
       return { kind: "send", conversationId, text };
     }
     case "watch": {
       const conversationId = rest[0];
-      if (!conversationId) return { kind: "help", message: "usage: lucid2 watch <conversation>" };
+      if (!conversationId) return { kind: "help", message: "usage: lucid watch <conversation>" };
       return { kind: "watch", conversationId };
     }
     case "run": {
@@ -125,7 +125,7 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
           if (!harnessName)
             return {
               kind: "help",
-              message: "usage: lucid2 run [conversation] [--harness <claude|codex|pi|muse>]",
+              message: "usage: lucid run [conversation] [--harness <claude|codex|pi|muse>]",
             };
           i++;
         } else if (arg.startsWith("--")) {
@@ -149,7 +149,7 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
           if (!harnessName)
             return {
               kind: "help",
-              message: "usage: lucid2 chat [conversation] [--harness <claude|codex|pi|muse>]",
+              message: "usage: lucid chat [conversation] [--harness <claude|codex|pi|muse>]",
             };
           i++;
         } else if (arg.startsWith("--")) {
@@ -170,7 +170,7 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
     case "serve": {
       if (rest.length === 0) return { kind: "serve" };
       const usage =
-        "usage: lucid2 serve [conversation] [--conversation-panel <open|closed>]\nWithout arguments, open the hub. A panel option without a conversation selects demo; the panel defaults to closed.\nExamples: lucid2 serve demo --conversation-panel open\n          lucid2 serve demo --conversation-panel closed";
+        "usage: lucid serve [conversation] [--conversation-panel <open|closed>]\nWithout arguments, open the hub. A panel option without a conversation selects demo; the panel defaults to closed.\nExamples: lucid serve demo --conversation-panel open\n          lucid serve demo --conversation-panel closed";
       const invalid = (message: string): MappedCommand => ({
         kind: "help",
         message: `${message}\n${usage}`,
@@ -201,7 +201,7 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
     case "-h":
       return {
         kind: "help",
-        message: "usage: lucid2 <send|watch|run|chat|serve|announce|inject|context> [...]",
+        message: "usage: lucid <send|watch|run|chat|serve|announce|inject|context> [...]",
       };
     default:
       return { kind: "help", message: `unknown command: ${cmd}` };

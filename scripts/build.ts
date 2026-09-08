@@ -1,5 +1,5 @@
 /**
- * Build the `lucid2` binary.
+ * Build the `lucid` binary.
  *
  * This is a script rather than a `bun build` command line for one reason:
  * bundler plugins do not run through the `bun build` CLI. They run through
@@ -20,7 +20,7 @@
 import { rmSync } from "node:fs";
 import tailwind from "bun-plugin-tailwind";
 
-const OUTFILE = "dist/lucid2";
+const OUTFILE = "dist/lucid";
 
 /* What the binary is checked for. Both must be present.
  *

@@ -1,7 +1,7 @@
 import type { ConversationPanelVisibility } from "../server/view-options.js";
 import { conversationViewUrl } from "../server/view-options.js";
 /**
- * `lucid2 serve` — start the loopback browser surface.
+ * `lucid serve` — start the loopback browser surface.
  *
  * One command, every record, a record chosen by URL. The server itself is
  * `src/server/server.ts`, which owns the binding, the token, and the rule

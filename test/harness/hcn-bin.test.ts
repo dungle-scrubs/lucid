@@ -66,6 +66,34 @@ describe("resolving the hcn binary", () => {
     expect(got.source).toBe("node_modules(cwd)");
   });
 
+  test("an npm install resolves its hoisted dependency outside the working folder", () => {
+    const dependency = join(root, "node_modules", "@dungle-scrubs", "harness-cli-normalizer");
+    mkdirSync(join(dependency, "dist"), { recursive: true });
+    writeFileSync(
+      join(dependency, "package.json"),
+      JSON.stringify({ name: "@dungle-scrubs/harness-cli-normalizer" }),
+    );
+    writeFileSync(join(dependency, "dist", "cli.js"), "#!/usr/bin/env node\n");
+    const moduleDir = join(root, "node_modules", "@dungle-scrubs", "lucid", "dist", "package");
+    expect(resolveHcnBin({ moduleDir, cwd: "/" })).toEqual({
+      bin: join(dependency, "dist", "cli.js"),
+      source: "package-dependency",
+    });
+  });
+
+  test("a compiled binary finds its checkout dependency from another working folder", () => {
+    const bin = join(root, "node_modules", ".bin", "hcn");
+    mkdirSync(join(root, "node_modules", ".bin"), { recursive: true });
+    writeFileSync(bin, "#!/bin/sh\n");
+    expect(
+      resolveHcnBin({
+        moduleDir: "/$bunfs/root",
+        executablePath: join(root, "dist", "lucid"),
+        cwd: "/",
+      }),
+    ).toEqual({ bin, source: "node_modules(executable)" });
+  });
+
   test("with nothing local, it falls to PATH", () => {
     expect(resolveHcnBin({ moduleDir: noBesideBin(), cwd: join(root, "empty") })).toEqual({
       bin: "hcn",

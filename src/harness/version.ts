@@ -9,7 +9,7 @@
  */
 
 /** Native resume verification and complete-request context accounting. */
-export const HCN_MIN_VERSION = "0.6.4";
+export const HCN_MIN_VERSION = "0.6.5";
 
 /** Numeric compare over major.minor.patch. A non-numeric part reads as 0,
  * so a prerelease suffix never makes a version look newer than it is. */

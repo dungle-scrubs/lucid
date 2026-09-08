@@ -1,7 +1,7 @@
 /**
  * DriverHonor — RFC-12's honor rule, wrapped around the headless host.
  *
- * A headless driver (`lucid2 chat`, `lucid2 run`) reads the record's
+ * A headless driver (`lucid chat`, `lucid run`) reads the record's
  * driver preference before each turn is handed to the harness. When the
  * harness, provider, model or effort it names differ from the flags the
  * current source spawned under - on dimensions an explicit spawn flag did

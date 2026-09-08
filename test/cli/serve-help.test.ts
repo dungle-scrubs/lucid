@@ -5,7 +5,7 @@ test("asking for server help or passing an unsupported argument never starts a s
   for (const argument of ["--help", "-h", "--port"])
     expect(mapSubcommand(["serve", argument])).toMatchObject({
       kind: "help",
-      message: expect.stringContaining("lucid2 serve"),
+      message: expect.stringContaining("lucid serve"),
     });
   expect(mapSubcommand(["serve"])).toEqual({ kind: "serve" });
 });

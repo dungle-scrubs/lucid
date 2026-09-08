@@ -44,7 +44,7 @@ const REVISIONS = Number(arg("revisions", "22"));
  * current version holds. A refusal is a bad outcome; a correct fallback is a
  * good one; a patch that lands by luck is the one worth knowing about. */
 const RESTART_AFTER = Number(arg("restart-after", "0"));
-const BIN = join(import.meta.dir, "..", "dist", "lucid2");
+const BIN = join(import.meta.dir, "..", "dist", "lucid");
 const LOG = join(homedir(), ".lucid2", "records", RECORD, "log.ndjson");
 
 /** Small, local changes: the kind a patch is for. Deliberately phrased the
@@ -88,7 +88,7 @@ const restartDriver = async (harness: string): Promise<void> => {
   // second half rides the same session as the first, and every anchor
   // resolves from context that was never lost.
   await new Promise<void>((resolve) => {
-    const p = spawn("pkill", ["-9", "-f", `lucid2 run ${RECORD}`], { stdio: "ignore" });
+    const p = spawn("pkill", ["-9", "-f", `lucid run ${RECORD}`], { stdio: "ignore" });
     p.on("close", () => resolve());
     p.on("error", () => resolve());
   });

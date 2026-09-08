@@ -1,13 +1,13 @@
-{"kind":"session","sessionId":"39e6de02-f351-47ea-aa68-f37231b1ee9b","harness":"pi","hcn":"0.6.4","questions":"ask","origin":"fresh"}
+{"kind":"session","sessionId":"cb629443-457d-4fd0-aff0-e36fd4dcb658","harness":"pi","hcn":"0.6.5","questions":"ask","origin":"fresh"}
 {"kind":"disposition","id":"in-1","disposition":"started"}
-{"kind":"turn","turnId":"39e6de02-f351-47ea-aa68-f37231b1ee9b:turn-1","id":"in-1"}
-{"kind":"identity","sessionId":"39e6de02-f351-47ea-aa68-f37231b1ee9b","authority":"caller-assigned","capabilities":{"vision":false,"images":false,"streaming":"none","session":false,"source":"unknown","confidence":"none","escalation":{"supported":false,"source":"unknown","confidence":"none"}}}
+{"kind":"turn","turnId":"cb629443-457d-4fd0-aff0-e36fd4dcb658:turn-1","id":"in-1"}
+{"kind":"identity","sessionId":"cb629443-457d-4fd0-aff0-e36fd4dcb658","authority":"caller-assigned","capabilities":{"vision":false,"images":false,"streaming":"none","session":false,"source":"unknown","confidence":"none","escalation":{"supported":false,"source":"unknown","confidence":"none"}}}
 {"kind":"token","text":"\n\n"}
 {"kind":"token","text":"one"}
 {"kind":"message","role":"assistant","text":"\n\none"}
 {"kind":"done","exitCode":null,"cause":"clean","escalation":{"mode":"ask","detection":"none"}}
 {"kind":"disposition","id":"in-2","disposition":"started"}
-{"kind":"turn","turnId":"39e6de02-f351-47ea-aa68-f37231b1ee9b:turn-2","id":"in-2"}
+{"kind":"turn","turnId":"cb629443-457d-4fd0-aff0-e36fd4dcb658:turn-2","id":"in-2"}
 {"kind":"token","text":"\n\n"}
 {"kind":"token","text":"two"}
 {"kind":"message","role":"assistant","text":"\n\ntwo"}

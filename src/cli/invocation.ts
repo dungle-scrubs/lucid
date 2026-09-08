@@ -5,7 +5,13 @@ export const selfInvocation = (args: readonly string[] = []): readonly [string, 
   const embedded = import.meta.url.startsWith("file:///$bunfs/");
   return embedded
     ? [process.execPath, ...args]
-    : [process.execPath, fileURLToPath(new URL("./main.ts", import.meta.url)), ...args];
+    : [
+        process.execPath,
+        fileURLToPath(
+          new URL(import.meta.url.endsWith(".ts") ? "./main.ts" : "./main.js", import.meta.url),
+        ),
+        ...args,
+      ];
 };
 
 export const BACKGROUND_COMMAND = "LUCID_BACKGROUND_COMMAND";

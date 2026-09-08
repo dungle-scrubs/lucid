@@ -163,7 +163,7 @@ conversation panel open. A conversation with documents starts closed.
 An explicit URL initializer overrides this default: exactly one
 `conversation-panel=open` opens it; invalid or duplicate values close it.
 The default is set from the first catalog response, so a new document does not
-close an already open panel. `lucid2 serve [conversation] --conversation-panel open|closed`
+close an already open panel. `lucid serve [conversation] --conversation-panel open|closed`
 prints a link with that initializer; the command does not launch a browser.
 History replacements preserve the query and fragment. Existing saved-version
 links open independent views with the closed default. Manual toggles save the

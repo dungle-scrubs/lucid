@@ -27,7 +27,7 @@ import { readRecordMetadata } from "../store/record-identity.js";
  * never takes the presence lock, never opens a harness, never acts on an
  * effect. What it appends reaches the agent through whichever process does
  * hold the lease, by live delivery (RFC-04). With nothing driving, an append
- * lands and waits — the same thing `lucid2 send` does from a terminal.
+ * lands and waits — the same thing `lucid send` does from a terminal.
  *
  * The record secret never reaches the browser. The page talks to this
  * server; this server talks to the record.
