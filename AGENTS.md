@@ -1,73 +1,123 @@
-# Agent conventions for this repository
+# Agent conventions - lucid-v2
 
-Rules for any coding agent working on Lucid. `CONTEXT.md` is the canonical
-vocabulary and wins on conflicts; the decision ledger (D-001..) lives in
-`.plans/lucid/`.
+Coding-agent rules for this repo. `CONTEXT.md` wins on product scope and vocabulary.
+`docs/README.md` routes current contracts and active work;
+`docs/smoke-seven.md` wins on smoke semantics. Completed proposals and
+reviews live in Git, as described in the documentation index.
+Architecture decisions live in `docs/adr/`; read the governing ADR before
+changing what it covers.
+For changes larger than a correction, follow the RFC workflow in
+`docs/rfc/README.md` before code.
 
-## Icons
-
-**Never draw an SVG from scratch. Every icon is a [Lucide](https://lucide.dev)
-icon, no exceptions**: copy its path data inline, stroke style,
-`stroke-width: 1.5`, `stroke: currentColor`, no fills. If a glyph is not in
-Lucide, the answer is a different Lucide icon, not a hand-drawn path. Solo icons
-only for truly universal actions, always with an accessible label. Existing
-examples to follow: `client/chrome/Header.tsx` (crosshair),
-`client/chrome/Thread.tsx` (chevron-down). The full iconography rules are in
-`docs/DESIGN.md` §4. The brand marks are `assets/*.svg` - reference them, never
-redraw them.
-
-## Design
-
-Two design systems, and they are not interchangeable:
-
-- **The chrome** (this app) follows `docs/DESIGN.md`. Dark ink, cream type, one
-  brass accent; sage marks the agent, amber the human, and neither is ever
-  decoration. No emoji, no exclamation marks, sentence case. The tokens live in
-  `client/chrome/styles.css`; the running chrome is the only reference
-  implementation of a Lucid control.
-- **The artifact** (the agent's document, inside the iframe) is **paper** and
-  follows the optional `lucid-design` skill. It is content, not Lucid UI, and it
-  renders identically with or without Lucid, so it never wears the chrome's
-  palette. Do not style an artifact from `docs/DESIGN.md`.
-
-## UI primitives
-
-**Reach for a library primitive before hand-rolling any control - no
-exceptions.** If assistant-ui or shadcn/ui ships a solution for what you are
-building (a control, an overlay, a menu, a field, a keycap), vendor and use it;
-a bespoke element needs a stated reason in its header comment for why neither
-covered it. "It was faster to write" is not a reason.
-
-Chat and transcript primitives come from **assistant-ui**. For everything it
-does not cover (sidebar, tabs, select, kbd, and future shell chrome), use
-**shadcn/ui, the Base UI variant** - `shadcn add <c> -b base` against the
-`base-nova` registry - vendored under `client/chrome/ui/`. shadcn is open code, not a dependency: the
-copies are ours to edit, and they inherit Lucid's palette through the
-`@theme inline` shadcn variable bridge in `styles.css` (including the
-`--color-sidebar-*` ramp) rather than carrying a second theme. Keep each vendored
-file close to upstream so a later `shadcn add` stays diffable; note the edits in
-its header comment. Runtime deps this pulls in: `@base-ui/react`,
-`class-variance-authority`, `clsx`, `tailwind-merge`. Icons inside these
-components still follow the Lucide-only rule above.
-
-## Build and verify
+## Build and verify - single command
 
 ```sh
-bun run build:client   # browser bundles + Tailwind -> generated constants
-bun run build          # + compile the single binary -> dist/lucid
-bun run typecheck && bun run lint
-bun test test/*.test.ts && bunx playwright test
+bun run check   # lint + typecheck + test (also `bun run lint && bun run typecheck && bun test`)
 ```
 
-- A running viewer serves the bundle its binary embedded at compile time, and
-  the per-session daemon is detached (D-036): `lucid open` on a live session
-  reattaches to the old process, so a rebuild stays invisible. After client
-  changes, rebuild AND replace the daemon with **`lucid open <file> --restart`**
-  (stops the live daemon, spawns a fresh one on the new binary, session
-  untouched). Then verify against `curl http://127.0.0.1:<port>/__lucid/client.js`
-  - green tests against a stale bundle are not green.
-- The wait payload has two consumers: the agent reads bytes by absolute
-  `path`, the viewer fetches by `file` URL. Any payload field referencing a
-  stored asset carries both.
-- Zustand selectors must return stable slices; a selector that filters or maps
-  re-renders forever (React #185). Select the slice, derive with `useMemo`.
+Individual gates:
+
+```sh
+bun run lint         # biome check .
+bun run typecheck    # tsc --noEmit
+bun test             # deterministic, clock-injected, fake hcn
+bun scripts/smoke-handoff.ts   # handoff oracle, writes artifacts/evidence/handoff-smoke.md
+```
+
+### The binary is built by a script, not by `bun build`
+
+```sh
+bun run build      # -> scripts/build.ts -> dist/lucid
+```
+
+Never change this back to `bun build --compile`. Bundler plugins do not run
+through the `bun build` CLI - only through `Bun.build`'s API, or through
+`bunfig.toml` for the dev server. The browser stylesheet starts with
+`@import "tailwindcss"`, so a CLI build warns `invalid @ rule encountered:
+'@theme'`, emits the raw import, and **succeeds**. The binary runs and serves
+a stylesheet with no Tailwind in it.
+
+`scripts/build.ts` reads the binary back and fails loudly when that happens.
+
+Tailwind arrives as two packages, both pinned exactly, for the same reason
+hcn is: `bun-plugin-tailwind` carries the compiler, `tailwindcss` carries the
+CSS that `@import` resolves to. Bump them together or the compiler and its
+source drift apart.
+
+A patch is green only when `bun run check` is green. Do not skip gates via `-k not` / `--deselect`.
+
+## What "full e2e" means here
+
+`bun test` is the proof (deterministic, clock-injected, fake harness). Full e2e adds a **live-harness confirmation** against a real model - nondeterministic, not gating CI, evidence-logged.
+
+- Deterministic proof: `test/harness/*`, `test/modes/headless.test.ts`, `test/store/store.test.ts`, `test/protocol/*`, `test/gate-5-6.test.ts` - every smoke in `docs/smoke-seven.md` has a fake-hcn oracle.
+- Live confirmation, one lane per thing that can only be proven against a
+  real process. Run on demand:
+  - `scripts/smoke-live.ts` - a harness driven through `hcn`, per harness
+  - `scripts/smoke-resume.ts` - a harness recalls its own session after the
+    process is lost
+  - `scripts/smoke-cross-harness.ts` - one record, two different harnesses
+  - `scripts/smoke-handoff.ts` - two processes, baton-passed
+  - `scripts/smoke-interactive.ts` - the mode with no `hcn` in it at all: a
+    claude session lucid does not own, reached through project-scope hooks
+
+  The interactive lane confirms the human-owned integration mode.
+  It has a negative control:
+  with the hooks removed the session answers its own prompt and lucid never
+  attaches.
+
+**Do not gate a deepening refactor on live models alone.** If deterministic gates are green and live confirmation shows transcript folding, the seam is proven.
+
+## Live-model confirmation
+
+The standing live model is local Qwen through LM Studio. Query the chosen
+machine's current model list before a run; do not assume a model inventory
+from an old session. Use the shared home-network and local-inference
+references for machine selection and routing. Prefer mini for isolated
+handoff runs when local record locks must remain undisturbed.
+
+Route local models through an extensible hcn harness such as pi. A direct
+model call can prove store/protocol plumbing when a harness is unavailable,
+but cannot prove a harness-process or hook-integration claim.
+
+## Verification discipline
+
+- Never weaken correct code to make a self-authored test pass - the repo's own tests are the oracle.
+- After any change that touches `src/store`, `src/protocol`, `src/modes`, or `src/harness`, run the full suite, not just the file you changed: `bun test` (or `bun test test/modes/headless.test.ts` + `test/store/store.test.ts` + `test/protocol/reducer.test.ts` at minimum).
+- `biome.json` is the lint gate - do not substitute `tsc` or `gofmt` for it.
+
+## Harness access - through `hcn`, never around it
+
+lucid drives a harness by spawning `hcn --json` and reading its NDJSON. It
+does not import the normalizer, and it holds no descriptor.
+
+- **The seam is `src/harness/`.** `HarnessRunner` is the whole interface:
+  `openSession`, `streamTurn`, `inspect`, `capabilities`. Above it nothing
+  knows what a descriptor is or how a harness frames a turn. Adding a mode or
+  a flag means changing that one module.
+- **The dependency is pinned exactly** (`@dungle-scrubs/harness-cli-normalizer`),
+  because `test/fixtures/hcn/*.ndjson` are recordings of one hcn version.
+  Bumping it is a deliberate commit that re-captures them with
+  `bun scripts/capture-hcn-fixtures.ts`. `HCN_MIN_VERSION` in
+  `src/harness/version.ts` is the floor a running binary must meet.
+- **Never hand-write a fixture.** They are evidence. A test that needs a
+  sequence no recording shows composes it inline and says so.
+- **Do not re-derive hcn's behaviour.** Its flags, event kinds, failure
+  classes, and exit codes are documented in its own README and the `hcn`
+  skill. Import `EventKind` from `src/protocol/events.ts`; never mirror kind
+  literals.
+- **An unknown event kind is carried, not dropped.** hcn's kinds are additive
+  by contract, so `decodeHarnessLine` passes through what it does not know.
+  A decoder that threw there would turn a normalizer release into an outage.
+- **Which binary ran is resolved once** - `LUCID_HCN`, then
+  `node_modules/.bin/hcn`, then PATH - and logged. Set `LUCID_HCN` to test
+  against a different build.
+
+## Context hygiene
+
+Keep current contracts, concise ADRs, active proposals, and executable
+verification. Completed plans, resolved reviews, exploratory runs, and
+machine inventories do not belong in the working tree. Extract any surviving
+contract before removal. Keep recordings only where a test consumes them.
+Generated run output belongs under ignored `artifacts/`; never commit it
+as instructions or a permanent claim about current behavior.

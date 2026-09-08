@@ -1,0 +1,1099 @@
+import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createHcnRunner } from "../../src/harness/hcn-runner.js";
+import { HCN_MIN_VERSION } from "../../src/harness/version.js";
+import { type HeadlessDeps, openHeadlessSession, openHeadlessTurns } from "../../src/modes/host.js";
+import type { Frame } from "../../src/protocol/index.js";
+import {
+  createConversationRecord,
+  type HostRecord,
+  openConversation,
+} from "../../src/store/store.js";
+import { FakeHcnProcess, fakeArtifactHost, fakeSpawner } from "../harness/fakes.js";
+
+const sid = "eb04301d-8756-4a8b-ae3e-aac0e71f7265";
+const BIN = "/fake/hcn";
+
+// hcn's vocabulary, not a harness's. lucid stopped modelling claude's
+// stream-json the day hcn became the only surface it speaks: what these
+// tests script is the normalized event stream, so a harness changing its
+// own framing cannot reach this file.
+const identity = { kind: "identity", sessionId: sid, authority: "caller-assigned" };
+const assistant = (text: string) => ({ kind: "message", role: "assistant", text });
+const token = (text: string) => ({ kind: "token", text });
+const doneClean = { kind: "done", exitCode: null, cause: "clean" };
+
+/** Full in-process rig: real store host + the real hcn adapter over a fake
+ * hcn process, wired frame-for-frame with no transport. The late-bound
+ * `receive` closes the host->source loop exactly once, for both modes. */
+const rig = (
+  opts: {
+    mode?: "session" | "turn";
+    processes?: number;
+    process?: FakeHcnProcess;
+    beforeProcess?: (resume: string | undefined) => Promise<void>;
+    prepareTurn?: HeadlessDeps["prepareTurn"];
+    driverChangeAtBoundary?: () => boolean;
+    /** An input already in the record before any source attaches - the
+     * `lucid send` while nothing was running, folded by the next `run`. */
+    pendingInput?: { id: string; text: string };
+  } = {},
+) => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-modes-"));
+  const { secret } = createConversationRecord(root, "conv-1");
+  const nowMs = 0;
+  const procs = Array.from({ length: opts.processes ?? 1 }, (_, index) =>
+    index === 0 && opts.process ? opts.process : new FakeHcnProcess(),
+  );
+  const proc = procs[0] as FakeHcnProcess;
+  const spawner = fakeSpawner([...procs]);
+  const records: HostRecord[] = [];
+
+  let receive: (frame: Frame) => void = () => {};
+  const host = openConversation(join(root, "conv-1"), {
+    now: () => nowMs,
+    presence: () => undefined,
+    // The rig stands in for the lease-holding runtime, so it acts on
+    // the effects it produces (RFC-04 R2).
+    executorLease: () => true,
+    onRecord: (r) => records.push(r),
+    onEffect: (e) => {
+      if (e.type === "send") receive(e.frame);
+    },
+  });
+
+  // Enqueued BEFORE the source exists, so it is outstanding at attach and
+  // comes back through the attach replay rather than the live effect sink.
+  if (opts.pendingInput !== undefined) host.enqueueInput({ ...opts.pendingInput, mode: "queue" });
+
+  let turnCount = 0;
+  const mode = opts.mode ?? "session";
+  const common = {
+    beforeProcess: opts.beforeProcess,
+    prepareTurn: opts.prepareTurn,
+    driverChangeAtBoundary: opts.driverChangeAtBoundary,
+    harness: "claude" as const,
+    conversationId: "conv-1",
+    secret,
+    runner: createHcnRunner({ spawn: spawner.spawn, bin: BIN }),
+    host: fakeArtifactHost(),
+    mintTurnId: () => `turn-${++turnCount}`,
+    sendFrame: (frame: Frame) => host.handleFrame(JSON.stringify(frame)),
+  };
+  const source =
+    mode === "session"
+      ? openHeadlessSession({ ...common, sessionId: sid })
+      : openHeadlessTurns(common);
+  receive = source.receive;
+
+  // A session announces itself before it can take a send. Emitting it here
+  // is what a live `hcn session --json` does the moment it spawns.
+  if (mode === "session") {
+    proc.emit({
+      kind: "session",
+      sessionId: sid,
+      harness: "claude",
+      hcn: HCN_MIN_VERSION,
+      escalateQuestions: true,
+    });
+  }
+
+  const reopen = () =>
+    openConversation(join(root, "conv-1"), {
+      now: () => 99_000,
+      presence: () => undefined,
+      executorLease: () => false,
+      onRecord: () => {},
+      onEffect: () => {},
+    });
+  const logEntries = () =>
+    readFileSync(join(root, "conv-1", "log.ndjson"), "utf8")
+      .trim()
+      .split("\n")
+      .filter((line) => line !== "")
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            src: string;
+            frame?: { kind: string; turnId?: string; event?: Record<string, unknown> };
+          },
+      );
+
+  /** hcn answers a send with one disposition, then opens the turn. */
+  const accept = (inputId: string, turnId: string, disposition = "started"): void => {
+    proc.emit({ kind: "disposition", id: inputId, disposition });
+    if (disposition === "started") proc.emit({ kind: "turn", turnId, id: inputId });
+  };
+  /** hcn opens the turn for an input it already answered `started`. A send
+   * that arrived mid-turn gets its turn at the boundary, which is one event
+   * later than the disposition, not one disposition later. */
+  const startQueued = (inputId: string, turnId: string): void => {
+    proc.emit({ kind: "turn", turnId, id: inputId });
+  };
+
+  return {
+    root,
+    secret,
+    proc,
+    procs,
+    spawner,
+    host,
+    source,
+    records,
+    reopen,
+    logEntries,
+    accept,
+    startQueued,
+  };
+};
+
+const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+test("context preparation holds one input without spawning or applying it and allows later eligible work", async () => {
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const prepared: string[] = [];
+  const r = rig({
+    mode: "turn",
+    prepareTurn: async ({ inputId }) => {
+      prepared.push(inputId);
+      if (inputId === "held") {
+        await gate;
+        return { kind: "held" };
+      }
+      return { kind: "ready", prompt: "Prepared later context", native: { kind: "fresh" } };
+    },
+  });
+  try {
+    r.host.enqueueInput({ id: "held", text: "Cannot prepare this context", mode: "queue" });
+    r.host.enqueueInput({ id: "later", text: "Later eligible work", mode: "queue" });
+    await flush();
+    expect(r.spawner.calls).toHaveLength(0);
+    release?.();
+    await flush();
+    expect(prepared).toEqual(["held", "later"]);
+    expect(r.spawner.calls).toHaveLength(1);
+    expect(r.proc.writes.join("")).toBe("Prepared later context");
+    r.proc.emit(identity);
+    r.proc.emit(doneClean);
+    r.proc.exit(0);
+    await flush();
+    expect(r.host.transcript().inputs.find((input) => input.id === "held")?.status).toBe("queued");
+    expect(r.host.transcript().inputs.find((input) => input.id === "later")?.status).toBe(
+      "applied",
+    );
+  } finally {
+    release?.();
+    r.source.close();
+    r.host.close();
+    r.proc.exit(0);
+  }
+});
+
+test("each turn validates its exact resume ID before another process starts", async () => {
+  const checked: Array<string | undefined> = [];
+  const r = rig({
+    mode: "turn",
+    processes: 2,
+    beforeProcess: async (resume) => {
+      checked.push(resume);
+      if (resume !== undefined) throw new Error("Selected executable no longer supports resume");
+    },
+  });
+  try {
+    r.host.enqueueInput({ id: "first", text: "start", mode: "queue" });
+    await flush();
+    r.procs[0]?.emit(identity);
+    r.procs[0]?.emit(doneClean);
+    r.procs[0]?.exit(0);
+    await flush();
+    r.host.enqueueInput({ id: "second", text: "continue", mode: "queue" });
+    await flush();
+    expect(checked).toEqual([undefined, sid]);
+    expect(r.spawner.calls).toHaveLength(1);
+    expect(r.host.state().inputs.find((input) => input.id === "second")?.status).toBe("queued");
+    expect(
+      r
+        .logEntries()
+        .some((entry) => String(entry.frame?.event?.message).includes("no longer supports resume")),
+    ).toBe(true);
+  } finally {
+    r.source.close();
+    r.host.close();
+    for (const proc of r.procs) proc.exit(0);
+  }
+});
+
+test("a persistent session waits for prepared input before opening its process", async () => {
+  const prepared: string[] = [];
+  const r = rig({
+    mode: "session",
+    prepareTurn: async ({ inputId }) => {
+      prepared.push(inputId);
+      return inputId === "held"
+        ? { kind: "held" }
+        : { kind: "ready", prompt: "Prepared session context", native: { kind: "fresh" } };
+    },
+  });
+  try {
+    await flush();
+    expect(r.spawner.calls).toHaveLength(0);
+    r.host.enqueueInput({ id: "held", text: "Context unavailable", mode: "queue" });
+    await flush();
+    expect(r.spawner.calls).toHaveLength(0);
+    r.host.enqueueInput({ id: "later", text: "Eligible session work", mode: "queue" });
+    await flush();
+    expect(prepared).toEqual(["held", "later"]);
+    expect(r.spawner.calls).toHaveLength(1);
+    r.accept("later", "native-turn-1");
+    await flush();
+    r.proc.emit(identity);
+    r.proc.emit(doneClean);
+    await flush();
+    expect(r.host.transcript().inputs.find((input) => input.id === "held")?.status).toBe("queued");
+    expect(r.host.transcript().inputs.find((input) => input.id === "later")?.status).toBe(
+      "applied",
+    );
+  } finally {
+    r.source.close();
+    r.host.close();
+    r.proc.exit(0);
+  }
+});
+
+test("persistent preparation advances the turn identity at done before the next send", async () => {
+  const turns: string[] = [];
+  const r = rig({
+    mode: "session",
+    prepareTurn: async ({ text, turnId, native }) => {
+      turns.push(turnId);
+      return { kind: "ready", prompt: text, native };
+    },
+  });
+  try {
+    r.host.enqueueInput({ id: "first", text: "First", mode: "queue" });
+    await flush();
+    r.accept("first", "native-first");
+    r.proc.emit(identity);
+    await flush();
+    r.host.enqueueInput({ id: "second", text: "Second", mode: "queue" });
+    r.proc.emit(doneClean);
+    await flush();
+    expect(turns).toEqual(["turn-1", "turn-2"]);
+    expect(r.spawner.calls).toHaveLength(1);
+    r.accept("second", "native-second");
+    r.proc.emit(assistant("Second answer"));
+    r.proc.emit(doneClean);
+    await flush();
+    expect(
+      r.host.transcript().events.find((row) => row.event.text === "Second answer")?.turnId,
+    ).toBe("turn-2");
+  } finally {
+    r.source.close();
+    r.host.close();
+    r.proc.exit(0);
+  }
+});
+
+test("closing the previous persistent turn does not prepare a third input during the second turn", async () => {
+  const prepared: string[] = [];
+  const r = rig({
+    mode: "session",
+    prepareTurn: async ({ inputId, text, native }) => {
+      prepared.push(inputId);
+      return { kind: "ready", prompt: text, native };
+    },
+  });
+  try {
+    r.host.enqueueInput({ id: "first", text: "First", mode: "queue" });
+    await flush();
+    r.accept("first", "native-first");
+    r.proc.emit(identity);
+    await flush();
+    r.host.enqueueInput({ id: "second", text: "Second", mode: "queue" });
+    r.host.enqueueInput({ id: "third", text: "Third", mode: "queue" });
+    r.proc.emit(doneClean);
+    await flush();
+    r.accept("second", "native-second");
+    r.proc.emit(assistant("Second is still running"));
+    await flush();
+    expect(prepared).toEqual(["first", "second"]);
+    r.proc.emit(doneClean);
+    await flush();
+    expect(prepared).toEqual(["first", "second", "third"]);
+  } finally {
+    r.source.close();
+    r.host.close();
+    r.proc.exit(0);
+  }
+});
+
+test("a refused prepared session send preserves its input and reports a startup failure", async () => {
+  const r = rig({
+    mode: "session",
+    prepareTurn: async ({ text, native }) => ({ kind: "ready", prompt: text, native }),
+  });
+  try {
+    r.host.enqueueInput({ id: "refused", text: "Keep this prompt", mode: "queue" });
+    await flush();
+    r.accept("refused", "unused", "rejected");
+    await flush();
+    expect(r.host.transcript().inputs.find((input) => input.id === "refused")?.status).toBe(
+      "queued",
+    );
+    expect(
+      r.host
+        .transcript()
+        .events.filter((row) => row.event.kind === "error" && row.event.terminal === true)
+        .map((row) => row.event.code),
+    ).toEqual(["E-HUB-05"]);
+    expect(r.spawner.calls).toHaveLength(1);
+  } finally {
+    r.source.close();
+    r.host.close();
+    r.proc.exit(0);
+  }
+});
+
+test("a first steer prepares context and opens a lazy persistent session", async () => {
+  const prepared: string[] = [];
+  const r = rig({
+    mode: "session",
+    prepareTurn: async ({ inputId, text, native }) => {
+      prepared.push(inputId);
+      return { kind: "ready", prompt: text, native };
+    },
+  });
+  try {
+    r.host.enqueueInput({ id: "steer", text: "Start with this correction", mode: "steer" });
+    await flush();
+    expect(prepared).toEqual(["steer"]);
+    expect(r.spawner.calls).toHaveLength(1);
+    r.accept("steer", "native-steer");
+    r.proc.emit(identity);
+    r.proc.emit(doneClean);
+    await flush();
+    expect(r.host.transcript().inputs[0]?.status).toBe("applied");
+  } finally {
+    r.source.close();
+    r.host.close();
+    r.proc.exit(0);
+  }
+});
+
+test("a driver change during held preparation hands off before preparing later work", async () => {
+  const gate = Promise.withResolvers<void>();
+  let changed = false;
+  const prepared: string[] = [];
+  const r = rig({
+    mode: "session",
+    driverChangeAtBoundary: () => changed,
+    prepareTurn: async ({ inputId, text, native }) => {
+      prepared.push(inputId);
+      if (inputId === "held") {
+        await gate.promise;
+        return { kind: "held" };
+      }
+      return { kind: "ready", prompt: text, native };
+    },
+  });
+  try {
+    r.host.enqueueInput({ id: "held", text: "Cannot prepare", mode: "queue" });
+    r.host.enqueueInput({ id: "later", text: "Use selected driver", mode: "queue" });
+    changed = true;
+    gate.resolve();
+    await flush();
+    expect(prepared).toEqual(["held"]);
+    expect(r.spawner.calls).toHaveLength(0);
+    expect(r.host.transcript().inputs.every((input) => input.status !== "applied")).toBe(true);
+  } finally {
+    gate.resolve();
+    r.source.close();
+    r.host.close();
+    r.proc.exit(0);
+  }
+});
+
+test.each(["session", "turn"] as const)(
+  "%s records a preparation failure once without starting the task",
+  async (mode) => {
+    const r = rig({
+      mode,
+      prepareTurn: async () => {
+        throw new Error("Context unavailable");
+      },
+    });
+    try {
+      r.host.enqueueInput({ id: "held", text: "Preserve this task", mode: "queue" });
+      await flush();
+      expect(r.spawner.calls).toHaveLength(0);
+      expect(r.host.transcript().inputs[0]?.status).toBe("queued");
+      const failures = r.host.transcript().events.filter((row) => row.event.kind === "error");
+      expect(
+        failures.map((row) => ({ code: row.event.code, terminal: row.event.terminal })),
+      ).toEqual([{ code: "E-HUB-06", terminal: true }]);
+    } finally {
+      r.source.close();
+      r.host.close();
+      r.proc.exit(0);
+    }
+  },
+);
+
+test("a persistent process without a reported native identity cannot be described as fresh again", async () => {
+  const prepared: string[] = [];
+  const r = rig({
+    mode: "session",
+    prepareTurn: async ({ inputId, text, native }) => {
+      prepared.push(inputId);
+      return { kind: "ready", prompt: text, native };
+    },
+  });
+  try {
+    r.host.enqueueInput({ id: "first", text: "First", mode: "queue" });
+    await flush();
+    r.accept("first", "native-first");
+    r.proc.emit(doneClean);
+    await flush();
+    r.host.enqueueInput({ id: "next", text: "Continue", mode: "queue" });
+    await flush();
+    expect(prepared).toEqual(["first"]);
+    expect(r.host.transcript().inputs.find((input) => input.id === "next")?.status).toBe("queued");
+    expect(r.host.transcript().events.some((row) => row.event.code === "E-HUB-03")).toBe(true);
+  } finally {
+    r.source.close();
+    r.host.close();
+    r.proc.exit(0);
+  }
+});
+
+test.each(["session", "turn"] as const)(
+  "closing %s cancels preparation before any task starts",
+  async (mode) => {
+    let pendingSignal: AbortSignal | undefined;
+    let cancelled = false;
+    const r = rig({
+      mode,
+      prepareTurn: async ({ signal }) => {
+        pendingSignal = signal;
+        await new Promise<void>((resolve) =>
+          signal.addEventListener(
+            "abort",
+            () => {
+              cancelled = true;
+              resolve();
+            },
+            { once: true },
+          ),
+        );
+        return { kind: "held" };
+      },
+    });
+    try {
+      r.host.enqueueInput({ id: "pending", text: "Prepare this", mode: "queue" });
+      await flush();
+      r.source.close();
+      await flush();
+      expect(pendingSignal?.aborted).toBe(true);
+      expect(cancelled).toBe(true);
+      expect(r.spawner.calls).toHaveLength(0);
+      expect(r.host.transcript().events.filter((row) => row.event.kind === "error")).toEqual([]);
+    } finally {
+      r.source.close();
+      r.host.close();
+      r.proc.exit(0);
+    }
+  },
+);
+
+test("a resumed turn records its answer while the native process is still running", async () => {
+  const r = rig({ mode: "turn", processes: 2 });
+  try {
+    r.host.enqueueInput({ id: "first", text: "start", mode: "queue" });
+    await flush();
+    r.procs[0]?.emit(identity);
+    r.procs[0]?.emit(doneClean);
+    r.procs[0]?.exit(0);
+    await flush();
+    r.host.enqueueInput({ id: "second", text: "continue", mode: "queue" });
+    await flush();
+    r.procs[1]?.emit(identity);
+    r.procs[1]?.emit(assistant("visible before process exit"));
+    await flush();
+    expect(
+      r.logEntries().some((entry) => entry.frame?.event?.text === "visible before process exit"),
+    ).toBe(true);
+  } finally {
+    for (const proc of r.procs) proc.exit(0);
+    r.source.close();
+    r.host.close();
+  }
+});
+
+test("every later headless turn resumes the native identity emitted by the preceding turn", async () => {
+  const r = rig({ mode: "turn", processes: 3 });
+  try {
+    for (let index = 0; index < 3; index++) {
+      r.host.enqueueInput({ id: `resume-${index}`, text: `prompt ${index}`, mode: "queue" });
+      await flush();
+      const argv = r.spawner.calls[index]?.argv ?? [];
+      if (index === 0) expect(argv).not.toContain("--resume");
+      else expect(argv).toEqual(expect.arrayContaining(["--resume", `native-${index - 1}`]));
+      const proc = r.procs[index];
+      proc?.emit({ kind: "identity", sessionId: `native-${index}`, authority: "harness-minted" });
+      proc?.emit(assistant(`answer ${index}`));
+      proc?.emit(doneClean);
+      proc?.exit(0);
+      await flush();
+    }
+    expect(r.reopen().state().harnessSessions.claude).toBe("native-2");
+  } finally {
+    r.source.close();
+    r.host.close();
+    for (const proc of r.procs) proc.exit(0);
+  }
+});
+
+describe("headless modes (M5.2)", () => {
+  test("session mode: attach handshake, one turn mapped event-for-event into the durable log with turnId correlation", async () => {
+    const r = rig();
+
+    // The source attached with the minted secret and holds epoch 1.
+    expect(r.host.state().epoch).toBe(1);
+    expect(r.host.state().attachment?.profile).toBe("headless-session");
+
+    // An input arrives from lucid: session mode delivers it as a send,
+    // which starts a turn; the disposition says what HAPPENED.
+    r.host.enqueueInput({ id: "in-1", text: "do the thing", mode: "queue" });
+    await flush();
+    // The command reached hcn's stdin as a send op carrying lucid's id.
+    expect(
+      r.proc.commands.some(
+        (c) =>
+          c.op === "send" &&
+          typeof c.text === "string" &&
+          c.text.includes("do the thing") &&
+          c.id === "in-1",
+      ),
+    ).toBe(true);
+    r.accept("in-1", "turn-1");
+    await flush();
+    expect(r.host.state().inputs).toEqual([]);
+    expect(r.host.state().appliedInputs).toEqual({ "in-1": true });
+
+    // The harness streams; lossless events land as event frames.
+    r.proc.emit(identity);
+    r.proc.emit(assistant("answer text"));
+    r.proc.emit(doneClean);
+    await flush();
+    await flush();
+
+    const eventRecords = r.records.filter(
+      (rec) => rec.verdict === "accepted" && "kind" in rec && rec.kind === "event",
+    );
+    expect(eventRecords.length).toBeGreaterThanOrEqual(3); // identity, message, done
+    // Every event frame carries the lucid-minted turnId: correlation from
+    // runner events through frames to the durable record.
+    for (const rec of eventRecords) {
+      if ("turnId" in rec) expect(rec.turnId).toBe("turn-1");
+    }
+
+    // The done event is durable in the log (fold sees the whole turn).
+    const reopened = r.reopen();
+    expect(reopened.state().seq).toBe(r.host.state().seq);
+    expect(reopened.state().turn?.turnId).toBe("turn-1");
+  });
+
+  test("an input the record was already holding is delivered on attach, not stranded", async () => {
+    // `lucid send` with nothing running, then `lucid run`. The input is
+    // outstanding when the source attaches, so it arrives on the attach
+    // replay rather than through the live effect sink. Nothing read that
+    // replay before: the run attached, held the input, and sat there - no
+    // turn, no reply, nothing in the log after the attach line.
+    const r = rig({ pendingInput: { id: "in-1", text: "held while nothing ran" } });
+    await flush();
+
+    const sends = r.proc.commands.filter((c) => c.op === "send" || c.id === "in-1");
+    expect(sends.length).toBe(1);
+    expect(sends[0]).toMatchObject({ id: "in-1" });
+    expect(
+      typeof sends[0]?.text === "string" && sends[0].text.includes("held while nothing ran"),
+    ).toBe(true);
+
+    // And it runs a real turn, so the reply lands in the durable record.
+    r.accept("in-1", "turn-1");
+    await flush();
+    r.proc.emit(identity);
+    r.proc.emit(assistant("answered"));
+    r.proc.emit(doneClean);
+    await flush();
+    await flush();
+    const kinds = r.logEntries().map((e) => e.frame?.event?.kind);
+    expect(kinds).toContain("message");
+    expect(kinds).toContain("done");
+    expect(r.host.state().appliedInputs).toMatchObject({ "in-1": true });
+  });
+
+  test("session mode reports what HAPPENED: a steer mid-turn is a send like any other", async () => {
+    const r = rig();
+
+    // Start a turn, then interject with mode steer while it streams.
+    r.host.enqueueInput({ id: "in-1", text: "first", mode: "queue" });
+    await flush();
+    r.accept("in-1", "turn-1");
+    await flush();
+    r.proc.emit(identity);
+    await flush();
+
+    r.host.enqueueInput({ id: "in-2", text: "interject", mode: "steer" });
+    await flush();
+    // hcn writes a mid-turn send straight to the harness and answers
+    // `started`. It used to answer `queued` here (A-001), and lucid reported
+    // that; ADR 0007 removed its queue, so there is no longer a state
+    // between accepted and running for lucid to report.
+    r.proc.emit({ kind: "disposition", id: "in-2", disposition: "started" });
+    await flush();
+
+    // An applied input leaves `inputs` and lands in `appliedInputs`: the
+    // pending list stays bounded by what is still outstanding.
+    expect(r.host.state().inputs.find((i) => i.id === "in-2")).toBeUndefined();
+    expect(r.host.state().appliedInputs).toMatchObject({ "in-2": true });
+    const dispositions = r.records.filter(
+      (rec) => "kind" in rec && rec.kind === "disposition" && rec.inputId === "in-2",
+    );
+    expect(dispositions[0]).toMatchObject({ outcome: "applied", inputStatus: "applied" });
+  });
+
+  test("turn mode queues between turns: one process per input, dispositions queued -> applied, never interleaved", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-modes-"));
+    const { secret } = createConversationRecord(root, "conv-1");
+    const proc1 = new FakeHcnProcess();
+    const proc2 = new FakeHcnProcess();
+    const spawner = fakeSpawner([proc1, proc2]);
+    const records: HostRecord[] = [];
+
+    let receive: (frame: Frame) => void = () => {};
+    const host = openConversation(join(root, "conv-1"), {
+      now: () => 0,
+      presence: () => undefined,
+      executorLease: () => true,
+      onRecord: (rec) => records.push(rec),
+      onEffect: (e) => {
+        if (e.type === "send") receive(e.frame);
+      },
+    });
+    let turnCount = 0;
+    const source = openHeadlessTurns({
+      harness: "claude",
+      conversationId: "conv-1",
+      secret,
+      runner: createHcnRunner({ spawn: spawner.spawn, bin: BIN }),
+      host: fakeArtifactHost(),
+      mintTurnId: () => `turn-${++turnCount}`,
+      sendFrame: (frame) => host.handleFrame(JSON.stringify(frame)),
+    });
+    receive = source.receive;
+
+    expect(host.state().attachment?.profile).toBe("headless-turn");
+
+    // Two inputs arrive; only ONE process may run at a time.
+    host.enqueueInput({ id: "in-1", text: "first prompt", mode: "queue" });
+    await flush();
+    host.enqueueInput({ id: "in-2", text: "second prompt", mode: "queue" });
+    await flush();
+
+    expect(spawner.calls.length).toBe(1);
+    expect(proc1.writes.join("")).toContain("first prompt");
+    // in-1 went queued then applied (its turn started); in-2 waits queued.
+    const forOne = records.filter(
+      (rec) => "kind" in rec && rec.kind === "disposition" && rec.inputId === "in-1",
+    );
+    expect(forOne.length).toBeGreaterThanOrEqual(1);
+
+    proc1.emit(identity);
+    proc1.emit(assistant("one done"));
+    proc1.emit(doneClean);
+    proc1.exit(0);
+    await flush();
+    await flush();
+
+    // The second process only starts after the first turn ended.
+    expect(spawner.calls.length).toBe(2);
+    expect(proc2.writes.join("")).toContain("second prompt");
+  });
+
+  test("droppable events coalesce latest-wins under credit starvation and flush when credit arrives; lossless never waits", async () => {
+    const r = rig();
+    r.host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
+    await flush();
+    r.accept("in-1", "turn-1");
+    await flush();
+    r.proc.emit(identity);
+    await flush();
+
+    // Three token deltas with ZERO credit: none reach the host; they
+    // coalesce at the source, latest-wins.
+    r.proc.emit(token("a"));
+    r.proc.emit(token("ab"));
+    r.proc.emit(token("abc"));
+    await flush();
+    await flush();
+
+    const loggedEventKinds = (): string[] =>
+      r
+        .logEntries()
+        .filter((e) => e.src === "frame" && e.frame?.kind === "event")
+        .map((e) => (e.frame?.event?.kind as string | undefined) ?? "?");
+
+    // No token reached durability while starved.
+    expect(loggedEventKinds().filter((k) => k === "token")).toEqual([]);
+
+    // Lossless still flows while droppables starve - AND it supersedes
+    // the turn's stale deltas: the message carries the whole text, so a
+    // coalesced fragment must never land after it.
+    r.proc.emit(assistant("mid message"));
+    await flush();
+    expect(loggedEventKinds().at(-1)).toBe("message");
+
+    r.host.grantCredit(4);
+    await flush();
+    expect(loggedEventKinds().filter((k) => k === "token")).toEqual([]);
+
+    // With credit in hand, a FRESH delta flows immediately.
+    r.proc.emit(token("next"));
+    await flush();
+    const tokenEntries = r.logEntries().filter((e) => e.frame?.event?.kind === "token");
+    // Exactly one token is durable, and it is the fresh one: the three
+    // starved deltas coalesced away rather than replaying in order.
+    expect(tokenEntries).toHaveLength(1);
+    expect(tokenEntries[0]?.frame?.event?.text).toBe("next");
+
+    r.proc.emit(doneClean);
+    await flush();
+  });
+
+  test("limit/error terminates the turn with a durable record: the classified exit survives fold", async () => {
+    const r = rig();
+    r.host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
+    await flush();
+    r.accept("in-1", "turn-1");
+    await flush();
+    r.proc.emit(identity);
+    // hcn classifies the wall and says so; lucid records the classification
+    // rather than re-deriving it from a harness's stderr.
+    r.proc.emit({ kind: "limit", code: "weekly-limit", message: "weekly limit reached" });
+    r.proc.emit({ kind: "done", exitCode: 1, cause: "limit" });
+    r.proc.emit({ kind: "closed", exitCode: 1, cause: "limit" });
+    r.proc.exit(1);
+    await flush();
+    await flush();
+
+    const durableKinds = r
+      .logEntries()
+      .filter((e) => e.src === "frame" && e.frame?.event !== undefined)
+      .map((e) => e.frame?.event);
+    // The classified limit AND the terminal done are both durable.
+    expect(durableKinds.some((e) => e?.kind === "limit")).toBe(true);
+    expect(durableKinds.find((e) => e?.kind === "done")?.cause).toBe("limit");
+
+    // Reopen: fold reproduces the terminated turn exactly.
+    const reopened = r.reopen();
+    expect(reopened.state().seq).toBe(r.host.state().seq);
+    // The dead session released the channel: the pump's completion sent
+    // detach(shutdown), which aborts the dangling turn - no writer, no
+    // phantom in-flight turn.
+    expect(reopened.state().turn).toBeNull();
+    expect(reopened.state().attachment).toBeNull();
+  });
+
+  test("turn-mode credit flush keeps each delta under its OWN turn - no fabricated turnId, no wedge, and the stream survives", async () => {
+    const r = rig({ mode: "turn", processes: 2 });
+
+    r.host.enqueueInput({ id: "in-1", text: "first", mode: "queue" });
+    await flush();
+    r.proc.emit(identity);
+    // Starved deltas coalesce under turn-1.
+    r.proc.emit(token("z"));
+    await flush();
+
+    // Credit arrives MID-TURN: the flushed delta lands under turn-1 -
+    // never a fabricated id - and the live stream keeps flowing after.
+    r.host.grantCredit(2);
+    await flush();
+    const tokens = r.logEntries().filter((e) => e.frame?.event?.kind === "token");
+    expect(tokens.map((e) => e.frame?.turnId)).toEqual(["turn-1"]);
+
+    r.proc.emit(assistant("done text"));
+    r.proc.emit(doneClean);
+    r.proc.exit(0);
+    await flush();
+    await flush();
+    // No turn-id-reused / gap-n wedge: the message and done were accepted.
+    const kinds = r.logEntries().map((e) => e.frame?.event?.kind);
+    expect(kinds).toContain("message");
+    expect(kinds).toContain("done");
+    expect(r.host.state().turn?.turnId).toBe("turn-1");
+  });
+
+  test("session mode: a mid-turn send is applied at once and gets its turn at the boundary, and a dead session answers rejected - never a throw", async () => {
+    const r = rig();
+
+    // First input starts a turn; second arrives while it is still running.
+    r.host.enqueueInput({ id: "in-1", text: "first", mode: "queue" });
+    await flush();
+    r.accept("in-1", "turn-1");
+    await flush();
+    r.proc.emit(identity);
+    await flush();
+    // Queue mode mid-turn is held until the boundary, not sent immediately.
+    r.host.enqueueInput({ id: "in-2", text: "second", mode: "queue" });
+    await flush();
+    expect(r.host.state().appliedInputs).toMatchObject({ "in-1": true });
+    expect(r.proc.commands.some((c) => c.id === "in-2")).toBe(false);
+
+    // Turn one ends; the queued input is drained at the boundary (defined
+    // event, not a poll) and sent now.
+    r.proc.emit(doneClean);
+    r.startQueued("in-2", "turn-2");
+    await flush();
+    // Drain happened at the turn boundary: in-2 has now been sent.
+    expect(r.proc.commands.some((c) => c.id === "in-2")).toBe(true);
+    r.proc.emit({ kind: "disposition", id: "in-2", disposition: "started" });
+    await flush();
+    expect(r.host.state().appliedInputs).toMatchObject({ "in-2": true });
+    await flush();
+    await flush();
+    expect(r.host.state().appliedInputs).toMatchObject({ "in-1": true, "in-2": true });
+
+    // The process dies: the pump releases the channel (detach), so a
+    // further input is PARKED - outstanding, armed for the next attach's
+    // replay - rather than delivered to a corpse or thrown through the
+    // host.
+    r.proc.emit(doneClean);
+    r.proc.emit({ kind: "closed", exitCode: 0, cause: "clean" });
+    r.proc.exit(0);
+    await flush();
+    await flush();
+    expect(r.host.state().attachment).toBeNull();
+    r.host.enqueueInput({ id: "in-3", text: "too late", mode: "queue" });
+    await flush();
+    const inThree = r.host.state().inputs.find((i) => i.id === "in-3");
+    expect(inThree?.status).toBe("outstanding");
+    // Nothing was sent anywhere: no attachment, no delivery.
+    expect(r.records.filter((rec) => "inputId" in rec && rec.inputId === "in-3").length).toBe(1); // the enqueue record only - no disposition ever followed
+  });
+});
+
+describe("a session hcn refuses is recorded, not silent", () => {
+  test("the refusal reason lands in the durable log and the channel is released", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-modes-"));
+    const { secret } = createConversationRecord(root, "conv-1");
+    const proc = new FakeHcnProcess();
+    const spawner = fakeSpawner([proc]);
+    let receive: (frame: Frame) => void = () => {};
+    const host = openConversation(join(root, "conv-1"), {
+      now: () => 0,
+      presence: () => undefined,
+      executorLease: () => true,
+      onRecord: () => {},
+      onEffect: (e) => {
+        if (e.type === "send") receive(e.frame);
+      },
+    });
+    const source = openHeadlessSession({
+      harness: "codex",
+      conversationId: "conv-1",
+      secret,
+      runner: createHcnRunner({ spawn: spawner.spawn, bin: BIN }),
+      host: fakeArtifactHost(),
+      mintTurnId: () => "turn-1",
+      sendFrame: (frame) => host.handleFrame(JSON.stringify(frame)),
+      sessionId: sid,
+    });
+    receive = source.receive;
+
+    // hcn refuses before spawning: failure, then closed, then exit 2. This is
+    // what a harness with no session mode actually produces.
+    proc.emit({
+      kind: "failure",
+      class: "rejected",
+      retryable: false,
+      issue: "no-session-mode",
+      message: "codex declares no persistent headless session mode",
+    });
+    proc.emit({ kind: "closed", exitCode: null, cause: "failed" });
+    proc.exit(2);
+    await flush();
+    await flush();
+    await flush();
+
+    // A refusal ends the source exactly like a clean shutdown, so without
+    // this record the log cannot tell one from the other.
+    const errors = readFileSync(join(root, "conv-1", "log.ndjson"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as { frame?: { event?: { kind?: string; message?: string } } })
+      .filter((e) => e.frame?.event?.kind === "error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.frame?.event?.message).toContain("session did not open");
+    expect(errors[0]?.frame?.event?.message).toContain("no persistent headless session mode");
+    // And the channel was released rather than held by a source that is gone.
+    expect(host.state().attachment).toBeNull();
+  });
+});
+
+describe("RFC 15: failed recall preserves the submitted prompt", () => {
+  test("a refused resume stays pending without a fresh attempt, and the reason is recorded", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-modes-"));
+    const { secret } = createConversationRecord(root, "conv-1");
+    // The unused second process detects an unauthorized fresh attempt.
+    const refuser = new FakeHcnProcess();
+    const fresh = new FakeHcnProcess();
+    const spawner = fakeSpawner([refuser, fresh]);
+    let receive: (frame: Frame) => void = () => {};
+    const host = openConversation(join(root, "conv-1"), {
+      now: () => 0,
+      presence: () => undefined,
+      executorLease: () => true,
+      onRecord: () => {},
+      onEffect: (e) => {
+        if (e.type === "send") receive(e.frame);
+      },
+    });
+    const source = openHeadlessTurns({
+      harness: "claude",
+      conversationId: "conv-1",
+      secret,
+      runner: createHcnRunner({ spawn: spawner.spawn, bin: BIN }),
+      host: fakeArtifactHost(),
+      mintTurnId: () => "turn-1",
+      sendFrame: (frame) => host.handleFrame(JSON.stringify(frame)),
+      // The hint a reopened record would supply.
+      resume: "stale-session-id",
+    });
+    receive = source.receive;
+
+    host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
+    await flush();
+
+    // hcn refuses an unknown id before spawn: failure(rejected) then done.
+    refuser.emit({
+      kind: "failure",
+      class: "rejected",
+      retryable: false,
+      message: "no claude session stale-session-id found",
+    });
+    refuser.emit({ kind: "done", exitCode: null, cause: "failed" });
+    refuser.exit(2);
+    await flush();
+    await flush();
+
+    expect(spawner.calls).toHaveLength(1);
+    expect(spawner.calls[0]?.argv).toContain("--resume");
+    expect(host.state().inputs).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "in-1", text: "go" })]),
+    );
+    expect(host.state().appliedInputs["in-1"]).toBeUndefined();
+    expect(r0LogKinds(root)).not.toContain("message");
+    const errors = readFileSync(join(root, "conv-1", "log.ndjson"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as { frame?: { event?: { kind?: string; message?: string } } })
+      .filter((e) => e.frame?.event?.kind === "error");
+    expect(errors.some((e) => String(e.frame?.event?.message).includes("stale-session-id"))).toBe(
+      true,
+    );
+  });
+});
+
+/** Event kinds durable in a record, for the assertion above. */
+const r0LogKinds = (root: string): string[] =>
+  readFileSync(join(root, "conv-1", "log.ndjson"), "utf8")
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l) as { frame?: { kind?: string; event?: { kind?: string } } })
+    .filter((e) => e.frame?.kind === "event")
+    .map((e) => e.frame?.event?.kind ?? "?");
+
+test("session mode: queue mid-turn is held until terminal event, steer is immediate (T22)", async () => {
+  const r = rig();
+  r.host.enqueueInput({ id: "in-1", text: "first", mode: "queue" });
+  await flush();
+  r.accept("in-1", "turn-1");
+  await flush();
+  r.proc.emit(identity);
+  await flush();
+  // queue held
+  r.host.enqueueInput({ id: "in-q", text: "queued", mode: "queue" });
+  await flush();
+  expect(r.proc.commands.some((c) => c.id === "in-q")).toBe(false);
+  // steer goes through at once
+  r.host.enqueueInput({ id: "in-s", text: "steered", mode: "steer" });
+  await flush();
+  expect(r.proc.commands.some((c) => c.id === "in-s")).toBe(true);
+  r.proc.emit({ kind: "disposition", id: "in-s", disposition: "started" });
+  await flush();
+  expect(r.host.state().appliedInputs["in-s"]).toBe(true);
+  expect(r.host.state().appliedInputs["in-q"]).toBeUndefined();
+  // close turn-1: queued drains now
+  r.proc.emit(doneClean);
+  r.startQueued("in-q", "turn-2");
+  await flush();
+  expect(r.proc.commands.some((c) => c.id === "in-q")).toBe(true);
+  r.proc.emit({ kind: "disposition", id: "in-q", disposition: "started" });
+  await flush();
+  expect(r.host.state().appliedInputs["in-q"]).toBe(true);
+});
+
+test("session mode: queued input with no turn running is delivered straight away (T22)", async () => {
+  const r = rig();
+  // No turn active yet
+  r.host.enqueueInput({ id: "in-1", text: "no-turn", mode: "queue" });
+  await flush();
+  expect(r.proc.commands.some((c) => c.id === "in-1")).toBe(true);
+  r.accept("in-1", "turn-1");
+  await flush();
+  r.proc.emit(identity);
+  r.proc.emit(doneClean);
+  r.proc.emit({ kind: "turn", turnId: "turn-1", id: "in-1" });
+  await flush();
+});
+
+test.each(["session", "turn"] as const)(
+  "%s source settlement waits for owned process cleanup",
+  async (mode) => {
+    class SlowExit extends FakeHcnProcess {
+      override kill(signal: "SIGTERM" | "SIGKILL" = "SIGTERM"): void {
+        this.signals.push(signal);
+      }
+    }
+    const proc = new SlowExit();
+    const r = rig({ mode, process: proc });
+    try {
+      r.host.enqueueInput({ id: "work", text: "Begin work", mode: "queue" });
+      if (mode === "session") r.accept("work", "native-turn");
+      proc.emit(identity);
+      await flush();
+      expect(r.spawner.calls).toHaveLength(1);
+      expect(r.source.settled).toBeDefined();
+      let settled = false;
+      void r.source.settled?.then(() => {
+        settled = true;
+      });
+      r.source.close();
+      await flush();
+      expect(settled).toBe(false);
+      proc.exit(0);
+      await r.source.settled;
+      expect(settled).toBe(true);
+    } finally {
+      proc.exit(0);
+      r.source.close();
+      r.host.close();
+    }
+  },
+);

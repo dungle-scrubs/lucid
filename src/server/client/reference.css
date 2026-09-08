@@ -1,0 +1,148 @@
+/**
+ * The behaviour reference's own layout, and nothing else.
+ *
+ * Every state on this page is drawn by `app.css` and by the stylesheet
+ * `instrument.ts` injects. What is here is only the scaffolding that puts
+ * them side by side: the grid, the labels, the swatch frames.
+ *
+ * Nothing here may style a lucid state. If a rule in this file changed how a
+ * `.msg` or a `.lucid-*` looked, the reference would be showing a design
+ * decision nobody made, which is exactly what it exists not to do.
+ */
+
+body.ref {
+  margin: 0;
+  padding: 0 0 6rem;
+  background: var(--bg);
+  color: var(--fg);
+  font:
+    14px / 1.5 ui-sans-serif,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+}
+
+.ref-head {
+  padding: 2rem 2rem 1.25rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.ref-head h1 {
+  margin: 0 0 0.4rem;
+  font-size: 1.35rem;
+  letter-spacing: -0.01em;
+}
+
+.ref-head p {
+  margin: 0 0 0.35rem;
+  max-width: 62ch;
+  color: var(--muted);
+}
+
+.ref-section {
+  padding: 2rem 2rem 0.5rem;
+}
+
+.ref-section > h2 {
+  margin: 0 0 0.3rem;
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+}
+
+.ref-section > p {
+  margin: 0 0 1.1rem;
+  max-width: 68ch;
+  color: var(--muted);
+}
+
+/* One card per state. The grid is the whole point of the page: every state
+   visible at once, rather than reachable one at a time. */
+.ref-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1rem;
+}
+
+.ref-grid.wide {
+  grid-template-columns: repeat(auto-fill, minmax(440px, 1fr));
+}
+
+.ref-case {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.ref-case-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.ref-case-name {
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+
+.ref-case-classes {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  color: var(--faint);
+  margin-left: auto;
+}
+
+.ref-case-note {
+  padding: 0.45rem 0.75rem 0.6rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+}
+
+/* Flags a state the resolutions found broken, so nobody designs from it as
+   though it were intended. */
+.ref-case.broken .ref-case-head {
+  background: color-mix(in srgb, var(--error) 12%, var(--bg));
+}
+
+.ref-case.broken .ref-case-name::after {
+  content: " — defect";
+  color: var(--error);
+  font-weight: 500;
+}
+
+.ref-stage {
+  padding: 0.9rem 0.75rem;
+}
+
+/* The in-document cases are rendered against a plain ground, because the
+   agent's document supplies its own and lucid's marks have to read over
+   whatever that turns out to be. */
+.ref-doc {
+  background: var(--panel);
+  color: var(--fg);
+  padding: 0.4rem 0.2rem;
+}
+
+.ref-doc p {
+  margin: 0;
+}
+
+/* The dock and head cases need a container the width of a real pane, or
+   flex children size to the card instead of to the surface. */
+.ref-pane {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.ref-foot {
+  padding: 2.5rem 2rem 0;
+  color: var(--muted);
+  max-width: 72ch;
+}

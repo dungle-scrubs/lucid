@@ -1,0 +1,317 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: swap;
+  src: url("./fonts/source-serif-4.woff2") format("woff2");
+}
+
+:root {
+  color-scheme: light;
+  --background: oklch(0.985 0 0);
+  --foreground: oklch(0.274 0.003 17);
+  --muted-foreground: oklch(0.52 0.004 17);
+  --border: oklch(0.912 0.003 17);
+  --accent: oklch(0.956 0.01 220);
+  --primary: oklch(0.54 0.105 224);
+  --destructive: oklch(0.5 0.17 5);
+}
+
+.dark {
+  color-scheme: dark;
+  --background: oklch(0.243 0 0);
+  --foreground: oklch(0.942 0.004 17);
+  --muted-foreground: oklch(0.724 0.007 17);
+  --border: oklch(0.344 0.006 17);
+  --accent: oklch(0.337 0.026 220);
+  --primary: oklch(0.82 0.087 220);
+  --destructive: oklch(0.78 0.12 5);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-primary: var(--primary);
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font:
+    14px / 1.5 system-ui,
+    sans-serif;
+}
+a,
+button,
+summary {
+  cursor: pointer;
+}
+a {
+  color: inherit;
+  text-decoration: none;
+}
+button,
+input {
+  font: inherit;
+}
+a:focus-visible,
+button:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+}
+.hub-header {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.hub-logo {
+  flex: none;
+  font:
+    700 25px / 1 "Source Serif 4",
+    Georgia,
+    serif;
+}
+.hub-logo span {
+  color: var(--primary);
+  font-size: 34px;
+  line-height: 0;
+}
+.hub-header h1 {
+  flex: 1;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+  text-wrap: balance;
+}
+.hub-header button {
+  font-size: 12px;
+}
+[data-slot="button"] {
+  min-height: 36px;
+  padding: 6px 10px;
+  border-radius: 4px;
+}
+[data-slot="button"]:hover {
+  background: var(--accent);
+}
+[data-slot="button"][data-variant="outline"] {
+  border: 1px solid var(--border);
+}
+.hub-main {
+  max-width: 760px;
+  margin: 28px auto 64px;
+  padding: 0 20px;
+  container-type: inline-size;
+}
+.hub-search {
+  display: block;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 16px;
+  margin-bottom: 24px;
+}
+.hub-search:focus-within {
+  border-color: var(--primary);
+}
+.hub-search input {
+  width: 100%;
+  min-height: 32px;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  background: transparent;
+  font-size: 16px;
+  color: var(--foreground);
+}
+.hub-search input::placeholder {
+  color: var(--muted-foreground);
+  opacity: 1;
+}
+.hub-group {
+  margin-bottom: 28px;
+}
+.hub-group summary {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 13px;
+  list-style: none;
+}
+.hub-group summary::-webkit-details-marker {
+  display: none;
+}
+.hub-group summary::before {
+  content: "›";
+  font-size: 18px;
+  line-height: 16px;
+  width: 14px;
+  text-align: center;
+}
+.hub-group[open] summary::before {
+  transform: rotate(90deg);
+}
+.hub-count,
+.hub-path {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 400;
+}
+.hub-path {
+  flex-basis: 100%;
+  margin-left: 24px;
+  overflow-wrap: anywhere;
+}
+.hub-group ul {
+  list-style: none;
+  padding: 4px 0 0;
+  margin: 0;
+}
+.hub-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 8px 10px 24px;
+  min-height: 44px;
+  border-radius: 3px;
+}
+.hub-row:hover {
+  background: var(--accent);
+}
+.hub-title {
+  font:
+    400 17px / 24px "Source Serif 4",
+    Georgia,
+    serif;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+.hub-context {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.hub-empty {
+  padding: 20px 0 40px;
+  color: var(--muted-foreground);
+  text-wrap: balance;
+}
+.hub-error,
+.hub-errors {
+  color: var(--destructive);
+  margin-bottom: 24px;
+  overflow-wrap: anywhere;
+}
+.hub-errors ul {
+  padding-left: 20px;
+}
+.hub-footer {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+  margin-top: 32px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+@container (min-width: 560px) {
+  .hub-path {
+    flex-basis: auto;
+    margin-left: auto;
+    max-width: 70%;
+  }
+  .hub-row {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 16px;
+  }
+  .hub-title {
+    flex: 1;
+  }
+  .hub-context {
+    max-width: 40%;
+    text-align: right;
+  }
+}
+@media (min-width: 768px) {
+  .hub-main {
+    margin-top: 40px;
+    padding-inline: 28px;
+  }
+}
+
+.hub-item {
+  display: flex;
+  align-items: center;
+}
+.hub-item .hub-row {
+  flex: 1;
+  min-width: 0;
+}
+.hub-rename {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  margin-inline-end: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+}
+.hub-rename:hover,
+.hub-rename[data-state="open"] {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.settings-popover.title-popover {
+  width: min(360px, calc(100vw - 32px));
+  max-height: var(--radix-popover-content-available-height);
+}
+.title-form label {
+  font-weight: 600;
+}
+.title-count {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.title-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .hub-rename {
+    opacity: 0;
+  }
+  .hub-rename[data-state="open"],
+  .hub-item:hover .hub-rename,
+  .hub-item:focus-within .hub-rename {
+    opacity: 1;
+  }
+}
+[data-slot="button"][data-variant="default"] {
+  background: var(--primary);
+  color: var(--background);
+  border: 1px solid var(--primary);
+}
+[data-slot="button"][data-variant="ghost"] {
+  background: transparent;
+  color: var(--foreground);
+  border: 1px solid transparent;
+}
