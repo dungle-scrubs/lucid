@@ -10,7 +10,7 @@ import type { DiscoveryIndex } from "../store/discovery.js";
 import { isDriverField, isDriverHarness, preferenceState } from "../store/driver-preference.js";
 import { readRecordMetadata } from "../store/record-identity.js";
 import { locationProjection, replaceSettings } from "../store/settings.js";
-import { driverChoices } from "./driver-choices.js";
+import { driverChoices, driverChoicesFromFacts } from "./driver-choices.js";
 import { createRecoveryAvailability } from "./recovery-availability.js";
 
 const objectBody = (value: unknown): Record<string, unknown> => {
@@ -101,7 +101,17 @@ export function createHubSettings(
     return pending;
   };
   let choiceLists: ReturnType<typeof driverChoices> | undefined;
-  const choices = () => (choiceLists ??= driverChoices(runner()));
+  const choices = (): ReturnType<typeof driverChoices> => {
+    if (choiceLists) return choiceLists;
+    try {
+      choiceLists = driverChoices(runner());
+    } catch {
+      // Runner construction can fail before driverChoices can degrade an
+      // unavailable hcn. Keep record reads independent of harness availability.
+      choiceLists = Promise.resolve(driverChoicesFromFacts({}));
+    }
+    return choiceLists;
+  };
   const project = async (dir: string, actual: Partial<Settings> = {}) => {
     const state = preferenceState(dir);
     const location = locationProjection(readRecordMetadata(dir));
