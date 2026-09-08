@@ -33,6 +33,25 @@
 .settings-form button {
   cursor: pointer;
 }
+.settings-form select {
+  appearance: none;
+  padding-inline-end: 34px;
+}
+.settings-form label:has(> select) {
+  position: relative;
+}
+.settings-form label:has(> select)::after {
+  content: "";
+  position: absolute;
+  inset-inline-end: 14px;
+  bottom: 17px;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+  pointer-events: none;
+}
 .settings-form :is(input, select, button):focus-visible {
   outline: 2px solid var(--primary, var(--color-accent));
   outline-offset: 2px;
