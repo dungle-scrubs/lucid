@@ -1,3 +1,6 @@
+import type { ConversationPanelVisibility } from "../server/view-options.js";
+import { validConversationId } from "../store/errors.js";
+
 /**
  * CLI frame mapping: the pure subcommand -> protocol intent translation.
  *
@@ -25,7 +28,11 @@ export type MappedCommand =
     }
   | { readonly kind: "announce" }
   | { readonly kind: "inject" }
-  | { readonly kind: "serve" }
+  | {
+      readonly kind: "serve";
+      readonly conversationId: string;
+      readonly conversationPanel: ConversationPanelVisibility | undefined;
+    }
   | { readonly kind: "help"; readonly message: string };
 
 /** Map `argv` (without the `lucid` binary prefix) to a structured command.
@@ -99,8 +106,33 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
       return { kind: "announce" };
     case "inject":
       return { kind: "inject" };
-    case "serve":
-      return { kind: "serve" };
+    case "serve": {
+      const usage =
+        "usage: lucid2 serve [conversation] [--conversation-panel <open|closed>]\nConversation defaults to demo; the panel defaults to closed.\nExamples: lucid2 serve demo --conversation-panel open\n          lucid2 serve demo --conversation-panel closed";
+      const invalid = (message: string): MappedCommand => ({
+        kind: "help",
+        message: `${message}\n${usage}`,
+      });
+      let conversationId: string | undefined;
+      let conversationPanel: ConversationPanelVisibility | undefined;
+      for (let i = 0; i < rest.length; i++) {
+        const arg = rest[i] as string;
+        if (arg === "--help" || arg === "-h") return { kind: "help", message: usage };
+        if (arg === "--conversation-panel") {
+          if (conversationPanel !== undefined)
+            return invalid("Repeated --conversation-panel option");
+          const value = rest[++i];
+          if (value !== "open" && value !== "closed")
+            return invalid("--conversation-panel requires open or closed");
+          conversationPanel = value;
+        } else if (arg.startsWith("-")) return invalid(`Unknown serve option: ${arg}`);
+        else if (conversationId !== undefined)
+          return invalid(`Unexpected conversation argument: ${arg}`);
+        else if (!validConversationId(arg)) return invalid(`Invalid conversation name: ${arg}`);
+        else conversationId = arg;
+      }
+      return { kind: "serve", conversationId: conversationId ?? "demo", conversationPanel };
+    }
     case undefined:
     case "help":
     case "--help":

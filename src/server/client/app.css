@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./conversation-panel.css";
 
 /* Source Serif 4, the chrome's serif, self-hosted: the page is served from
    this origin and never from a CDN, and a reading surface has to hold its
@@ -193,12 +194,7 @@ body {
   position: relative;
 }
 
-/* The conversation is the margin note beside it: a reading column, not a
-   half of the screen. This is where it starts; the grip decides after
-   that, and an inline width overrides this rule. */
-.pane.conversation {
-  flex: 0 0 var(--conversation-width, 352px);
-}
+/* Conversation allocation and visibility are in conversation-panel.css. */
 
 /* The border between the panes is the grip's, so there is one line and it
    is the thing you grab: 1px --edge-2 with a 3x38 handle centred on it.
@@ -267,7 +263,6 @@ body {
      A dragged width arrives as a custom property rather than a flex value,
      so this rule wins on order and nothing needs !important to beat it. */
   .pane.conversation {
-    flex: 1 1 45%;
     border-top: 1px solid var(--edge-2);
   }
   .pane-grip {

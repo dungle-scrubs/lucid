@@ -17,10 +17,26 @@ bun run build
 ./dist/lucid2 chat demo --harness claude
 ```
 
-In another terminal, `./dist/lucid2 serve` opens the browser surface at
+In another terminal, `./dist/lucid2 serve` starts the browser surface and prints a link to
 [localhost](http://127.0.0.1:17454/c/demo). The server binds to loopback and
 serves every record; the URL selects the conversation. It appends inputs
 but does not start an agent. Keep a driver running to answer those inputs.
+
+Each new browser view starts with the conversation panel closed. Use the
+Show conversation button beside the Lucid mark to open it. Closing the panel
+releases document space and preserves drafts, notes, and the running conversation.
+
+Choose the initial state of the printed link explicitly:
+
+```sh
+./dist/lucid2 serve demo --conversation-panel open
+./dist/lucid2 serve demo --conversation-panel closed
+```
+
+The optional conversation defaults to `demo`. The option accepts only `open`
+and `closed`. Visibility belongs to that browser view; toggles do not save a
+preference. Reloading applies the URL's initial choice again. No record is
+created by selecting a conversation here.
 
 | Command | Use |
 |---|---|

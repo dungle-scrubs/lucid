@@ -51,6 +51,7 @@ import {
   selectorsForQuote,
   sha256Hex,
 } from "./anchor.js";
+import { useConversationPanel } from "./conversation-panel.js";
 import {
   chooseEffort,
   chooseHarness,
@@ -2218,6 +2219,7 @@ const Dialog = ({
 };
 
 const App = (): React.ReactElement => {
+  const conversationPanel = useConversationPanel(window.location.search);
   // Read once. Where in the record the page starts is an opening question;
   // after that the page moves the address bar, not the other way round.
   const opened = React.useMemo(routeFromPath, []);
@@ -2513,7 +2515,11 @@ const App = (): React.ReactElement => {
     };
     const now = parseRoute(window.location.pathname);
     if (sameRoute(now, next)) return;
-    window.history.replaceState(null, "", formatRoute(next));
+    window.history.replaceState(
+      null,
+      "",
+      formatRoute(next) + window.location.search + window.location.hash,
+    );
   }, [conversationId, doc, pinned]);
 
   // The same move without a pointer. A separator you can reach with Tab and
@@ -3796,7 +3802,7 @@ const App = (): React.ReactElement => {
                 </div>
               )}
 
-              <div className="panes">
+              <div className="panes" data-conversation-open={conversationPanel.open}>
                 {/* The document is the thing being worked on, so it gets the room
                 and the left side. The conversation is the margin note. */}
                 <div className="pane document">
@@ -3806,6 +3812,7 @@ const App = (): React.ReactElement => {
                           hold. Not an error and not styled as one - the way
                           on is the artifact it does hold, named plainly. */}
                       <div className="doc-head">
+                        {conversationPanel.control}
                         <span className="doc-mark" aria-hidden="true">
                           <span className="dot" />
                           <span className="word">lucid</span>
@@ -3873,6 +3880,7 @@ const App = (): React.ReactElement => {
                           - the header says so rather than showing dead
                           controls. The way in is the conversation. */}
                       <div className="doc-head">
+                        {conversationPanel.control}
                         <span className="doc-mark" aria-hidden="true">
                           <span className="dot" />
                           <span className="word">lucid</span>
@@ -3883,8 +3891,8 @@ const App = (): React.ReactElement => {
                       <div className="doc-ground">
                         <div className="empty-panel">
                           <div className="empty-line">
-                            Nothing here yet. Ask on the right, or attach a file — either way lucid
-                            writes v1 and keeps it.
+                            Nothing here yet. Open the conversation to ask for a document, or attach
+                            a file.
                           </div>
                           {/* Attaching here is the composer's own act: the file
                               is stored and rides the next thing said, exactly
@@ -3922,6 +3930,7 @@ const App = (): React.ReactElement => {
                     the conversation card below carries the same two answers. */}
                       {dead || damaged ? (
                         <div className="doc-head dead">
+                          {conversationPanel.control}
                           <span className="doc-mark" aria-hidden="true">
                             <span className="dot" />
                             <span className="word">lucid</span>
@@ -3941,6 +3950,7 @@ const App = (): React.ReactElement => {
                         </div>
                       ) : edited ? (
                         <div className="doc-head saving-bar">
+                          {conversationPanel.control}
                           <span className="doc-mark" aria-hidden="true">
                             <span className="dot" />
                             <span className="word">lucid</span>
@@ -3971,6 +3981,7 @@ const App = (): React.ReactElement => {
                         </div>
                       ) : (
                         <div className="doc-head">
+                          {conversationPanel.control}
                           {/* lucid, over the document: the mark, a hairline, then
                       the name. Nothing else above the sheet. */}
                           <span className="doc-mark" aria-hidden="true">
@@ -4439,9 +4450,10 @@ const App = (): React.ReactElement => {
               the arrow keys just did. */}
                 <hr
                   className={dragging ? "pane-grip dragging" : "pane-grip"}
+                  aria-hidden={!conversationPanel.open}
                   onPointerDown={startDrag}
                   onKeyDown={nudgeDrag}
-                  tabIndex={0}
+                  tabIndex={conversationPanel.open ? 0 : -1}
                   aria-orientation="vertical"
                   aria-label="Resize the conversation"
                   aria-valuemin={CONVERSATION_MIN}
@@ -4450,76 +4462,78 @@ const App = (): React.ReactElement => {
                 />
 
                 <div
-                  className="pane conversation"
+                  className="conversation-slot"
                   style={
                     convWidth === null
                       ? undefined
                       : ({ "--conversation-width": `${convWidth}px` } as React.CSSProperties)
                   }
                 >
-                  {/* The conversation's own 34px row, aligned with the document
+                  <div className="pane conversation" {...conversationPanel.panelProps}>
+                    {/* The conversation's own 34px row, aligned with the document
               header so both columns top out together: its name, what is
               driving it, and how it stands - counted and clocked. */}
-                  <div className="conv-head">
-                    <span className="conv-name">
-                      {conversationId === "" ? "no conversation" : conversationId}
-                    </span>
-                    {/* What is driving, named from the same Driver the
+                    <div className="conv-head">
+                      <span className="conv-name">
+                        {conversationId === "" ? "no conversation" : conversationId}
+                      </span>
+                      {/* What is driving, named from the same Driver the
                 driver line under the composer renders (7a-7d), so the two
                 surfaces cannot disagree. Identity, not status. */}
-                    {driverHeadline(driver) === null ? null : (
+                      {driverHeadline(driver) === null ? null : (
+                        <span
+                          className="conv-driver"
+                          title={
+                            driver.harnessVersion === undefined ? undefined : driver.harnessVersion
+                          }
+                        >
+                          {driverHeadline(driver)}
+                        </span>
+                      )}
                       <span
-                        className="conv-driver"
-                        title={
-                          driver.harnessVersion === undefined ? undefined : driver.harnessVersion
+                        className={
+                          report.stalled
+                            ? "conv-pill stopped"
+                            : report.busy
+                              ? "conv-pill busy"
+                              : "conv-pill"
                         }
+                        title={status === "" ? undefined : status}
                       >
-                        {driverHeadline(driver)}
+                        <span className="dot" aria-hidden="true" />
+                        <span className="label">{pillLabel}</span>
                       </span>
-                    )}
-                    <span
-                      className={
-                        report.stalled
-                          ? "conv-pill stopped"
-                          : report.busy
-                            ? "conv-pill busy"
-                            : "conv-pill"
+                    </div>
+                    <Thread
+                      pending={notes}
+                      onSendNotes={() => void sendNotes()}
+                      onDiscardNotes={() => setNotes([])}
+                      sending={sending}
+                      report={report}
+                      version={doc?.version ?? null}
+                      dead={dead}
+                      invite={doc === null && !dead}
+                      collision={
+                        edited && waiting !== null && waiting > (doc?.version ?? 0)
+                          ? { arrived: waiting, next: nextVersion }
+                          : null
                       }
-                      title={status === "" ? undefined : status}
-                    >
-                      <span className="dot" aria-hidden="true" />
-                      <span className="label">{pillLabel}</span>
-                    </span>
+                      onSave={() => void save()}
+                      onShowWaiting={(arrived) => setConfirmDiscard(arrived)}
+                      attachments={attached}
+                      uploading={uploading}
+                      refusals={refusals}
+                      onAttach={(files) => void attachFiles(files)}
+                      onRemoveAttachment={removeAttachment}
+                      onDismissRefusal={(id) =>
+                        setRefusals((prev) => prev.filter((r) => r.id !== id))
+                      }
+                      driver={driver}
+                      driverPreference={driverPreference}
+                      driverChoices={driverChoices}
+                      onDriverChoice={chooseDriver}
+                    />
                   </div>
-                  <Thread
-                    pending={notes}
-                    onSendNotes={() => void sendNotes()}
-                    onDiscardNotes={() => setNotes([])}
-                    sending={sending}
-                    report={report}
-                    version={doc?.version ?? null}
-                    dead={dead}
-                    invite={doc === null && !dead}
-                    collision={
-                      edited && waiting !== null && waiting > (doc?.version ?? 0)
-                        ? { arrived: waiting, next: nextVersion }
-                        : null
-                    }
-                    onSave={() => void save()}
-                    onShowWaiting={(arrived) => setConfirmDiscard(arrived)}
-                    attachments={attached}
-                    uploading={uploading}
-                    refusals={refusals}
-                    onAttach={(files) => void attachFiles(files)}
-                    onRemoveAttachment={removeAttachment}
-                    onDismissRefusal={(id) =>
-                      setRefusals((prev) => prev.filter((r) => r.id !== id))
-                    }
-                    driver={driver}
-                    driverPreference={driverPreference}
-                    driverChoices={driverChoices}
-                    onDriverChoice={chooseDriver}
-                  />
                 </div>
               </div>
 

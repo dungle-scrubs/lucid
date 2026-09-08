@@ -162,7 +162,11 @@ export const dispatch = async (
       const serveFn =
         deps.serveFn ??
         (async (opts: ServeOpts) => (await import("./serve.js")).serveConversation(opts));
-      await serveFn({ rootDir: effectiveRoot });
+      await serveFn({
+        rootDir: effectiveRoot,
+        conversationId: mapped.conversationId,
+        conversationPanel: mapped.conversationPanel,
+      });
       return { kind: "serve" };
     }
     case "send": {
