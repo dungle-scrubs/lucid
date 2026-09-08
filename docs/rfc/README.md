@@ -3,7 +3,9 @@
 RFC 19 implements [Codex native context management](19_codex-native-context-management.rfc.md)
 in the local build. Published dependency integration remains separate.
 
-RFC 18 proposes [conversations without a project](18_conversations-without-a-project.rfc.md).
+RFC 18 is implemented. Its proposal, review, and resolved ticket are preserved
+in commit `61393f5`. Current projectless workspace contracts live in
+[architecture](../architecture.md) and [drivers](../drivers.md).
 RFCs 14 and 15 are implemented. Their final proposals, reviews,
 and resolved local tickets are preserved in commit `743a48c`. Current contracts
 live in the [documentation index](../README.md).
