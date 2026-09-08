@@ -198,6 +198,8 @@ export const dispatch = async (
       await serveFn({
         rootDir: effectiveRoot,
         ...(deps.wakeNamingFn ? { wakeNaming: deps.wakeNamingFn } : {}),
+        conversationId: mapped.conversationId,
+        conversationPanel: mapped.conversationPanel,
       });
       return { kind: "serve" };
     }

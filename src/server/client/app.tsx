@@ -58,6 +58,7 @@ import type { ComparisonDraft } from "./comparison-draft.js";
 import { comparisonDraftText, restoreComparisonDraft } from "./comparison-draft.js";
 import type { ComparisonPair } from "./content-comparison.js";
 import { ContentComparisonView } from "./content-comparison.js";
+import { useConversationPanel } from "./conversation-panel.js";
 import type { DriverChoiceBody, DriverChoices, DriverPreference } from "./driver-menus.js";
 import {
   chooseEffort,
@@ -2082,6 +2083,7 @@ const Dialog = ({
 };
 
 const App = (): React.ReactElement => {
+  const conversationPanel = useConversationPanel(window.location.search);
   // Read once. Where in the record the page starts is an opening question;
   // after that the page moves the address bar, not the other way round.
   const opened = React.useMemo(routeFromPath, []);
@@ -2467,7 +2469,11 @@ const App = (): React.ReactElement => {
     };
     const now = parseRoute(window.location.pathname);
     if (sameRoute(now, next)) return;
-    window.history.replaceState(null, "", formatRoute(next));
+    window.history.replaceState(
+      null,
+      "",
+      formatRoute(next) + window.location.search + window.location.hash,
+    );
   }, [conversationId, doc, pinned]);
 
   // The same move without a pointer. A separator you can reach with Tab and
@@ -3972,7 +3978,11 @@ const App = (): React.ReactElement => {
                 </div>
               )}
 
-              <div className="panes">
+              <div
+                className="panes"
+                data-conversation-open={conversationPanel.open}
+                style={{ "--document-share": documentShare } as React.CSSProperties}
+              >
                 {/* The document is the thing being worked on, so it gets the room
                 and the left side. The conversation is the margin note. */}
                 <div
@@ -3986,6 +3996,7 @@ const App = (): React.ReactElement => {
                           hold. Not an error and not styled as one - the way
                           on is the artifact it does hold, named plainly. */}
                       <div className="doc-head">
+                        {conversationPanel.control}
                         <a className="doc-mark" href="/" aria-label="Lucid hub">
                           <span className="dot" />
                           <span className="word">lucid</span>
@@ -4053,6 +4064,7 @@ const App = (): React.ReactElement => {
                           - the header says so rather than showing dead
                           controls. The way in is the conversation. */}
                       <div className="doc-head">
+                        {conversationPanel.control}
                         <a className="doc-mark" href="/" aria-label="Lucid hub">
                           <span className="dot" />
                           <span className="word">lucid</span>
@@ -4063,8 +4075,8 @@ const App = (): React.ReactElement => {
                       <div className="doc-ground">
                         <div className="empty-panel">
                           <div className="empty-line">
-                            Nothing here yet. Send a prompt, or attach a file. Either way lucid
-                            writes v1 and keeps it.
+                            Nothing here yet. Open the conversation to ask for a document, or attach
+                            a file.
                           </div>
                           {/* Attaching here is the composer's own act: the file
                               is stored and rides the next thing said, exactly
@@ -4100,6 +4112,7 @@ const App = (): React.ReactElement => {
                     the conversation card below carries the same two answers. */}
                       {dead || damaged ? (
                         <div className="doc-head dead">
+                          {conversationPanel.control}
                           <a className="doc-mark" href="/" aria-label="Lucid hub">
                             <span className="dot" />
                             <span className="word">lucid</span>
@@ -4121,6 +4134,7 @@ const App = (): React.ReactElement => {
                         </div>
                       ) : edited ? (
                         <div className="doc-head saving-bar">
+                          {conversationPanel.control}
                           <a className="doc-mark" href="/" aria-label="Lucid hub">
                             <span className="dot" />
                             <span className="word">lucid</span>
@@ -4152,6 +4166,7 @@ const App = (): React.ReactElement => {
                         </div>
                       ) : (
                         <div className="doc-head">
+                          {conversationPanel.control}
                           {/* lucid, over the document: the mark, a hairline, then
                       the name. Nothing else above the sheet. */}
                           <a className="doc-mark" href="/" aria-label="Lucid hub">
@@ -4636,9 +4651,10 @@ const App = (): React.ReactElement => {
               the arrow keys just did. */}
                 <hr
                   className={dragging ? "pane-grip dragging" : "pane-grip"}
+                  aria-hidden={!conversationPanel.open}
                   onPointerDown={startDrag}
                   onKeyDown={nudgeDrag}
-                  tabIndex={0}
+                  tabIndex={conversationPanel.open ? 0 : -1}
                   aria-orientation={stacked ? "horizontal" : "vertical"}
                   aria-label={stacked ? "Resize document height" : "Resize the conversation"}
                   aria-valuemin={stacked ? DOCUMENT_SHARE_MIN * 100 : CONVERSATION_MIN}
@@ -4656,103 +4672,106 @@ const App = (): React.ReactElement => {
                 />
 
                 <div
-                  className="pane conversation"
+                  className="conversation-slot"
                   style={
                     convWidth === null
                       ? undefined
                       : ({ "--conversation-width": `${convWidth}px` } as React.CSSProperties)
                   }
                 >
-                  <Thread
-                    pending={notes}
-                    onSendNotes={() => void sendNotes()}
-                    onDiscardNotes={() => setNotes([])}
-                    sending={sending}
-                    report={report}
-                    version={doc?.version ?? null}
-                    dead={dead}
-                    invite={doc === null && !dead}
-                    collision={
-                      edited && waiting !== null && waiting > (doc?.version ?? 0)
-                        ? { arrived: waiting, next: nextVersion }
-                        : null
-                    }
-                    onSave={() => void save()}
-                    onShowWaiting={(arrived) => setConfirmDiscard(arrived)}
-                    attachments={attached}
-                    uploading={uploading}
-                    refusals={refusals}
-                    onAttach={(files) => void attachFiles(files)}
-                    onRemoveAttachment={removeAttachment}
-                    onDismissRefusal={(id) =>
-                      setRefusals((prev) => prev.filter((r) => r.id !== id))
-                    }
-                    driver={driver}
-                    driverPreference={driverPreference}
-                    driverChoices={driverChoices}
-                    onDriverChoice={chooseDriver}
-                    location={location}
-                    settingsIssue={settingsIssue}
-                    onLocation={chooseLocation}
-                    comparisonBlocked={recoveryLocked}
-                    comparisonRecovery={
-                      <InputRecoveryPanel
-                        recovery={recovery}
-                        onReload={() => window.location.reload()}
-                        onRestore={restoreComparisonRequest}
-                      />
-                    }
-                    executionRecovery={executions.map((entry) => (
-                      <ExecutionRecovery
-                        key={`${entry.inputId}:${entry.attempt}`}
-                        entry={entry}
-                        disabled={dead || token === null}
-                        send={async (inputId, body) => {
-                          if (token === null || dead) return "Reload to reconnect before recovery.";
-                          const response = await fetch(
-                            `/api/conversations/${encodeURIComponent(conversationId)}/inputs/${encodeURIComponent(inputId)}/recovery`,
-                            {
-                              method: "POST",
-                              headers: {
-                                [TOKEN_HEADER]: token,
-                                "content-type": "application/json",
+                  <div className="pane conversation" {...conversationPanel.panelProps}>
+                    <Thread
+                      pending={notes}
+                      onSendNotes={() => void sendNotes()}
+                      onDiscardNotes={() => setNotes([])}
+                      sending={sending}
+                      report={report}
+                      version={doc?.version ?? null}
+                      dead={dead}
+                      invite={doc === null && !dead}
+                      collision={
+                        edited && waiting !== null && waiting > (doc?.version ?? 0)
+                          ? { arrived: waiting, next: nextVersion }
+                          : null
+                      }
+                      onSave={() => void save()}
+                      onShowWaiting={(arrived) => setConfirmDiscard(arrived)}
+                      attachments={attached}
+                      uploading={uploading}
+                      refusals={refusals}
+                      onAttach={(files) => void attachFiles(files)}
+                      onRemoveAttachment={removeAttachment}
+                      onDismissRefusal={(id) =>
+                        setRefusals((prev) => prev.filter((r) => r.id !== id))
+                      }
+                      driver={driver}
+                      driverPreference={driverPreference}
+                      driverChoices={driverChoices}
+                      onDriverChoice={chooseDriver}
+                      location={location}
+                      settingsIssue={settingsIssue}
+                      onLocation={chooseLocation}
+                      comparisonBlocked={recoveryLocked}
+                      comparisonRecovery={
+                        <InputRecoveryPanel
+                          recovery={recovery}
+                          onReload={() => window.location.reload()}
+                          onRestore={restoreComparisonRequest}
+                        />
+                      }
+                      executionRecovery={executions.map((entry) => (
+                        <ExecutionRecovery
+                          key={`${entry.inputId}:${entry.attempt}`}
+                          entry={entry}
+                          disabled={dead || token === null}
+                          send={async (inputId, body) => {
+                            if (token === null || dead)
+                              return "Reload to reconnect before recovery.";
+                            const response = await fetch(
+                              `/api/conversations/${encodeURIComponent(conversationId)}/inputs/${encodeURIComponent(inputId)}/recovery`,
+                              {
+                                method: "POST",
+                                headers: {
+                                  [TOKEN_HEADER]: token,
+                                  "content-type": "application/json",
+                                },
+                                body,
                               },
-                              body,
-                            },
-                          );
-                          if (response.status === 401) {
-                            setDead(true);
-                            return "Lucid restarted. Reload to reconnect.";
-                          }
-                          if (response.ok) return null;
-                          const failure = (await response.json()) as { reason?: string };
-                          return (
-                            failure.reason ??
-                            "Recovery could not be confirmed. Refresh the conversation."
-                          );
-                        }}
-                      />
-                    ))}
-                    recovery={{
-                      state: submission.current(),
-                      busy: submissionBusy,
-                      dead: dead || token === null,
-                      reason:
-                        token === null
-                          ? "Connecting before this send can be checked…"
-                          : submissionReason,
-                      onRetry: () => {
-                        if (!dead && token !== null) void performSubmission();
-                      },
-                      onDiscard: () => {
-                        if (!submission.discardInvalid())
-                          setSubmissionReason(
-                            "Cannot remove local recovery data. Browser storage is still unavailable.",
-                          );
-                        refreshSubmission();
-                      },
-                    }}
-                  />
+                            );
+                            if (response.status === 401) {
+                              setDead(true);
+                              return "Lucid restarted. Reload to reconnect.";
+                            }
+                            if (response.ok) return null;
+                            const failure = (await response.json()) as { reason?: string };
+                            return (
+                              failure.reason ??
+                              "Recovery could not be confirmed. Refresh the conversation."
+                            );
+                          }}
+                        />
+                      ))}
+                      recovery={{
+                        state: submission.current(),
+                        busy: submissionBusy,
+                        dead: dead || token === null,
+                        reason:
+                          token === null
+                            ? "Connecting before this send can be checked…"
+                            : submissionReason,
+                        onRetry: () => {
+                          if (!dead && token !== null) void performSubmission();
+                        },
+                        onDiscard: () => {
+                          if (!submission.discardInvalid())
+                            setSubmissionReason(
+                              "Cannot remove local recovery data. Browser storage is still unavailable.",
+                            );
+                          refreshSubmission();
+                        },
+                      }}
+                    />
+                  </div>
                 </div>
               </div>
 

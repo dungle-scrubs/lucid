@@ -1,0 +1,100 @@
+/* Keep the panel's box intact while its spacer releases document space. */
+.panes[data-conversation-open] {
+  --conversation-width: 352px;
+  --document-share: 0.6666667;
+  --pane-gap: 0px;
+  --divider-size: 28px;
+  position: relative;
+  gap: var(--pane-gap);
+  overflow: clip;
+}
+
+.panes[data-conversation-open="false"] {
+  gap: 0;
+}
+
+.conversation-slot {
+  flex: 1;
+  min-block-size: 0;
+  min-inline-size: 0;
+}
+
+.panes[data-conversation-open] .pane.conversation {
+  position: absolute;
+  inset: auto 14px 14px;
+  block-size: calc(
+    (100% - 28px) *
+    (1 - var(--document-share)) -
+    var(--pane-gap) /
+    2 -
+    var(--divider-size)
+  );
+  transition: transform 180ms ease;
+}
+
+.panes[data-conversation-open] .pane.document {
+  flex: 0 0 calc(100% * var(--document-share) - var(--pane-gap) / 2);
+  transition: flex-basis 180ms ease;
+}
+
+.panes[data-conversation-open="false"] .pane.document {
+  flex-basis: 100%;
+  padding-block-end: 0;
+}
+
+.panes[data-conversation-open="false"] .pane.conversation {
+  transform: translateX(calc(100% + 14px));
+}
+
+.panes[data-conversation-open="false"] > .pane-grip {
+  display: none;
+}
+
+.doc-head button.conversation-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-inline-size: 30px;
+  padding: 4px;
+}
+
+.doc-head.saving-bar button.v.conversation-toggle {
+  margin: 0;
+}
+.doc-head.dead button.conversation-toggle {
+  color: var(--color-accent-2-800);
+  border-color: var(--color-accent-2-800);
+}
+
+@media (width > 900px) {
+  .panes[data-conversation-open="true"] {
+    gap: 14px;
+  }
+  .panes[data-conversation-open] {
+    transition: gap 180ms ease;
+  }
+  .conversation-slot {
+    flex: 0 0 var(--conversation-width);
+    transition: flex-basis 180ms ease;
+  }
+  .panes[data-conversation-open="false"] .conversation-slot {
+    flex-basis: 0;
+  }
+  .panes[data-conversation-open] .pane.document {
+    flex: 1;
+  }
+  .panes[data-conversation-open] .pane.conversation {
+    inset: 14px 14px 14px auto;
+    block-size: auto;
+    inline-size: var(--conversation-width);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panes[data-conversation-open],
+  .panes[data-conversation-open] .pane.document,
+  .panes[data-conversation-open] .pane.conversation,
+  .panes[data-conversation-open] .conversation-slot {
+    transition: none;
+  }
+}
