@@ -15,11 +15,13 @@ export function SettingsForm(props: {
   readonly initial: SettingsValues;
   readonly choices: DriverChoices | null;
   readonly workingDirectory?: string;
+  readonly onChooseFolder?: () => Promise<string | null>;
   readonly submitLabel: string;
   readonly onSave: (settings: SettingsValues, folder: string) => Promise<string | null>;
 }) {
   const formId = useId();
   const [error, setError] = useState<string | null>(null);
+  const [choosingFolder, setChoosingFolder] = useState(false);
   const form = useForm({
     defaultValues: {
       ...props.initial,
@@ -39,28 +41,66 @@ export function SettingsForm(props: {
     },
   });
   const harness = useStore(form.store, (state) => state.values.harness);
+  const submitting = useStore(form.store, (state) => state.isSubmitting);
   const vocabulary = props.choices?.vocabulary[harness];
   return (
     <form
       className="settings-form"
       onSubmit={(e) => {
         e.preventDefault();
+        if (choosingFolder) return;
         void form.handleSubmit();
       }}
     >
       {props.workingDirectory !== undefined ? (
         <form.Field name="workingDirectory">
           {(field) => (
-            <label className="settings-folder">
-              Working folder
-              <input
-                data-slot="input"
-                required
-                value={field.state.value}
-                placeholder="/absolute/path/to/project"
-                onChange={(e) => field.handleChange(e.target.value)}
-              />
-            </label>
+            <fieldset className="settings-folder">
+              <legend>
+                Project folder <span className="folder-optional">(optional)</span>
+              </legend>
+              <div className="folder-choice">
+                <span className={field.state.value ? "folder-path" : "folder-empty"} role="status">
+                  {field.state.value || "No project folder"}
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={choosingFolder || submitting || !props.onChooseFolder}
+                  onClick={async () => {
+                    if (!props.onChooseFolder) return;
+                    setChoosingFolder(true);
+                    setError(null);
+                    try {
+                      const folder = await props.onChooseFolder();
+                      if (folder !== null) field.handleChange(folder);
+                    } catch (cause) {
+                      setError(
+                        cause instanceof Error ? cause.message : "Cannot open the folder picker.",
+                      );
+                    } finally {
+                      setChoosingFolder(false);
+                    }
+                  }}
+                >
+                  {choosingFolder ? "Choosing…" : field.state.value ? "Change" : "Choose folder"}
+                </Button>
+                {field.state.value ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={choosingFolder || submitting}
+                    onClick={() => field.handleChange("")}
+                  >
+                    Remove
+                  </Button>
+                ) : null}
+              </div>
+              <p>Without a project folder, Lucid keeps files in its own workspace.</p>
+              {!props.onChooseFolder ? (
+                <p>Folder selection is available on the Mac running Lucid.</p>
+              ) : null}
+            </fieldset>
           )}
         </form.Field>
       ) : null}
@@ -148,7 +188,7 @@ export function SettingsForm(props: {
       ) : null}
       <form.Subscribe selector={(state) => state.isSubmitting}>
         {(busy) => (
-          <Button variant="outline" type="submit" disabled={busy}>
+          <Button variant="outline" type="submit" disabled={busy || choosingFolder}>
             {busy ? "Saving…" : props.submitLabel}
           </Button>
         )}

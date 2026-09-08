@@ -153,9 +153,9 @@ every colour, and whether annotations stay visible while editing.
 └────────────────────────────────────┴─────────────────────┘
 ```
 
-The conversation has no header. Driver selectors sit inside the composer;
-the mode and its explanation appear below it. Activity appears at the end
-of the transcript. There is no idle label.
+The conversation has no header. Driver controls live under Settings in the
+composer. Connection, waiting, and working feedback stays just above the
+composer, outside the scrolling transcript. There is no idle label.
 
 **The document pane** holds the artifact's name, its version, the mode
 control, the document itself, and a bar underneath carrying a line of
@@ -167,8 +167,9 @@ and the box you type in.
 
 A draggable divider sits between them on wide screens.
 
-The conversation starts collapsed in each new view. A named button in the
-document header opens it and closes it again without losing drafts or notes.
+The conversation starts collapsed in a new tab unless its link requests it open.
+A named button in the document header opens it and closes it again without
+losing drafts or notes. The tab remembers that choice across reloads.
 The document uses the released space. See [conversation panel visibility](design.md#conversation-panel-visibility)
 for initialization, focus, motion, and preservation rules.
 

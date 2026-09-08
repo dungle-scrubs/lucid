@@ -57,6 +57,46 @@ test("a terminal-created record appears in the hub and opens by its saved identi
   expect((await request("/api/conversations/terminal-conversation")).status).toBe(200);
 });
 
+test("hub names follow the document when it arrives and when either view renames it", async () => {
+  const { request, root } = await setup();
+  const created = createConversationRecord(root, "document-name");
+  sendInput("document-name", { rootDir: root, text: "you there?" });
+  const row = async () => (await (await request("/api/conversations")).json()).conversations[0];
+  expect(await row()).toMatchObject({ title: "you there" });
+  const host = openWriter(created.paths.dir);
+  try {
+    host.writeArtifact({
+      artifactId: "personal-agent-plan",
+      author: "agent",
+      bytes: "<h1>Your personal agent</h1>",
+      contentType: "text/html",
+      version: 1,
+    });
+    expect(await row()).toMatchObject({
+      artifactId: "personal-agent-plan",
+      title: "personal-agent-plan",
+    });
+    const before = readFileSync(created.paths.metaPath, "utf8");
+    for (const title of ["Personal agent plan", "My daily assistant"]) {
+      const response = await request(
+        "/api/conversations/document-name/artifacts/personal-agent-plan/meta",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title }),
+        },
+      );
+      expect(response.status).toBe(200);
+      expect(await row()).toMatchObject({ title, artifactId: "personal-agent-plan" });
+      const catalog = await (await request("/api/conversations/document-name/artifacts")).json();
+      expect(catalog.artifacts[0]).toMatchObject({ title, versions: [1] });
+    }
+    expect(readFileSync(created.paths.metaPath, "utf8")).toBe(before);
+  } finally {
+    host.close();
+  }
+});
+
 test("a renamed directory still opens and accepts input under its saved identity", async () => {
   const { request, root } = await setup();
   conversations(root).ensure("kept-identity");

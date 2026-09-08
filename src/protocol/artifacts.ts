@@ -26,11 +26,14 @@
  */
 
 import { ARTIFACT_BYTES_MAX } from "./frames.js";
+import { LUCID_REQUEST_GUIDANCE } from "./request-guidance.js";
 
 /** Marker — also idempotence check, like QUESTION_PREAMBLE_MARKER. */
 export const ARTIFACT_PREAMBLE_MARKER = "[lucid artifact protocol]";
 
 export const ARTIFACT_PREAMBLE = `${ARTIFACT_PREAMBLE_MARKER}
+${LUCID_REQUEST_GUIDANCE}
+
 You can emit a document as an artifact. To do so, emit a fenced code block tagged lucid-artifact whose first line is a JSON header and the rest is the document:
 
 \`\`\`lucid-artifact

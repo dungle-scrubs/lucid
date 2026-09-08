@@ -29,8 +29,14 @@ an ID already held there are accepted; another ID is refused. The browser
 shows one artifact, without restoring the removed list or second pane.
 IDs are index keys, never filesystem path components. Renaming changes only
 the title, not the ID, versions, or annotation addresses. Titles are bounded
-at 128 characters, contain no control characters, and render as text.
+at 200 UTF-16 code units, contain no control characters, and render as text.
 Malformed metadata does not create artifacts or make the record unreadable.
+
+The hub uses the same artifact title (or artifact ID until renamed) as the
+document header. Its rename control updates that document name through the
+same metadata endpoint. A conversation without an artifact uses its saved
+or generated conversation title and retains conversation renaming. Listing
+does not copy artifact names into conversation metadata or generate titles.
 
 Every accepted version is a full immutable document in the log. Human saves
 and agent emissions share append ordering. The artifact size policy is

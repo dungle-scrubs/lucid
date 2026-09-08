@@ -40,7 +40,10 @@ import {
   NOTE_QUEUE_MAX,
   queueAdmits,
 } from "../../protocol/annotations.js";
-import { ARTIFACT_TITLE_MAX } from "../../protocol/artifact-title.js";
+import {
+  ARTIFACT_TITLE_MAX,
+  artifactDisplayName as displayName,
+} from "../../protocol/artifact-title.js";
 import { ATTACHMENT_BYTES_MAX } from "../../protocol/attachment.js";
 import { comparisonMetadata } from "../../protocol/comparison-note.js";
 import type { ExecutionView } from "../../protocol/execution-view.js";
@@ -60,14 +63,6 @@ import type { ComparisonPair } from "./content-comparison.js";
 import { ContentComparisonView } from "./content-comparison.js";
 import { useConversationPanel } from "./conversation-panel.js";
 import type { DriverChoiceBody, DriverChoices, DriverPreference } from "./driver-menus.js";
-import {
-  chooseEffort,
-  chooseHarness,
-  chooseModel,
-  driverLineState,
-  effortGloss,
-  type MenuKey,
-} from "./driver-menus.js";
 import { ExecutionRecovery } from "./execution-recovery.js";
 import { isModeToggle, isQueueSend } from "./hotkeys.js";
 import {
@@ -110,6 +105,7 @@ import { seamsForLost } from "./seams.js";
 import { SettingsForm } from "./settings-form.js";
 import { SettingsPopover } from "./settings-popover.js";
 import {
+  collapseToolActivity,
   type Msg,
   type PendingNote,
   runtimeMessage,
@@ -228,15 +224,6 @@ const DocName = ({
     </span>
   );
 };
-
-/** What to call an artifact on screen.
- *
- * The id is the fallback, not a placeholder to be styled differently: an
- * artifact nobody has renamed is displayed by its id, and that is a complete
- * answer rather than a missing one. `artifactId` never moves, so this is the
- * only thing a rename changes. */
-const displayName = (a: { readonly artifactId: string; readonly title?: string }): string =>
-  a.title !== undefined && a.title !== "" ? a.title : a.artifactId;
 
 /** What the frame reports for one pick, before it is stored.
  *
@@ -409,10 +396,16 @@ const Message = (): React.ReactElement => {
     return (
       <MessagePrimitive.Root>
         <div className="msg tool">
-          <span className="tool-mark">⚙</span>
-          <div className="body">
-            <MessagePrimitive.Parts />
-          </div>
+          <details className="tool-activity">
+            <summary>{one.text}</summary>
+            <ol>
+              {(one.toolCalls ?? [{ id: one.id, text: one.text }]).map((call) => (
+                <li key={call.id}>
+                  <code>{call.text}</code>
+                </li>
+              ))}
+            </ol>
+          </details>
         </div>
       </MessagePrimitive.Root>
     );
@@ -844,330 +837,52 @@ const RefusalChip = ({
   </span>
 );
 
-/** What the mode segment's hover gloss says, one string per mode. Verbatim
- * from the product's mode table (CONTEXT.md) as the handoff requires, so
- * the surface and the docs cannot drift. */
-const MODE_GLOSS: Readonly<Record<string, string>> = {
-  interactive:
-    "A terminal session you own. lucid attaches, records everything, and can interject - it does not drive.",
-  "headless-session":
-    "lucid spawns the harness and drives it. The harness recalls its own session across restarts.",
-  "headless-turn":
-    "No session recall. Each send starts the harness fresh; lucid's record is what carries continuity.",
-};
-
-/** Selection uses background color; effort rows retain their explanatory gloss. */
-const DriverMenuRow = ({
-  label,
-  gloss,
-  selected,
-  onPick,
-}: {
-  label: string;
-  gloss?: string;
-  selected: boolean;
-  onPick: () => void;
-}): React.ReactElement => {
-  const hasGloss = gloss !== undefined && gloss !== "";
-  return (
-    <button
-      type="button"
-      role="menuitemradio"
-      aria-checked={selected}
-      className={
-        selected
-          ? hasGloss
-            ? "driver-row selected glossed"
-            : "driver-row selected"
-          : hasGloss
-            ? "driver-row glossed"
-            : "driver-row"
-      }
-      onClick={onPick}
-    >
-      <span className="driver-row-text">
-        <span className="driver-row-label">{label}</span>
-        {hasGloss ? <span className="driver-gloss">{gloss}</span> : null}
-      </span>
-    </button>
-  );
-};
-
-/** The menus' width, from the handoff's drawn values: the model menu draws
- * at 214px and the effort menu at 226px; the harness menu is the same shape
- * as the model's. One constant serves the left clamp. */
-const DRIVER_MENU_W = 226;
-
-/** The driver line (7a-7d): harness · mode · model · effort docked under
- * the prompt, in the transcript datelines' voice. The order is the
- * design's - harness, mode and model are one thought (the program, how
- * lucid runs it, the weights); effort alters a turn rather than the
- * connection, so it is last. A segment whose value the record does not
- * carry is absent, not disabled - and so is a blank or a ghost.
- *
- * Harness, model and effort are controls now (RFC-12): hover takes the
- * accent pill, opening takes the segment solid, and a pick POSTs the whole
- * preference - the line settles from the next poll, because
- * nothing renders because the browser believes it happened. Mode stays a
- * report below the composer: it is not settable from the browser, and a
- * control that cannot act is not drawn as one. Interactive offers no
- * menus at all - the human's session chose the driver and lucid cannot
- * change it mid-run - and its harness and model sit at 55% report ink.
- */
-const DriverLine = ({
+/** One entry point for the conversation's saved settings and working folder. */
+const ComposerSettings = ({
   driver,
   preference,
   choices,
+  location,
   onChoose,
+  onLocation,
 }: {
   driver: Driver;
-  /** What the person chose (RFC-12), beside what is driving. The menus'
-   * selected rows are these values; the labels are these where only a
-   * choice can name the dimension. */
   preference: DriverPreference | null;
-  /** The served lists: the four harnesses, each harness's models and
-   * efforts. Null when the server did not send them, and then no menu is
-   * offered - absent, not disabled. */
   choices: DriverChoices | null;
-  /** POST a whole preference. Answers null on success, or why it refused,
-   * drawn beside the line that made the choice. */
+  location: LocationState | null;
   onChoose: (body: DriverChoiceBody) => Promise<string | null>;
-}): React.ReactElement | null => {
-  const mode = preference?.profile ?? driver.profile;
-  const [editor, setEditor] = React.useState<string | null>(null);
-  const wrapper = React.useRef<HTMLDivElement | null>(null);
-  const [open, setOpen] = React.useState<{ key: MenuKey; left: number } | null>(null);
-  const [choiceError, setChoiceError] = React.useState<string | null>(null);
-  const [freeModel, setFreeModel] = React.useState("");
-  React.useEffect(() => {
-    if (open === null) return;
-    // One menu at a time closes on Escape and on a click anywhere outside
-    // itself - including on another segment, which opens that one instead.
-    const close = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") setOpen(null);
-    };
-    const away = (e: PointerEvent): void => {
-      if (wrapper.current?.contains(e.target as Node | null) !== true) setOpen(null);
-    };
-    document.addEventListener("keydown", close);
-    document.addEventListener("pointerdown", away);
-    return () => {
-      document.removeEventListener("keydown", close);
-      document.removeEventListener("pointerdown", away);
-    };
-  }, [open]);
-  const pick = React.useCallback(
-    async (body: DriverChoiceBody | null): Promise<void> => {
-      setOpen(null);
-      if (body === null) return;
-      if (!preference?.model || !preference.effort || !preference.profile) {
-        setEditor(body.harness);
-        setChoiceError("Complete the settings before saving this choice.");
-        return;
-      }
-      setChoiceError(null);
-      const why = await onChoose(body);
-      if (why !== null) setChoiceError(why);
-    },
-    [onChoose, preference],
-  );
-  const state = driverLineState({
-    profile: undefined,
-    driverHarness: driver.harness,
-    driverModel: driver.model,
-    preference,
-    choices,
-  });
-  const interactive = mode === "interactive";
-  /** Open a segment's menu, its left edge on the segment - clamped so a
-   * long label near the column's right edge cannot push the menu into the
-   * document pane. Effort never comes here: it opens right-aligned. */
-  const openAt = (key: MenuKey, el: HTMLElement): void => {
-    const line = wrapper.current;
-    let left = el.offsetLeft;
-    if (line !== null) left = Math.min(left, Math.max(0, line.clientWidth - DRIVER_MENU_W - 8));
-    setFreeModel("");
-    setOpen((was) => (was !== null && was.key === key ? null : { key, left }));
-  };
-  const seg = (key: MenuKey, label: string): React.ReactElement => {
-    const live = state.menus.has(key);
-    if (!live) {
-      return (
-        <span className={interactive ? "driver-seg report" : "driver-seg"} key={key}>
-          {label}
-        </span>
-      );
-    }
-    const isOpen = open?.key === key;
-    return (
-      <button
-        type="button"
-        className="driver-seg pick"
-        key={key}
-        aria-label={`${key}: ${label}`}
-        aria-expanded={isOpen}
-        aria-haspopup="menu"
-        onClick={(e) => openAt(key, e.currentTarget)}
-      >
-        {label}
-        <span aria-hidden="true" className={isOpen ? "driver-caret flipped" : "driver-caret"}>
-          <CaretDownDuotone size={9} />
-        </span>
-      </button>
-    );
-  };
-  const segments: { key: string; el: React.ReactElement }[] = [
-    // Nothing driving and nothing chosen still names the state in the
-    // product's own words (3d: "No driver"), so the harness menu hangs
-    // somewhere and the first choice can be made from the browser - the
-    // natural moment, per RFC-12's open question 1. No menu offered, no
-    // segment: a line with nothing to say is not drawn.
-    ...(state.harness === null && !state.menus.has("harness")
-      ? []
-      : [{ key: "harness", el: seg("harness", state.harness ?? "Choose harness") }]),
-    // The model segment renders wherever a choice exists, even before one
-    // is made: until then the harness's own default runs, and "default
-    // model" names that honestly instead of hiding the dimension. Kevin's
-    // order (2026-08-29, over the handoff's): provider · model · effort ·
-    // the mode is reported separately below the composer.
-    ...(state.menus.has("model")
-      ? [{ key: "model", el: seg("model", state.model ?? "default model") }]
-      : state.model === null
-        ? []
-        : [{ key: "model", el: seg("model", state.model) }]),
-    ...(state.effort === null ? [] : [{ key: "effort", el: seg("effort", state.effort) }]),
-  ];
-  const rowsFor = (key: MenuKey): React.ReactElement[] => {
-    if (key === "harness") {
-      return (choices?.harnesses ?? []).map((h) => (
-        <DriverMenuRow
-          key={h}
-          label={h}
-          selected={h === state.harness}
-          onPick={() => {
-            setOpen(null);
-            if (chooseHarness(h, state)) setEditor(h);
-          }}
-        />
-      ));
-    }
-    const vocabulary = state.vocabulary;
-    if (vocabulary === null) return [];
-    if (key === "model") {
-      const listed = vocabulary.models.map((m) => (
-        <DriverMenuRow
-          key={m}
-          label={m}
-          selected={m === state.model}
-          onPick={() => void pick(chooseModel(m, state, preference))}
-        />
-      ));
-      // The open entry (extensible harnesses, RFC-12): pi registers models
-      // at runtime, so the listed ids are examples of a kind rather than
-      // the kind's whole population.
-      // The highlight marks the committed choice only: while a new id is
-      // being typed, the row is a field, not the selected answer.
-      const freeSelected =
-        freeModel === "" && state.model !== null && !vocabulary.models.includes(state.model);
-      return vocabulary.extensible
-        ? [
-            ...listed,
-            <div className={freeSelected ? "driver-free selected" : "driver-free"} key="free">
-              <input
-                aria-label="Another model id"
-                onChange={(e) => setFreeModel(e.currentTarget.value)}
-                onKeyDown={(e) => {
-                  if (e.key !== "Enter") return;
-                  const id = freeModel.trim();
-                  if (id !== "") void pick(chooseModel(id, state, preference));
-                }}
-                placeholder="other model id…"
-                spellCheck={false}
-                value={freeSelected ? (state.model ?? "") : freeModel}
-              />
-            </div>,
-          ]
-        : listed;
-    }
-    return vocabulary.efforts.map((level) => (
-      <DriverMenuRow
-        gloss={effortGloss(level, vocabulary.efforts)}
-        key={level}
-        label={level}
-        selected={level === state.effort}
-        onPick={() => void pick(chooseEffort(level, state, preference))}
-      />
-    ));
-  };
-  // A line with no segments says nothing and is not drawn - the interactive
-  // record whose server sent no lists, the dead connection the dock already
-  // hides.
-  if (segments.length === 0) return null;
+  onLocation: (folder: string, revision: number) => Promise<string | null>;
+}): React.ReactElement => {
+  const [open, setOpen] = React.useState(false);
   return (
-    <div className={interactive ? "driver-line interactive" : "driver-line"} ref={wrapper}>
-      {segments.map((s) => (
-        <React.Fragment key={s.key}>{s.el}</React.Fragment>
-      ))}
-      {state.harness === null && state.menus.has("harness") ? (
-        <>
-          <button type="button" className="driver-seg pick" disabled title="Choose a harness first">
-            Model
-          </button>
-          <button type="button" className="driver-seg pick" disabled title="Choose a harness first">
-            Reasoning
-          </button>
-        </>
-      ) : null}
-      <SettingsPopover
-        label="Settings"
-        open={editor !== null}
-        onOpenChange={(value) => setEditor(value ? (state.harness ?? "") : null)}
-      >
-        <SettingsForm
-          key={`${preference?.revision ?? 0}:${editor}`}
-          initial={{
-            harness: editor ?? "",
-            model: editor === state.harness ? (state.model ?? "") : "",
-            effort: editor === state.harness ? (state.effort ?? "") : "",
-            profile: mode ?? "headless-turn",
-            ...(editor === state.harness && preference?.provider
-              ? { provider: preference.provider }
-              : {}),
-          }}
-          choices={choices}
-          submitLabel="Save settings"
-          onSave={async (settings) => {
-            const error = await onChoose({
-              v: 1,
-              ...settings,
-              expectedRevision: preference?.revision ?? 0,
-            });
-            if (!error) setEditor(null);
-            return error;
-          }}
-        />
-      </SettingsPopover>
-      {choiceError === null ? null : (
-        <span className="driver-choice-error">Choice not saved: {choiceError}</span>
-      )}
-      {open === null ? null : (
-        <div
-          className={open.key === "effort" ? "driver-menu align-right" : "driver-menu"}
-          role="menu"
-          style={open.key === "effort" ? undefined : { left: `${open.left}px` }}
-        >
-          {rowsFor(open.key)}
-          {open.key === "effort" ? null : (
-            <>
-              <div className="driver-menu-rule" />
-              <div className="driver-menu-note">
-                Changing the model does not restart the conversation.
-              </div>
-            </>
-          )}
+    <SettingsPopover label="Settings" open={open} onOpenChange={setOpen}>
+      <SettingsForm
+        key={preference?.revision ?? 0}
+        initial={{
+          harness: preference?.harness ?? driver.harness ?? "",
+          model: preference?.model ?? driver.model ?? "",
+          effort: preference?.effort ?? "",
+          profile: preference?.profile ?? driver.profile ?? "headless-turn",
+          ...(preference?.provider ? { provider: preference.provider } : {}),
+        }}
+        choices={choices}
+        submitLabel="Save settings"
+        onSave={async (settings) => {
+          const error = await onChoose({
+            v: 1,
+            ...settings,
+            expectedRevision: preference?.revision ?? 0,
+          });
+          if (!error) setOpen(false);
+          return error;
+        }}
+      />
+      {location ? (
+        <div className="settings-location">
+          <LocationControl key={location.revision} location={location} onSave={onLocation} />
         </div>
-      )}
-    </div>
+      ) : null}
+    </SettingsPopover>
   );
 };
 
@@ -1250,7 +965,6 @@ const Thread = ({
 }): React.ReactElement => {
   const composerBox = React.useRef<HTMLTextAreaElement | null>(null);
   const attachmentPicker = React.useRef<HTMLInputElement | null>(null);
-  const [modeIssue, setModeIssue] = React.useState<string | null>(null);
   // 4a state 2: a file held over the composer is a drop target. The whole
   // composer takes the dashed accent edge and the field says what will
   // happen. Nothing lands on the document: a file is attached to the
@@ -1274,23 +988,6 @@ const Thread = ({
             <div className="empty">Nothing in this conversation yet.</div>
           </ThreadPrimitive.Empty>
           <ThreadPrimitive.Messages components={{ Message }} />
-
-          {/* 6e Wait: progress in accent ink, as the transcript's own last
-              row - the scroll absorbs it, so the composer never moves when
-              work starts and stops (the dock version reflowed the input).
-              This row sits where the eyes already are. The count joins at the 8-second
-              threshold; before that the state alone is the message. */}
-          {report.busy && !stalled ? (
-            <div className="working-row">
-              <span>
-                {report.label}
-                {report.disconnected ? null : <span aria-hidden="true" className="working-dots" />}
-              </span>
-              {report.elapsed === null ? null : (
-                <span className="working-elapsed"> · {report.elapsed}</span>
-              )}
-            </div>
-          ) : null}
 
           {/* 3c: the agent stopped mid-turn. A card under the truncated turn
               says what that cost - nothing was written, the version is as it
@@ -1370,9 +1067,22 @@ const Thread = ({
         </ThreadPrimitive.ScrollToBottom>
       </div>
 
+      {/* Connection and activity feedback stays above the composer. */}
+      {report.busy && !stalled ? (
+        <div className="working-row" role="status">
+          <span>
+            {report.label}
+            {report.disconnected ? null : <span aria-hidden="true" className="working-dots" />}
+          </span>
+          {report.elapsed === null ? null : (
+            <span className="working-elapsed"> · {report.elapsed}</span>
+          )}
+        </div>
+      ) : null}
+
       {/* The half that does not. One solid block at the bottom: what is
           queued, what is attached, and the box you type in. Activity
-          appears at the end of the transcript. */}
+          appears directly above this block. */}
       <div className={dead ? "dock dead" : "dock"}>
         {pending.length === 0 ? null : (
           <div className="queue-bar">
@@ -1503,78 +1213,22 @@ const Thread = ({
               </>
             )}
             {dead ? null : (
-              <DriverLine
+              <ComposerSettings
                 driver={driver}
                 preference={driverPreference}
                 choices={driverChoices}
                 onChoose={onDriverChoice}
+                location={location}
+                onLocation={onLocation}
               />
             )}
           </div>
         </ComposerPrimitive.Root>
-        {modeIssue ? (
-          <p role="alert" className="settings-error">
-            {modeIssue}
-          </p>
-        ) : null}
         {settingsIssue ? (
           <p role="alert" className="settings-error">
             {settingsIssue}
           </p>
         ) : null}
-        {!dead && location ? (
-          <LocationControl key={location.revision} location={location} onSave={onLocation} />
-        ) : null}
-        {dead ? null : (
-          <div className="composer-mode">
-            {driverPreference?.model && driverPreference.effort && driverPreference.profile ? (
-              <select
-                className="composer-mode-name"
-                aria-label="Mode"
-                value={driverPreference.profile}
-                onChange={async (event) => {
-                  const profile = event.currentTarget.value;
-                  if (
-                    profile !== "headless-turn" &&
-                    profile !== "headless-session" &&
-                    profile !== "interactive"
-                  )
-                    return;
-                  try {
-                    setModeIssue(
-                      await onDriverChoice({
-                        v: 1,
-                        harness: driverPreference.harness,
-                        ...(driverPreference.provider
-                          ? { provider: driverPreference.provider }
-                          : {}),
-                        model: driverPreference.model ?? "",
-                        effort: driverPreference.effort ?? "",
-                        profile,
-                        expectedRevision: driverPreference.revision,
-                      }),
-                    );
-                  } catch {
-                    setModeIssue("Mode change was not confirmed. Refresh before trying again.");
-                  }
-                }}
-              >
-                <option value="headless-turn">headless-turn</option>
-                <option value="headless-session">headless-session</option>
-                <option value="interactive">interactive</option>
-              </select>
-            ) : (
-              <span className="composer-mode-name">{driver.profile ?? "No mode recorded"}</span>
-            )}
-            <span>
-              {driver.profile === undefined
-                ? driverPreference === null
-                  ? "Choose a harness to configure the model and reasoning."
-                  : "The mode is reported when an agent attaches."
-                : MODE_GLOSS[driverPreference?.profile ?? driver.profile]}
-            </span>
-          </div>
-        )}
       </div>
     </ThreadPrimitive.Root>
   );
@@ -2083,7 +1737,6 @@ const Dialog = ({
 };
 
 const App = (): React.ReactElement => {
-  const conversationPanel = useConversationPanel(window.location.search);
   // Read once. Where in the record the page starts is an opening question;
   // after that the page moves the address bar, not the other way round.
   const opened = React.useMemo(routeFromPath, []);
@@ -2193,6 +1846,12 @@ const App = (): React.ReactElement => {
    * returned all of them; the page kept only the one it was showing, which
    * is what made the rest unreachable. */
   const [allArtifacts, setAllArtifacts] = React.useState<readonly CatalogEntry[]>([]);
+  const [initiallyEmpty, setInitiallyEmpty] = React.useState<boolean>();
+  const conversationPanel = useConversationPanel(
+    window.location.search,
+    initiallyEmpty === true,
+    conversationId,
+  );
   /** Sent notes, by `artifactId@version` — the version each was made
    * against. */
   const [sentNotes, setSentNotes] = React.useState<Record<string, Annotation[]>>({});
@@ -2800,6 +2459,7 @@ const App = (): React.ReactElement => {
         // hold returns early below, and that is exactly the page that has to
         // offer the list of what it does hold.
         setAllArtifacts(artifacts);
+        setInitiallyEmpty((previous) => previous ?? artifacts.length === 0);
         // The artifact the URL named, else the one with the most recent
         // version entry - which is what the page did when nothing could name
         // one. An id that names nothing is not silently replaced: the page
@@ -3715,7 +3375,7 @@ const App = (): React.ReactElement => {
     // Dead (3d): queued notes leave the timeline and become one held card
     // under it - "N notes, nothing sent" - because nothing can be sent and
     // a queue that looks live would say otherwise.
-    return weaveNotes(messages, dead ? [] : notes, placed);
+    return collapseToolActivity(weaveNotes(messages, dead ? [] : notes, placed));
   }, [messages, catalog, notes, dead]);
 
   const runtime = useExternalStoreRuntime<Msg>({
@@ -3996,7 +3656,6 @@ const App = (): React.ReactElement => {
                           hold. Not an error and not styled as one - the way
                           on is the artifact it does hold, named plainly. */}
                       <div className="doc-head">
-                        {conversationPanel.control}
                         <a className="doc-mark" href="/" aria-label="Lucid hub">
                           <span className="dot" />
                           <span className="word">lucid</span>
@@ -4009,6 +3668,7 @@ const App = (): React.ReactElement => {
                             {displayName(allArtifacts[0] as CatalogEntry)}
                           </span>
                         )}
+                        {conversationPanel.control}
                       </div>
                       <div className="doc-ground">
                         <div className="empty-panel">
@@ -4064,38 +3724,17 @@ const App = (): React.ReactElement => {
                           - the header says so rather than showing dead
                           controls. The way in is the conversation. */}
                       <div className="doc-head">
-                        {conversationPanel.control}
                         <a className="doc-mark" href="/" aria-label="Lucid hub">
                           <span className="dot" />
                           <span className="word">lucid</span>
                         </a>
                         <span className="doc-head-sep" aria-hidden="true" />
                         <span className="none-name">No document</span>
+                        {conversationPanel.control}
                       </div>
                       <div className="doc-ground">
                         <div className="empty-panel">
-                          <div className="empty-line">
-                            Nothing here yet. Open the conversation to ask for a document, or attach
-                            a file.
-                          </div>
-                          {/* Attaching here is the composer's own act: the file
-                              is stored and rides the next thing said, exactly
-                              as if the clip on the right had been pressed.
-                              Dropping a file ONTO the document is not a
-                              gesture - a file is never a version. */}
-                          <label className="v choose">
-                            Choose a file
-                            <input
-                              className="sr-only"
-                              type="file"
-                              multiple
-                              onChange={(e) => {
-                                if (e.currentTarget.files !== null)
-                                  attachFiles(e.currentTarget.files);
-                                e.currentTarget.value = "";
-                              }}
-                            />
-                          </label>
+                          <div className="empty-line">Start a conversation</div>
                         </div>
                         <div className="doc-panel">
                           <div className="guidance idle">No document in this conversation yet.</div>
@@ -4112,7 +3751,6 @@ const App = (): React.ReactElement => {
                     the conversation card below carries the same two answers. */}
                       {dead || damaged ? (
                         <div className="doc-head dead">
-                          {conversationPanel.control}
                           <a className="doc-mark" href="/" aria-label="Lucid hub">
                             <span className="dot" />
                             <span className="word">lucid</span>
@@ -4131,10 +3769,10 @@ const App = (): React.ReactElement => {
                             Reload
                           </button>
                           {comparing === null ? artifactWidth.control : null}
+                          {conversationPanel.control}
                         </div>
                       ) : edited ? (
                         <div className="doc-head saving-bar">
-                          {conversationPanel.control}
                           <a className="doc-mark" href="/" aria-label="Lucid hub">
                             <span className="dot" />
                             <span className="word">lucid</span>
@@ -4163,10 +3801,10 @@ const App = (): React.ReactElement => {
                           >
                             {saving ? "Saving…" : `Save as v${nextVersion}`}
                           </button>
+                          {conversationPanel.control}
                         </div>
                       ) : (
                         <div className="doc-head">
-                          {conversationPanel.control}
                           {/* lucid, over the document: the mark, a hairline, then
                       the name. Nothing else above the sheet. */}
                           <a className="doc-mark" href="/" aria-label="Lucid hub">
@@ -4282,41 +3920,44 @@ const App = (): React.ReactElement => {
                               Restore this version
                             </button>
                           ) : null}
-                          {comparing !== null ? (
-                            /* 6b: there is no mode here and neither side takes a
+                          <span className="doc-actions">
+                            {comparing !== null ? (
+                              /* 6b: there is no mode here and neither side takes a
                           caret, so the toggle is replaced by the lock chip
                           and the way out. */
-                            <>
-                              <span className="lock-chip">
-                                <LockDuotone size={11} />
-                                Comparing
+                              <>
+                                <span className="lock-chip">
+                                  <LockDuotone size={11} />
+                                  Comparing
+                                </span>
+                                <button type="button" className="v" onClick={closeComparison}>
+                                  Close
+                                </button>
+                              </>
+                            ) : (
+                              <span className="modes">
+                                <button
+                                  type="button"
+                                  className={mode === "annotate" ? "m current" : "m"}
+                                  onClick={() => setMode("annotate")}
+                                  disabled={pinnedOld}
+                                  title="Click parts of the document to write notes about them (⌥⌫)"
+                                >
+                                  Annotate
+                                </button>
+                                <button
+                                  type="button"
+                                  className={mode === "edit" ? "m current" : "m"}
+                                  onClick={() => setMode("edit")}
+                                  disabled={pinnedOld}
+                                  title="Tick boxes, fill fields, and edit text (⌥⌫)"
+                                >
+                                  Edit
+                                </button>
                               </span>
-                              <button type="button" className="v" onClick={closeComparison}>
-                                Close
-                              </button>
-                            </>
-                          ) : (
-                            <span className="modes">
-                              <button
-                                type="button"
-                                className={mode === "annotate" ? "m current" : "m"}
-                                onClick={() => setMode("annotate")}
-                                disabled={pinnedOld}
-                                title="Click parts of the document to write notes about them (⌥⌫)"
-                              >
-                                Annotate
-                              </button>
-                              <button
-                                type="button"
-                                className={mode === "edit" ? "m current" : "m"}
-                                onClick={() => setMode("edit")}
-                                disabled={pinnedOld}
-                                title="Tick boxes, fill fields, and edit text (⌥⌫)"
-                              >
-                                Edit
-                              </button>
-                            </span>
-                          )}
+                            )}
+                            {conversationPanel.control}
+                          </span>
                         </div>
                       )}
 

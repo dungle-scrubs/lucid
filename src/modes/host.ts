@@ -52,6 +52,7 @@ import { ARTIFACT_BYTES_MAX } from "../protocol/frames.js";
 import { HubError } from "../protocol/hub-errors.js";
 import type { Frame, InputMode, ReduceResult } from "../protocol/index.js";
 import { applyPatch, parsePatchBody } from "../protocol/patch.js";
+import { LUCID_REQUEST_GUIDANCE } from "../protocol/request-guidance.js";
 import { ContextPreparationError } from "../store/conversation-context.js";
 import type { ConversationHost } from "../store/conversation-host.js";
 import { classifyStoreFailure, type StoreFailureCode } from "../store/errors.js";
@@ -685,6 +686,10 @@ const sessionStrategy = (
         }
         framed = withProtocol;
       }
+      // The protocol is taught once; the request scope is repeated on every
+      // prompt, including later inputs in an existing session.
+      if (!framed.includes(LUCID_REQUEST_GUIDANCE))
+        framed = `${LUCID_REQUEST_GUIDANCE}\n\n${framed}`;
       composed = composeAvailableState(framed, artifactState(deps, ctx));
     }
     if (ctx.isStopped()) return;
@@ -716,7 +721,7 @@ const sessionStrategy = (
               terminal: false,
             });
             return opening
-              .then((session) => session.send(id, text))
+              .then((session) => session.send(id, `${LUCID_REQUEST_GUIDANCE}\n\n${text}`))
               .then((sent) => {
                 if (sent.disposition === "rejected") {
                   reject(id, sent.reason ?? "send rejected");

@@ -7,6 +7,7 @@ import { openDrivenConversation } from "../../src/cli/runtime.js";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
 import type { HarnessRunner } from "../../src/harness/runner.js";
 import { HCN_MIN_VERSION } from "../../src/harness/version.js";
+import { recoveryPolicy } from "../../src/protocol/execution.js";
 import { createConversationHost } from "../../src/store/conversation-host.js";
 import { replaceSettings } from "../../src/store/settings.js";
 import { createConversationRecord } from "../../src/store/store.js";
@@ -16,11 +17,13 @@ async function until(check: () => boolean): Promise<void> {
   for (let tick = 0; tick < 300 && !check(); tick++) await Bun.sleep(1);
   expect(check()).toBe(true);
 }
-function fixture() {
+function fixture(managedWorkspace = false, nativeManagement = false) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "lucid-managed-runtime-")));
-  const { paths, secret } = createConversationRecord(root, "managed", { workingDirectory: root });
+  const { paths, secret } = createConversationRecord(root, "managed", {
+    workingDirectory: managedWorkspace ? null : root,
+  });
   const driver = {
-    harness: "claude",
+    harness: nativeManagement ? "codex" : "claude",
     model: "selected",
     effort: "high",
     profile: "headless-turn",
@@ -42,6 +45,7 @@ function fixture() {
     ...hcn,
     inspect: async (harness) => ({
       name: harness,
+      ...(nativeManagement ? { nativeContextManagement: true as const } : {}),
       session: false,
       verifiedAgainst: "verified",
       runtime: {
@@ -49,14 +53,17 @@ function fixture() {
         resume: { status: "supported", reason: null },
       },
     }),
-    countContext: async (request) => ({
-      status: "available",
-      executable: { path: "/fake/harness", version: "verified" },
-      method: "native-context-estimate",
-      model: request.model ?? "selected",
-      inputLimitTokens: 10000,
-      totalTokens: 1000,
-    }),
+    countContext: async (request) => {
+      if (nativeManagement) throw new Error("Native management must not request accounting");
+      return {
+        status: "available",
+        executable: { path: "/fake/harness", version: "verified" },
+        method: "native-context-estimate",
+        model: request.model ?? "selected",
+        inputLimitTokens: 10000,
+        totalTokens: 1000,
+      };
+    },
   };
   return {
     root,
@@ -69,57 +76,67 @@ function fixture() {
   };
 }
 
-test("managed runtime dispatches accepted input, confirms completion, and resumes the same native session", async () => {
-  const f = fixture();
-  const running = await openDrivenConversation({
-    rootDir: f.root,
-    conversationId: "managed",
-    managed: true,
-    runner: f.runner,
-    harnessName: "muse",
-    presence: () => false,
-  });
-  if (running.kind !== "running") throw new Error("Worker did not start");
-  try {
-    await until(() => f.spawner.calls.length === 1);
-    expect(running.host.state().attachment).toMatchObject({
-      capabilities: ["managed-input-v1"],
-      attachmentOrigin: "automatic",
+test.each([
+  [false, false],
+  [true, false],
+  [true, true],
+])(
+  "managed runtime dispatches and resumes: managed workspace %s, native management %s",
+  async (managedWorkspace, nativeManagement) => {
+    const f = fixture(managedWorkspace, nativeManagement);
+    const harness = nativeManagement ? "codex" : "claude";
+    const running = await openDrivenConversation({
+      rootDir: f.root,
+      conversationId: "managed",
+      managed: true,
+      runner: f.runner,
+      harnessName: "muse",
+      presence: () => false,
     });
-    expect(running.host.state().executions.one?.kind).toBe("attempt-started");
-    expect(f.spawner.calls[0]?.argv).toContain("claude");
-    expect(f.spawner.calls[0]?.opts.cwd).toBe(f.root);
-    const first = f.procs[0];
-    if (!first) throw new Error("Missing first process");
-    first.emit({ kind: "identity", sessionId: "same-native", authority: "harness-minted" });
-    first.emit({ kind: "message", role: "assistant", text: "First answer" });
-    first.emit({ kind: "done", cause: "clean", exitCode: 0 });
-    first.exit(0);
-    await until(() => running.host.state().executions.one?.kind === "attempt-ended");
-    expect(running.host.contextCoverage("claude", "same-native")).toBeGreaterThan(0);
-    expect(
-      running.host.acceptInput(
-        { id: "two", text: "Second request", mode: "queue" },
-        { managed: true },
-      ).verdict,
-    ).toBe("accepted");
-    await until(() => f.spawner.calls.length === 2);
-    const args = f.spawner.calls[1]?.argv ?? [];
-    expect(args[args.indexOf("--resume") + 1]).toBe("same-native");
-    const second = f.procs[1];
-    if (!second) throw new Error("Missing second process");
-    second.emit({ kind: "identity", sessionId: "same-native", authority: "harness-minted" });
-    second.emit({ kind: "message", role: "assistant", text: "Second answer" });
-    second.emit({ kind: "done", cause: "clean", exitCode: 0 });
-    second.exit(0);
-    await until(() => running.host.state().executions.two?.kind === "attempt-ended");
-    expect(running.host.transcript().inputs).toHaveLength(2);
-  } finally {
-    running.abort();
-    await running.done;
-    f.close();
-  }
-});
+    if (running.kind !== "running") throw new Error("Worker did not start");
+    try {
+      await until(() => f.spawner.calls.length === 1);
+      expect(running.host.state().attachment).toMatchObject({
+        capabilities: ["managed-input-v1"],
+        attachmentOrigin: "automatic",
+      });
+      expect(running.host.state().executions.one?.kind).toBe("attempt-started");
+      expect(f.spawner.calls[0]?.argv).toContain(harness);
+      expect(f.spawner.calls[0]?.opts.cwd).toBe(
+        managedWorkspace ? join(f.paths.dir, "workspace") : f.root,
+      );
+      const first = f.procs[0];
+      if (!first) throw new Error("Missing first process");
+      first.emit({ kind: "identity", sessionId: "same-native", authority: "harness-minted" });
+      first.emit({ kind: "message", role: "assistant", text: "First answer" });
+      first.emit({ kind: "done", cause: "clean", exitCode: 0 });
+      first.exit(0);
+      await until(() => running.host.state().executions.one?.kind === "attempt-ended");
+      expect(running.host.contextCoverage(harness, "same-native")).toBeGreaterThan(0);
+      expect(
+        running.host.acceptInput(
+          { id: "two", text: "Second request", mode: "queue" },
+          { managed: true },
+        ).verdict,
+      ).toBe("accepted");
+      await until(() => f.spawner.calls.length === 2);
+      const args = f.spawner.calls[1]?.argv ?? [];
+      expect(args[args.indexOf("--resume") + 1]).toBe("same-native");
+      const second = f.procs[1];
+      if (!second) throw new Error("Missing second process");
+      second.emit({ kind: "identity", sessionId: "same-native", authority: "harness-minted" });
+      second.emit({ kind: "message", role: "assistant", text: "Second answer" });
+      second.emit({ kind: "done", cause: "clean", exitCode: 0 });
+      second.exit(0);
+      await until(() => running.host.state().executions.two?.kind === "attempt-ended");
+      expect(running.host.transcript().inputs).toHaveLength(2);
+    } finally {
+      running.abort();
+      await running.done;
+      f.close();
+    }
+  },
+);
 
 test("managed runtime cannot create a missing record", async () => {
   const f = fixture();
@@ -1013,6 +1030,49 @@ test("a repaired startup failure can retry the original accepted input", async (
       await running.done;
     }
   } finally {
+    f.close();
+  }
+});
+
+test("native context rejection preserves the input without automatic retry or replacement session", async () => {
+  const f = fixture(true, true);
+  const running = await openDrivenConversation({
+    rootDir: f.root,
+    conversationId: "managed",
+    managed: true,
+    runner: f.runner,
+    presence: () => false,
+  });
+  if (running.kind !== "running") throw new Error("Worker did not start");
+  try {
+    await until(() => f.spawner.calls.length === 1);
+    // Synthetic native failure sequence; no captured fixture is modified.
+    f.procs[0]?.emit({
+      kind: "identity",
+      sessionId: "native-context-failure",
+      authority: "harness-minted",
+    });
+    f.procs[0]?.emit({ kind: "error", text: "Context window exceeded" });
+    f.procs[0]?.emit({ kind: "done", cause: "error", exitCode: 1 });
+    f.procs[0]?.exit(1);
+    await until(() => running.host.state().executions.one?.kind === "attempt-ended");
+    expect(running.host.state().executions.one).toMatchObject({
+      kind: "attempt-ended",
+      outcome: { kind: "failed-after-start" },
+    });
+    expect(running.host.transcript().inputs).toHaveLength(1);
+    expect(running.host.state().harnessSessions.codex).toBe("native-context-failure");
+    const execution = running.host.state().executions.one;
+    if (!execution) throw new Error("Lost accepted input");
+    expect(recoveryPolicy(execution)).toEqual({
+      actions: ["continue-fresh"],
+      acknowledgeEffects: true,
+    });
+    expect(running.host.contextCoverage("codex", "native-context-failure")).toBe(0);
+    expect(f.spawner.calls).toHaveLength(1);
+  } finally {
+    running.abort();
+    await running.done;
     f.close();
   }
 });

@@ -12,6 +12,36 @@
   min-width: 0;
   gap: 4px;
 }
+.settings-folder {
+  min-inline-size: 0;
+  border: 0;
+  padding: 0;
+}
+.settings-folder legend {
+  margin-block-end: 8px;
+}
+.folder-choice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border, var(--edge));
+  border-radius: 6px;
+}
+.folder-path,
+.folder-empty {
+  flex: 1 1 180px;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+.folder-empty,
+.folder-optional {
+  color: var(--muted-foreground, color-mix(in srgb, var(--color-text) 55%, transparent));
+}
+.settings-folder > p {
+  margin-block-start: 6px;
+}
 .settings-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -32,6 +62,10 @@
 .settings-form select,
 .settings-form button {
   cursor: pointer;
+}
+.settings-form input::placeholder {
+  color: var(--muted-foreground, color-mix(in srgb, var(--color-text) 45%, transparent));
+  opacity: 1;
 }
 .settings-form select {
   appearance: none;
@@ -113,6 +147,15 @@
   color: inherit;
   background: transparent;
   border: 0;
+}
+.composer-toolbar > .settings-trigger {
+  margin-inline-start: auto;
+  border-radius: 4px;
+}
+.settings-location {
+  margin-block-start: 20px;
+  padding-block-start: 16px;
+  border-block-start: 1px solid var(--border, var(--edge));
 }
 .dock > .settings-trigger {
   margin: 4px 12px;

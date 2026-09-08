@@ -18,6 +18,7 @@ export interface Msg {
   readonly text: string;
   /** A tool call: the agent working, not the agent talking. */
   readonly tool?: boolean;
+  readonly toolCalls?: readonly { readonly id: string; readonly text: string }[];
   /** lucid refusing the agent - an error or a limit event, the substrate
    * saying no. The fifth transcript kind: magenta, never mistaken for the
    * agent speaking. */
@@ -47,6 +48,32 @@ export const runtimeMessage = (message: Msg, index: number) => ({
   role: message.role,
   content: [{ type: "text" as const, text: message.text }],
 });
+
+/** Collapse only adjacent activity, after notes and saves have been placed.
+ * Replies, errors, and user input keep their original timeline positions. */
+export function collapseToolActivity(messages: readonly Msg[]): Msg[] {
+  const result: Msg[] = [];
+  let index = 0;
+  while (index < messages.length) {
+    const first = messages[index++];
+    if (!first) continue;
+    if (!first.tool) {
+      result.push(first);
+      continue;
+    }
+    const calls = [...(first.toolCalls ?? [{ id: first.id, text: first.text }])];
+    while (messages[index]?.tool) {
+      const next = messages[index++];
+      if (next) calls.push(...(next.toolCalls ?? [{ id: next.id, text: next.text }]));
+    }
+    result.push({
+      ...first,
+      text: `${calls.length} tool ${calls.length === 1 ? "call" : "calls"}`,
+      toolCalls: calls,
+    });
+  }
+  return result;
+}
 
 export interface SentBatch {
   readonly comparison?: import("../../protocol/comparison-note.js").ComparisonContext;

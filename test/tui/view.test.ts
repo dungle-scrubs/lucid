@@ -253,3 +253,30 @@ describe("TUI render (M6.1)", () => {
     for (const row of optionRows) expect(row.startsWith("  ")).toBe(true);
   });
 });
+
+test("tool activity retains Codex string commands and accepts absent details", () => {
+  const r = rig();
+  r.send(attach({ conversationId: "conv-1", secret: r.secret }));
+  const inputs = ["ls ./document", { command: "read ./plan" }, null];
+  inputs.forEach((input, index) => {
+    r.send(
+      event({
+        epoch: 1,
+        n: index + 1,
+        turnId: "tools",
+        event: { kind: "tool", name: "shell", input },
+      }),
+    );
+  });
+  const view = buildView({
+    transcript: r.host.transcript(),
+    status: r.host.status(),
+    rung: "",
+    draft: "",
+  });
+  expect(view.lines.map((line) => line.text)).toEqual([
+    "ls ./document",
+    "shell: read ./plan",
+    "shell",
+  ]);
+});

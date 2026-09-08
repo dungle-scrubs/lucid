@@ -19,6 +19,22 @@ Project-scope hooks must coexist with other project hooks. Nested smoke
 sessions use project settings and unset `HERDR_ENV`. Hook delivery bounds
 apply to UTF-8 bytes after JSON escaping; invoke commands as argument arrays.
 
+## Lucid request guidance
+
+Lucid requests carry prose guidance to read and inspect as needed while only
+creating or modifying the Lucid artifact. They instruct the agent not to
+change project files or implement code changes. This applies to work requested
+through Lucid, not work requested separately in the interactive terminal.
+
+Headless prompts carry this guidance on each task request, including resumed
+turns and later inputs in a persistent session. Interactive hooks include it
+with ordinary feedback and comparison notes. Structured answers to an open
+harness question retain their raw answer format within the current request.
+The guidance is included before context accounting and hook size checks.
+
+This is model guidance, not deterministic enforcement. Lucid does not change
+harness permissions or require enforcement capabilities for this policy.
+
 ## hcn boundary
 
 lucid spawns `hcn --json`, consumes NDJSON, and keeps unknown event kinds.
@@ -267,12 +283,12 @@ cleanup. Structured refusal codes survive; raw process diagnostics do not.
 This hcn mechanism is detected separately from mode support. The pinned
 hcn 0.6.4 release supplies native-resume verification and context accounting.
 Its verified accounting adapter currently supports Claude headless-turn.
-Other selections stay held until accounting is supported; an unsupported
+Selections without accounting or declared native management stay held; an unsupported
 adapter asks for changed settings, while an unverified installation can be
 rechecked after repair. Lucid never substitutes an estimated budget.
 
 Both headless profiles accept a pre-dispatch preparation callback. It supplies
-the complete, accounted prompt, including protocol teaching and current
+the complete prepared prompt, including protocol teaching and current
 artifact bytes. The host appends nothing afterward. A held input keeps its
 queued disposition and permits later eligible work. Persistent processes
 start only after the first ready input, including an initial steer. Saved
@@ -285,6 +301,20 @@ event, even when its stream closes after the next send.
 The callback receives an abort signal for source shutdown and must bound its
 own preparation operations. Mid-turn legacy steers and answers retain their
 existing delivery path; they are not prepared queued dispatches.
+
+Managed headless turns may use native context management when hcn declares
+`nativeContextManagement: { kind: "auto-compaction", modes: ["headless-turn"] }`
+and the selected executable exactly matches the verified adapter. This route
+renders the complete captured context, keeps the offered source copy, and
+records accounting as null. It does not run a local count or summary. Codex
+0.153.4 declares this capability; its preflight count remains unavailable.
+Native resume and the prepared-execution fence still apply. Selected model flags
+are validated and passed through hcn; observed model agreement is not measured
+on this route. Native compaction handles thread growth and can still reject an
+oversized incoming request. Fresh recovery is not a capacity repair. A native context
+failure preserves the input and records the existing failure outcome, without
+automatic retry, replacement session, or truncation. Missing or malformed
+capabilities and every other mode retain the preflight path below.
 
 `createContextPreparer` accounts for the renderer's complete prompt. When
 history exceeds the verified budget, it starts with the last four human/assistant

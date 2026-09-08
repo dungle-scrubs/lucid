@@ -1,15 +1,27 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HarnessRunner } from "../../src/harness/runner.js";
 import { startServer } from "../../src/server/server.js";
+import { discoverConversations } from "../../src/store/discovery.js";
+import { readRecordMetadata } from "../../src/store/record-identity.js";
+import { replaceLocation } from "../../src/store/settings.js";
 
 const cleanups: (() => unknown)[] = [];
 afterEach(async () => {
   for (const close of cleanups.splice(0).reverse()) await close();
 });
-async function rig() {
+async function rig(chooseFolder?: (signal: AbortSignal) => Promise<string | null>) {
   const home = mkdtempSync(join(tmpdir(), "lucid-create-"));
   cleanups.push(() => rmSync(home, { recursive: true, force: true }));
   const root = join(home, "records");
@@ -48,6 +60,7 @@ async function rig() {
     },
   };
   const server = await startServer({
+    chooseFolder,
     rootDir: root,
     port: 0,
     configLocation: { home, xdgConfigHome: "" },
@@ -65,6 +78,7 @@ async function rig() {
     root,
     runner,
     request,
+    url: server.url,
     launches: () => launches,
     config: (text: string) => writeFileSync(join(configDir, "config.toml"), text),
   };
@@ -117,6 +131,91 @@ test("concurrent and cold retries return one published record before reading cha
   const collision = await r.request("conversations", { ...body, workingDirectory: r.root });
   expect(collision.status).toBe(409);
   expect((await collision.json()).error).toBe("E-HUB-02");
+});
+
+test("creation without a project allocates one private workspace across equivalent retries", async () => {
+  const r = await rig();
+  const first = await r.request("conversations", { creationId: "managed" });
+  expect(first.status).toBe(201);
+  const { conversationId } = await first.json();
+  const dir = join(r.root, conversationId);
+  const workspace = join(realpathSync(dir), "workspace");
+  expect(statSync(workspace).isDirectory()).toBe(true);
+  expect(statSync(workspace).mode & 0o777).toBe(0o700);
+  const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8"));
+  expect(meta.workingDirectory).toBe(workspace);
+  expect(meta.projectDirectory).toBeUndefined();
+  expect(meta.creation.request.workingDirectory).toBeNull();
+  writeFileSync(join(workspace, "draft.txt"), "persistent draft");
+  r.config("invalid = =");
+  for (const workingDirectory of [null, "", "  "]) {
+    const retry = await r.request("conversations", { creationId: "managed", workingDirectory });
+    expect(retry.status).toBe(201);
+    expect((await retry.json()).conversationId).toBe(conversationId);
+  }
+  expect(readFileSync(join(workspace, "draft.txt"), "utf8")).toBe("persistent draft");
+  const found = discoverConversations(r.root).records.find(
+    (row) => row.conversationId === conversationId,
+  );
+  expect(found).toMatchObject({
+    projectDirectory: null,
+    workingDirectory: workspace,
+    workingDirectoryStatus: "available",
+  });
+  expect(r.launches()).toBe(0);
+  expect(
+    (await r.request("conversations", { creationId: "managed", workingDirectory: r.home })).status,
+  ).toBe(409);
+  expect(replaceLocation(dir, conversationId, 0, workspace)).toMatchObject({
+    projectDirectory: null,
+  });
+  const renamed = join(r.root, "renamed-record");
+  renameSync(dir, renamed);
+  expect(readRecordMetadata(renamed).workingDirectory).toBe(
+    join(realpathSync(renamed), "workspace"),
+  );
+  expect(discoverConversations(r.root).records[0]).toMatchObject({
+    projectDirectory: null,
+    workingDirectoryStatus: "available",
+    workingDirectory: join(realpathSync(renamed), "workspace"),
+  });
+  replaceLocation(renamed, conversationId, 0, r.home);
+  expect(readRecordMetadata(renamed).managedWorkspace).toBe(false);
+  expect(readFileSync(join(renamed, "workspace", "draft.txt"), "utf8")).toBe("persistent draft");
+});
+
+test("folder picker is authenticated and returns selection or cancellation without creating a record", async () => {
+  let calls = 0;
+  const r = await rig(async () => {
+    calls++;
+    return calls === 1 ? "/chosen/folder" : null;
+  });
+  expect((await fetch(`${r.url}/api/folder-picker`, { method: "POST" })).status).toBe(401);
+  expect(calls).toBe(0);
+  expect(
+    (await r.request("defaults").then((response) => response.json())).folderPickerAvailable,
+  ).toBe(true);
+  expect(await r.request("folder-picker", {}).then((response) => response.json())).toEqual({
+    status: "selected",
+    workingDirectory: "/chosen/folder",
+  });
+  expect(await r.request("folder-picker", {}).then((response) => response.json())).toEqual({
+    status: "cancelled",
+  });
+  expect(discoverConversations(r.root).records).toHaveLength(0);
+  expect(r.launches()).toBe(0);
+});
+
+test("optional project folders still reject relative paths, invalid types, and missing folders", async () => {
+  const r = await rig();
+  for (const workingDirectory of ["relative", 1, {}, join(r.home, "missing")]) {
+    const response = await r.request("conversations", {
+      creationId: crypto.randomUUID(),
+      workingDirectory,
+    });
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toBe("E-HUB-04");
+  }
 });
 
 test("settings replace a complete bundle at the expected revision and effort preserves the concrete model", async () => {

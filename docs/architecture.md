@@ -56,11 +56,38 @@ error. Listing never writes metadata or starts a harness.
 Projects are resolved absolute paths: the nearest repository root, or the
 starting folder when there is no repository. Nested repositories and worktrees
 have their own roots. Metadata retains the exact working directory separately.
-Legacy records appear under No project. A missing working folder does not
-change the saved project. Display titles use saved titles of seven words or
-fewer, or a bounded fallback from the first prompt. An annotation-first
+Legacy records and conversations created without a project folder appear under
+No project. Browser creation accepts an omitted, null, or blank working folder;
+these requests normalize to the same null receipt value. Lucid creates a private
+`workspace/` directory inside the staged record and syncs it before publication.
+The saved `managedWorkspace: true` marker makes metadata reads resolve the
+workspace relative to the actual record directory, including after a rename.
+The workspace is persistent and is not a sandbox. Explicit nonblank paths are
+not trimmed and retain the normal folder-association checks.
+
+Saving an unchanged managed folder preserves its No project association.
+Selecting another folder clears managed status but retains old workspace files.
+A missing working folder does not
+change the saved project. Before an artifact exists, display titles use saved
+conversation titles of seven words or fewer, or a bounded fallback from the first prompt. An annotation-first
 record uses its typed prompt or its first note. Isolated naming replaces the
 fallback when generation succeeds. Locked location updates repair missing folders.
+
+Once an artifact exists, the hub displays its title, falling back to its ID,
+using the same naming rule as the document header. The hub rename control writes
+artifact metadata in that state. The listing cache includes the log fingerprint,
+so an emitted document or a later rename replaces the old label on refresh.
+Saved conversation titles remain separate and are not overwritten by listing.
+
+The new-conversation form uses an optional native folder picker on macOS. Its
+empty state is No project folder; cancelling preserves the prior selection and
+Remove clears it. The authenticated folder-picker endpoint runs a fixed native
+dialog on the server's Mac, with one dialog at a time and no store lock. It
+returns distinct selected and cancelled results. Native failure or timeout leaves
+the form usable. Request cancellation or server shutdown terminates the chooser;
+its slot remains occupied until the process exits. Unsupported hosts can still
+create a managed conversation. Neither picking a folder nor creating a record
+starts an agent.
 
 Every writer checks metadata identity under the append lock before mutation.
 Driver-preference replacement and attachment-file creation use that same lock.

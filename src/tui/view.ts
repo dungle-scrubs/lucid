@@ -112,9 +112,13 @@ const eventText = (event: Record<string, unknown>): string => {
     ].join("\n");
   }
   if (kind === EventKind.tool && typeof event.name === "string") {
+    if (typeof event.input === "string" && event.input.trim() !== "") return event.input;
     // The name alone says a tool ran and nothing about what it did. Six
     // lines reading "Bash" tell a reader less than one reading the command.
-    const input = event.input as Record<string, unknown> | undefined;
+    const input =
+      event.input !== null && typeof event.input === "object"
+        ? (event.input as Record<string, unknown>)
+        : undefined;
     const detail =
       input === undefined
         ? undefined

@@ -27,7 +27,11 @@ import type { HeadlessDeps } from "./host.js";
 type PrepareInput = Parameters<NonNullable<HeadlessDeps["prepareTurn"]>>[0];
 type ManagedPrepared =
   | { readonly kind: "held"; readonly issue?: ProtocolIssue }
-  | (PreparedContext & { readonly kind: "ready"; readonly native: NativeIntent });
+  | (Omit<PreparedContext, "accounting"> & {
+      readonly accounting: PreparedContext["accounting"] | null;
+      readonly kind: "ready";
+      readonly native: NativeIntent;
+    });
 interface ManagedPreparationDeps {
   readonly cwd: string;
   readonly driver: ExecutionDriver;
@@ -261,27 +265,31 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
         `Read the complete quoted source with lucid2 context '${offered.path.replaceAll("'", "'\\''")}' --offset 0 --bytes 65536 --json. Follow nextOffset to read later slices.`,
         renderAttachmentReferences(offered.attachments),
       ].join("\n\n");
-      const result = await prepareContext({
-        context: captured.context,
-        render: (context) =>
-          composeArtifactPrompt(
-            renderConversationContext(
-              {
-                ...context,
-                pending: {
-                  ...context.pending,
-                  text:
-                    comparison.kind === "ready"
-                      ? comparison.contextPrompt
-                      : composeAnnotationPrompt(context.pending.text),
-                },
+      const render = (context: typeof captured.context): string =>
+        composeArtifactPrompt(
+          renderConversationContext(
+            {
+              ...context,
+              pending: {
+                ...context.pending,
+                text:
+                  comparison.kind === "ready"
+                    ? comparison.contextPrompt
+                    : composeAnnotationPrompt(context.pending.text),
               },
-              reference,
-            ),
-            driver.profile,
+            },
+            reference,
           ),
-        route: { ...driver, cwd, resume, signal: input.signal },
-      });
+          driver.profile,
+        );
+      const result =
+        facts.nativeContextManagement && driver.profile === "headless-turn"
+          ? { accounting: null, prompt: render(captured.context), summary: null }
+          : await prepareContext({
+              context: captured.context,
+              render,
+              route: { ...driver, cwd, resume, signal: input.signal },
+            });
       if (closed || input.signal.aborted) return { kind: "held" };
       const currentLocation = locationProjection(readRecordMetadata(host.dir));
       if (currentLocation.status !== "available" || currentLocation.workingDirectory !== cwd)

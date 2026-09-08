@@ -20,6 +20,7 @@ import {
   mkdirSync,
   mkdtempSync,
   openSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -36,7 +37,7 @@ import {
 import { associateFolder } from "./project-directory.js";
 
 export interface CreateRecordOptions {
-  readonly workingDirectory?: string;
+  readonly workingDirectory?: string | null;
   readonly preference?: import("./driver-preference.js").DriverPreference;
   readonly creation?: { readonly id: string; readonly request: unknown };
 }
@@ -59,12 +60,14 @@ export const createConversationRecord = (
   if (existsSync(paths.dir))
     throw new StoreError("record-exists", `conversation record already exists: ${paths.dir}`);
   const association =
-    options.workingDirectory === undefined ? {} : associateFolder(options.workingDirectory);
+    options.workingDirectory == null ? {} : associateFolder(options.workingDirectory);
   mkdirSync(rootDir, { recursive: true });
   const staging = mkdtempSync(join(rootDir, ".create-"));
   const secret = Buffer.from(crypto.getRandomValues(new Uint8Array(SECRET_BYTES))).toString("hex");
   try {
     const tmp = pathsForDir(staging);
+    const workspace = options.workingDirectory === null ? join(staging, "workspace") : null;
+    if (workspace) mkdirSync(workspace, { mode: 0o700 });
     writeFileSync(tmp.secretPath, secret, { mode: 0o600 });
     writeFileSync(tmp.logPath, "", { mode: 0o600 });
     if (options.preference)
@@ -75,6 +78,12 @@ export const createConversationRecord = (
         v: 1,
         conversationId,
         ...association,
+        ...(workspace
+          ? {
+              managedWorkspace: true,
+              workingDirectory: join(realpathSync(rootDir), conversationId, "workspace"),
+            }
+          : {}),
         ...(options.creation ? { creation: options.creation } : {}),
       }),
       {
@@ -86,6 +95,7 @@ export const createConversationRecord = (
       tmp.logPath,
       tmp.metaPath,
       ...(options.preference ? [tmp.driverPath] : []),
+      ...(workspace ? [workspace] : []),
       staging,
     ]) {
       const fd = openSync(path, "r");

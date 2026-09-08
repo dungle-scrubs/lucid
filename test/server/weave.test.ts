@@ -123,3 +123,28 @@ describe("weaving pending notes into the conversation", () => {
     expect(messages.length).toBe(1);
   });
 });
+
+test("tool activity collapses without crossing replies, user input, or pending notes", async () => {
+  const { collapseToolActivity } = await import("../../src/server/client/timeline.js");
+  const tools: Msg[] = Array.from({ length: 30 }, (_, index) => ({
+    id: `tool-${index}`,
+    role: "assistant",
+    text: `command ${index}`,
+    tool: true,
+  }));
+  const reply: Msg = { id: "reply", role: "assistant", text: "The draft is ready" };
+  const last: Msg = { id: "last-tool", role: "assistant", text: "final command", tool: true };
+  const source = [...tools, reply, last];
+  const grouped = collapseToolActivity(weaveNotes(source, [note("Keep this note here", 15)]));
+  expect(grouped.map((m) => m.text)).toEqual([
+    "15 tool calls",
+    "Keep this note here",
+    "15 tool calls",
+    reply.text,
+    "1 tool call",
+  ]);
+  expect(grouped[0]?.toolCalls).toHaveLength(15);
+  expect(grouped[2]?.toolCalls?.[0]?.text).toBe("command 15");
+  expect(source).toHaveLength(32);
+  expect(collapseToolActivity(tools.slice(0, 2))[0]?.id).toBe(collapseToolActivity(tools)[0]?.id);
+});

@@ -5,6 +5,7 @@ import { createComparisonDelivery } from "./comparison-delivery.js";
 
 import { resolveVerifiedRecord, type VerifiedRecord } from "../cli/record-addressing.js";
 import { isWireId } from "../protocol/frames.js";
+import { LUCID_REQUEST_GUIDANCE } from "../protocol/request-guidance.js";
 import { LockError } from "../store/flock.js";
 import { openWriter, viewConversation } from "../store/store.js";
 
@@ -219,7 +220,7 @@ export const deliverFirstQueued = (
       return { ok: true, delivered: 0 };
     }
     first = selected;
-    const reason = `HUMAN FEEDBACK: ${first.text}`;
+    const reason = `${LUCID_REQUEST_GUIDANCE}\n\nHUMAN FEEDBACK: ${first.text}`;
     if (encodedByteLength(reason) > (deliveryOptions.promptLimit ?? HOOK_CHUNK_CAP_BYTES)) {
       host.close();
       return {
