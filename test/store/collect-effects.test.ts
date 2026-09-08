@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { Effect } from "../../src/protocol/index.js";
 import { encodeFrame, type Frame } from "../../src/protocol/index.js";
 import { readRecordFiles } from "../../src/store/conversation-host.js";
-import type { LockEvent } from "../../src/store/lock.js";
+import type { LockEvent } from "../../src/store/flock.js";
 import { collectEffectsUnderAppendLock, foldCollect } from "../../src/store/log.js";
 import { createConversationRecord, openConversation } from "../../src/store/store.js";
 import { attach } from "../protocol/helpers.js";
@@ -157,7 +157,7 @@ describe("the range fold that hands back effects (RFC-04 step 5)", () => {
     host.handleFrame(encodeFrame(attachFrame(secret, { profile: "headless-session" })));
     const goodBefore = statSync(join(root, "conv-1", "log.ndjson")).size;
     // Unknown source — RFC-04 P1 says it is carried, not applied
-    const unknown = `${JSON.stringify({ v: 1, at: 2_000, src: "cursor", offset: 123 })}\n`;
+    const unknown = `${JSON.stringify({ v: 1, at: 2_000, src: "future-entry", offset: 123 })}\n`;
     appendFileSync(join(root, "conv-1", "log.ndjson"), unknown);
     const unknownOffset = goodBefore;
     host.enqueueInput({ id: "in-after", text: "after unknown", mode: "queue" });

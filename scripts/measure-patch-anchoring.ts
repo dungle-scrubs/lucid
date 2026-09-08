@@ -1,13 +1,12 @@
 #!/usr/bin/env bun
 /**
- * RFC-08 Open Question 1: does the agent know the current document well
+ * Does the agent know the current document well
  * enough to anchor against it?
  *
  * Every anchor must match the current version exactly once. The agent writes
  * it from its own picture of the document, and that picture can drift. When
  * it does the patch is refused and the turn costs a refusal plus a resend.
- * How often that happens decides the resend policy, and nothing in the RFC
- * can predict it.
+ * Measure that rate before changing the resend policy.
  *
  * This drives a real conversation of many revisions against a live harness
  * and reports what actually happened. It is a measurement, not a test: it is
@@ -16,8 +15,7 @@
  *   bun scripts/measure-patch-anchoring.ts [--record NAME] [--revisions N]
  *
  * Everything it reports is read back out of the record afterwards. That is
- * the point: if the numbers can be recovered from the log alone, RFC-08's
- * Open Question 3 needs no new field on the artifact entry.
+ * the point: the measurement needs no extra field on the artifact entry.
  */
 
 import { spawn } from "node:child_process";
@@ -234,7 +232,7 @@ const messages = all.flatMap((d) => {
   const f = (d.frame ?? {}) as Record<string, unknown>;
   const ev = (f.event ?? {}) as Record<string, unknown>;
   return ev.kind === "message" && ev.role === "assistant"
-    ? [{ turnId: String(f.turnId), text: String(ev.text ?? "") }]
+    ? [{ at: Number(d.at ?? 0), turnId: String(f.turnId), text: String(ev.text ?? "") }]
     : [];
 });
 const errors = all.flatMap((d) => {

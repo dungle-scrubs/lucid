@@ -25,7 +25,7 @@
  * - interactive — excluded, nowhere to put it.
  */
 
-import { ARTIFACT_BYTES_MAX } from "../store/log.js";
+import { ARTIFACT_BYTES_MAX } from "./frames.js";
 
 /** Marker — also idempotence check, like QUESTION_PREAMBLE_MARKER. */
 export const ARTIFACT_PREAMBLE_MARKER = "[lucid artifact protocol]";
@@ -287,11 +287,6 @@ export const stripArtifactBlocks = (text: string): string => {
   return stripped.replace(/\n{3,}/g, "\n\n").trim();
 };
 
-export const artifactPlaceholder = (header: ArtifactHeader): string => {
-  const v = header.replaces === null ? 1 : header.replaces + 1;
-  return `[artifact ${header.id} v${v}]`;
-};
-
 /** What the agent is told about the artifacts already in the record.
  *
  * Never the document bytes. The current version number, who wrote it, and
@@ -320,13 +315,6 @@ export interface ArtifactState {
    *
    * Absent otherwise. */
   readonly bytes?: string;
-  /** True when this artifact has been retired (RFC-07 R12).
-   *
-   * A retired artifact stays in this block. The agent is told it exists and
-   * that it is retired: an agent revising an artifact nobody told it was
-   * retired is a worse failure than a longer block, and it would be refused
-   * for a reason it could not see. */
-  readonly retired?: boolean;
 }
 
 export const ARTIFACT_STATE_MARKER = "[lucid artifact state]";
@@ -354,10 +342,7 @@ export const composeArtifactState = (
   const lines = [ARTIFACT_STATE_MARKER, "Artifacts in this conversation right now:"];
   for (const a of artifacts) {
     const who = a.author === "human" ? "saved by the person" : `written by you (${a.author})`;
-    // Named, and marked. Withholding it would leave the agent to discover
-    // the state by being refused.
-    const mark = a.retired === true ? ", RETIRED" : "";
-    lines.push(`- ${a.artifactId} — current version ${a.version}, ${who}${mark}`);
+    lines.push(`- ${a.artifactId} \u2014 current version ${a.version}, ${who}`);
     if (a.basedOn !== undefined) {
       lines.push(`  they were working from version ${a.basedOn}`);
     }
@@ -396,12 +381,6 @@ export const composeArtifactState = (
     }
   }
   lines.push("");
-  if (artifacts.some((a) => a.retired === true)) {
-    lines.push("");
-    lines.push(
-      "A RETIRED artifact is one the person has finished with. Nothing was deleted and every version is still here, but do not revise it unless they ask for it back.",
-    );
-  }
   lines.push(
     "When you revise one of these, set `replaces` to the current version above. Where a version a person saved is shown in full, revise from that and not from the last one you wrote, or their changes are lost.",
   );

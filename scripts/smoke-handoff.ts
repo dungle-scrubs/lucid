@@ -1,7 +1,9 @@
 #!/usr/bin/env bun
+
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { openWriter } from "../src/store/conversation-host.js";
 import { acquirePresence } from "../src/store/presence.js";
 import { createConversationRecord, openConversation } from "../src/store/store.js";
 
@@ -100,25 +102,19 @@ const main = async (): Promise<void> => {
   log(`final transcript inputs: ${finalTranscript.inputs.length}, seq ${hostB.state().seq}`);
 
   // Reopened fold matches live transcript
-  const reopened = openConversation(dir, {
-    now: () => Date.now(),
-    presence: () => undefined,
-    executorLease: () => false,
-    onEffect: () => {},
-    onRecord: () => {},
-  });
+  const reopened = openWriter(dir);
   const reopenedTranscript = reopened.transcript();
   const matches = JSON.stringify(reopenedTranscript) === JSON.stringify(finalTranscript);
   log(`reopened fold matches live: ${matches}`);
   if (!matches) throw new Error("reopened fold does not match live transcript");
 
   // Evidence
-  mkdirSync("spikes/evidence", { recursive: true });
+  mkdirSync("artifacts/evidence", { recursive: true });
   writeFileSync(
-    "spikes/evidence/handoff-smoke.md",
+    "artifacts/evidence/handoff-smoke.md",
     `# Handoff smoke - baton-pass - ${conversationId}\n\n\`\`\`\n${lines.join("\n")}\n\`\`\`\n\nVerdict: PASS\n`,
   );
-  log(`evidence written to spikes/evidence/handoff-smoke.md`);
+  log(`evidence written to artifacts/evidence/handoff-smoke.md`);
 
   successorPresence.release();
   rmSync(root, { recursive: true, force: true });
@@ -130,9 +126,9 @@ main().catch((e) => {
   console.error(e instanceof Error ? e.stack : "");
   // Write failure evidence
   try {
-    mkdirSync("spikes/evidence", { recursive: true });
+    mkdirSync("artifacts/evidence", { recursive: true });
     writeFileSync(
-      "spikes/evidence/handoff-smoke.md",
+      "artifacts/evidence/handoff-smoke.md",
       `# Handoff smoke - FAIL\n\n\`\`\`\n${lines.join("\n")}\n\`\`\`\n\nError: ${e instanceof Error ? e.message : String(e)}\n`,
     );
   } catch {}

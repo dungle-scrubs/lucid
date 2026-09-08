@@ -34,6 +34,21 @@ const batch: AnnotationBatch = {
 };
 
 describe("a batch travels in the input text", () => {
+  test("fences quoted in a note or snippet remain inside the batch", () => {
+    const quoted: AnnotationBatch = {
+      ...batch,
+      notes: [
+        {
+          note: "Keep the ``` fence",
+          spots: [{ id: "e1", snippet: "```\ncode\n```", author: "human" }],
+        },
+      ],
+    };
+    const encoded = encodeAnnotationBatch(quoted);
+    expect(detectAnnotationBatch(encoded)).toEqual(quoted);
+    expect(stripAnnotationBatch(encoded)).toContain("Keep the ``` fence");
+    expect(stripAnnotationBatch(encoded)).not.toContain('"artifactId"');
+  });
   test("what goes out comes back", () => {
     const found = detectAnnotationBatch(encodeAnnotationBatch(batch));
     expect(found).not.toBeNull();

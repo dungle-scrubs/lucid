@@ -154,12 +154,10 @@ describe("reading a conversation", () => {
     expect(data.lines.some((l) => l.text.includes("a question from the terminal"))).toBe(true);
   });
 
-  test("a record that does not exist is empty, not an error", async () => {
+  test("an unknown record returns not-found", async () => {
     const res = await api("/api/conversations/never-made");
-    expect(res.status).toBe(200);
-    const data = (await res.json()) as { lines: unknown[]; damaged: boolean };
-    expect(data.lines).toEqual([]);
-    expect(data.damaged).toBe(false);
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ error: "not-found" });
   });
 
   test("a damaged record says so rather than rendering as silence", async () => {
@@ -187,6 +185,37 @@ describe("reading a conversation", () => {
 });
 
 describe("writing reaches the record with nothing driving", () => {
+  test("a null input body is a client error and appends no work", async () => {
+    const before = readFileSync(join(root, CONV, "log.ndjson"), "utf8");
+    const response = await api(`/api/conversations/${CONV}/input`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "null",
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "text-required" });
+    expect(readFileSync(join(root, CONV, "log.ndjson"), "utf8")).toBe(before);
+  });
+  test("concurrent retries return one accepted receipt and conflicting text is refused", async () => {
+    const submit = (text: string) =>
+      api(`/api/conversations/${CONV}/input`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "browser-stable-request", text }),
+      });
+    const responses = await Promise.all([submit("one prompt"), submit("one prompt")]);
+    const receipts = await Promise.all(responses.map((response) => response.json()));
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    expect(receipts[0]).toEqual(receipts[1]);
+    expect(receipts[0]).toMatchObject({ inputId: "browser-stable-request", verdict: "accepted" });
+    const conflict = await submit("different prompt");
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toMatchObject({ error: "E-COMP-06", verdict: "refused" });
+    const view = await api(`/api/conversations/${CONV}`);
+    const data = (await view.json()) as { lines: Array<{ text?: string }> };
+    expect(data.lines.filter((line) => line.text === "one prompt")).toHaveLength(1);
+  });
+
   test("an append lands and waits, exactly as sending from a terminal does", async () => {
     const res = await api(`/api/conversations/${CONV}/input`, {
       method: "POST",
@@ -323,6 +352,33 @@ describe("whether the agent is working", () => {
       activity: { turn: boolean };
     };
     expect(body.activity.turn).toBe(false);
+  });
+
+  test("a session error followed by detach leaves queued input waiting, not working", async () => {
+    emit("session-ended", { kind: "error", message: "the harness session ended" }, 1);
+    const host = createConversationHost(join(root, CONV), {
+      now: () => Date.now(),
+      presence: () => undefined,
+      executorLease: () => true,
+      onEffect: () => {},
+      onRecord: () => {},
+    });
+    try {
+      expect(
+        host.handleFrame(JSON.stringify({ kind: "detach", epoch: 1, reason: "shutdown" })).verdict,
+      ).toBe("accepted");
+    } finally {
+      host.close();
+    }
+    const sent = await api(`/api/conversations/${CONV}/input`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "what is this artifact about?" }),
+    });
+    expect(sent.status).toBe(200);
+    const body = await (await api(`/api/conversations/${CONV}`)).json();
+    expect(body.status).toBe("agent-gone");
+    expect(body.activity).toEqual({ turn: false, inFlight: 0, waiting: 1 });
   });
 
   test("a record with no events at all is not working", async () => {

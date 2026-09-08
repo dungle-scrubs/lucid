@@ -1,0 +1,104 @@
+.settings-form {
+  container-type: inline-size;
+  display: grid;
+  gap: 12px;
+  font:
+    13px / 1.5 system-ui,
+    sans-serif;
+  color: var(--foreground, var(--color-text));
+}
+.settings-form label {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+.settings-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.settings-form input,
+.settings-form select {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  padding: 6px 8px;
+  border: 1px solid var(--border, var(--edge));
+  border-radius: 4px;
+  background: var(--background, var(--paper));
+  color: inherit;
+  font: inherit;
+}
+.settings-form select,
+.settings-form button {
+  cursor: pointer;
+}
+.settings-form :is(input, select, button):focus-visible {
+  outline: 2px solid var(--primary, var(--color-accent));
+  outline-offset: 2px;
+}
+.settings-form button {
+  justify-self: start;
+  padding: 6px 12px;
+  border: 1px solid var(--border, var(--edge));
+  border-radius: 4px;
+}
+.settings-error {
+  color: var(--destructive, var(--color-accent-2));
+  overflow-wrap: anywhere;
+}
+.hub-create {
+  margin-bottom: 28px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+}
+.hub-create h2 {
+  font-size: 20px;
+  text-wrap: balance;
+  margin-bottom: 16px;
+}
+.hub-create p {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.hub-create .settings-error {
+  color: var(--destructive);
+}
+@container (min-width: 620px) {
+  .settings-fields {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.settings-popover {
+  z-index: 100;
+  box-sizing: border-box;
+  width: min(420px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid var(--border, var(--edge));
+  border-radius: 8px;
+  background: var(--background, var(--paper));
+  color: var(--foreground, var(--color-text));
+}
+.settings-trigger {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  color: inherit;
+  background: transparent;
+  border: 0;
+}
+.dock > .settings-trigger {
+  margin: 4px 12px;
+  max-width: calc(100% - 24px);
+}
+.driver-line .driver-note {
+  flex-basis: 100%;
+}

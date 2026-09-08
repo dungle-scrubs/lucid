@@ -26,7 +26,7 @@ export const AttachmentLedger = {
     return state.attachment !== null && now < state.attachment.lease.expires;
   },
 
-  /** PLAN.md: "a lease is renewed by any frame plus explicit lease grants."
+  /** A lease is renewed by any frame plus explicit lease grants.
    * Re-minting is gated at renewEvery granularity so per-token frames do not
    * churn lease identity: `expires` only ever moves forward, and a writer
    * streaming frames always holds >= TTL - renewEvery of headroom. */
@@ -41,11 +41,3 @@ export const AttachmentLedger = {
     return lease === attachment.lease ? attachment : { ...attachment, lease };
   },
 } as const;
-
-/** Thin helpers so reducer call sites keep their short names if desired. */
-export const isLive = (state: ChannelState, now: number): boolean =>
-  AttachmentLedger.isLive(state, now);
-export const renewLease = (lease: Lease, now: number): Lease =>
-  AttachmentLedger.renewLease(lease, now);
-export const renewAttachment = (attachment: Attachment, now: number): Attachment =>
-  AttachmentLedger.renewAttachment(attachment, now);

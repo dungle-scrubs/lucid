@@ -1,37 +1,15 @@
-{"kind":"session","sessionId":"7016f647-5a24-4aa6-b74e-276ea528be8e","harness":"claude","hcn":"0.5.7","questions":"ask","origin":"fresh"}
+{"kind":"session","sessionId":"39e6de02-f351-47ea-aa68-f37231b1ee9b","harness":"pi","hcn":"0.6.4","questions":"ask","origin":"fresh"}
 {"kind":"disposition","id":"in-1","disposition":"started"}
-{"kind":"turn","turnId":"7016f647-5a24-4aa6-b74e-276ea528be8e:turn-1","id":"in-1"}
-{"kind":"identity","sessionId":"7016f647-5a24-4aa6-b74e-276ea528be8e","authority":"caller-assigned","capabilities":{"vision":true,"images":true,"streaming":"token","session":true,"source":"curated","confidence":"medium","escalation":{"supported":true,"source":"runtime-verified","confidence":"high","observedOn":{"harness":"claude","model":"","version":"2.1.235","date":"2026-08-19"}}}}
-{"kind":"progress","label":"status"}
-{"kind":"progress","label":"api_retry"}
-{"kind":"progress","label":"api_retry"}
-{"kind":"progress","label":"api_retry"}
-{"kind":"progress","label":"api_retry"}
-{"kind":"progress","label":"api_retry"}
-{"kind":"progress","label":"api_retry"}
-{"kind":"progress","label":"api_retry"}
-{"kind":"progress","label":"api_retry"}
-{"kind":"progress","label":"api_retry"}
-{"kind":"progress","label":"api_retry"}
-{"kind":"message","role":"assistant","text":"API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment. If it persists, check https://status.claude.com."}
-{"kind":"error","message":"turn failed: success","terminal":true}
-{"kind":"failure","class":"task","retryable":false,"message":"Task failed (turn failed: success) - surface to caller, do not auto-route"}
-{"kind":"done","exitCode":null,"cause":"crash","escalation":{"mode":"ask","detection":"none"},"failure":{"class":"task","retryable":false,"message":"Task failed (turn failed: success) - surface to caller, do not auto-route"}}
+{"kind":"turn","turnId":"39e6de02-f351-47ea-aa68-f37231b1ee9b:turn-1","id":"in-1"}
+{"kind":"identity","sessionId":"39e6de02-f351-47ea-aa68-f37231b1ee9b","authority":"caller-assigned","capabilities":{"vision":false,"images":false,"streaming":"none","session":false,"source":"unknown","confidence":"none","escalation":{"supported":false,"source":"unknown","confidence":"none"}}}
+{"kind":"token","text":"\n\n"}
+{"kind":"token","text":"one"}
+{"kind":"message","role":"assistant","text":"\n\none"}
+{"kind":"done","exitCode":null,"cause":"clean","escalation":{"mode":"ask","detection":"none"}}
 {"kind":"disposition","id":"in-2","disposition":"started"}
-{"kind":"turn","turnId":"7016f647-5a24-4aa6-b74e-276ea528be8e:turn-2","id":"in-2"}
-{"kind":"progress","label":"status"}
-{"kind":"progress","label":"api_retry"}
-{"kind":"progress","label":"api_retry"}
-{"kind":"progress","label":"api_retry"}
-{"kind":"progress","label":"api_retry"}
-{"kind":"progress","label":"api_retry"}
-{"kind":"progress","label":"api_retry"}
-{"kind":"progress","label":"api_retry"}
-{"kind":"progress","label":"api_retry"}
-{"kind":"progress","label":"api_retry"}
-{"kind":"progress","label":"api_retry"}
-{"kind":"message","role":"assistant","text":"API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment. If it persists, check https://status.claude.com."}
-{"kind":"error","message":"turn failed: success","terminal":true}
-{"kind":"failure","class":"task","retryable":false,"message":"Task failed (turn failed: success) - surface to caller, do not auto-route"}
-{"kind":"done","exitCode":null,"cause":"crash","escalation":{"mode":"ask","detection":"none"},"failure":{"class":"task","retryable":false,"message":"Task failed (turn failed: success) - surface to caller, do not auto-route"}}
-{"kind":"closed","exitCode":1,"cause":"crash","failure":{"class":"task","retryable":false,"message":"Task failed (turn failed: success) - surface to caller, do not auto-route"}}
+{"kind":"turn","turnId":"39e6de02-f351-47ea-aa68-f37231b1ee9b:turn-2","id":"in-2"}
+{"kind":"token","text":"\n\n"}
+{"kind":"token","text":"two"}
+{"kind":"message","role":"assistant","text":"\n\ntwo"}
+{"kind":"done","exitCode":null,"cause":"clean","escalation":{"mode":"ask","detection":"none"}}
+{"kind":"closed","exitCode":0,"cause":"clean"}

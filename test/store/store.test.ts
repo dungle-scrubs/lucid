@@ -10,8 +10,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Effect } from "../../src/protocol/index.js";
-import { decodeFrame, encodeFrame, type Frame, queueDepth } from "../../src/protocol/index.js";
+import { decodeFrame, encodeFrame, type Frame, InputLedger } from "../../src/protocol/index.js";
+import { openWriter } from "../../src/store/conversation-host.js";
 import { foldLog } from "../../src/store/log.js";
+import { presenceHeld } from "../../src/store/presence.js";
 import {
   createConversationRecord,
   type HostRecord,
@@ -217,14 +219,14 @@ describe("durable conversation store (M5.1)", () => {
 
     const live = h.host.state();
     expect(live.inFlightInputs).toBe(2);
-    expect(queueDepth(live.inputs)).toBe(0);
+    expect(InputLedger.queueDepth(live.inputs)).toBe(0);
 
     // Reopen: the fold replays the same dispositions and terminal events,
     // so the successor reading the record sees the true backlog, not zero.
     const reopened = openHost(root, "conv-1");
     expect(reopened.host.state()).toEqual(live);
     expect(reopened.host.state().inFlightInputs).toBe(2);
-    expect(queueDepth(reopened.host.state().inputs)).toBe(0);
+    expect(InputLedger.queueDepth(reopened.host.state().inputs)).toBe(0);
   });
 
   test("presence is polled on the status cadence: alive + heartbeat timeout is interactive-unattached, NEVER agent-gone", () => {
@@ -292,6 +294,7 @@ describe("durable conversation store (M5.1)", () => {
 
     // A's source dies mid-turn and its lease lapses; a takeover happens on A.
     hostA.now = 1_000 + 15_000;
+    hostA.presence = false;
     hostA.host.handleFrame(
       encodeFrame(
         attachFrame(a.secret, {
@@ -411,10 +414,8 @@ describe("durable conversation store (M5.1)", () => {
     const before = h.host.state();
     const transcriptBefore = h.host.transcript();
 
-    // Hand-composed line: no writer produces an unknown src yet. The
-    // delivery cursor of RFC-04 will be exactly such an entry, and this
-    // test is the prerequisite that keeps it from bricking the record.
-    appendFileSync(paths.logPath, '{"v":1,"at":9,"src":"cursor","offset":42}\n');
+    // Hand-composed future entry: an unknown source must remain readable.
+    appendFileSync(paths.logPath, '{"v":1,"at":9,"src":"future-entry","offset":42}\n');
 
     // The record opens, and the unknown entry contributed nothing.
     const reopened = openHost(root, "conv-1");
@@ -437,7 +438,7 @@ describe("durable conversation store (M5.1)", () => {
     const after = viewConversation(recordDir(root, "conv-1"));
     expect(after.state.credits).toBe(6);
     expect(after.goodBytes).toBe(readFileSync(paths.logPath).length);
-    expect(readFileSync(paths.logPath, "utf8").includes('"src":"cursor"')).toBe(true);
+    expect(readFileSync(paths.logPath, "utf8").includes('"src":"future-entry"')).toBe(true);
   });
 
   test("a durable input whose mode this build does not know is refused on the fold with the wire's own issue, visibly, without bricking the record (RFC-05 B4)", () => {
@@ -676,4 +677,27 @@ describe("RFC-04 R2: only the presence-lock holder acts on effects", () => {
     expect(replayed).toEqual(["in-1"]);
     expect(writer.effects).toHaveLength(0);
   });
+});
+
+test("a writer produces effects without acquiring the executor lease", () => {
+  const root = mkdtempSync(join(tmpdir(), "writer-lease-"));
+  const { secret } = createConversationRecord(root, "writer");
+  const dir = join(root, "writer");
+  const writer = openWriter(dir, { now: () => 1000 });
+  try {
+    const result = writer.handleFrame(
+      encodeFrame(attach({ conversationId: "writer", secret, profile: "headless-session" })),
+    );
+    expect(result.verdict).toBe("accepted");
+    if (result.verdict !== "accepted") throw new Error("refused");
+    expect(result.effects.some((e) => e.type === "send")).toBe(true);
+    expect(presenceHeld(dir)).toBe(false);
+    expect(
+      writer.enqueueInput({ id: "in-1", text: "queued for the holder", mode: "queue" }).effects
+        .length,
+    ).toBeGreaterThan(0);
+    expect(presenceHeld(dir)).toBe(false);
+  } finally {
+    writer.close();
+  }
 });

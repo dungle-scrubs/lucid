@@ -8,14 +8,17 @@
  * conversation endpoint carries no document bytes, whatever the record
  * holds.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sendInput } from "../../src/cli/send.js";
 import { startServe } from "../../src/cli/serve.js";
 import { encodeAnnotationBatch } from "../../src/protocol/annotations.js";
+import * as hostModule from "../../src/store/conversation-host.js";
 import { createConversationHost } from "../../src/store/conversation-host.js";
+import { StoreError } from "../../src/store/errors.js";
+import { Flock, LockError } from "../../src/store/flock.js";
 import { createConversationRecord } from "../../src/store/store.js";
 
 const CONV = "art-1";
@@ -151,6 +154,17 @@ describe("one version per request, read by seeking", () => {
 });
 
 describe("the page cannot reach into the document", () => {
+  test("a trailing slash on a page path redirects to the canonical route", async () => {
+    // A URL bar or a pasted link adds the slash; the route table matches
+    // exact paths only, so without this the reader gets the bare 404 text.
+    const slashed = await fetch(`${server.url}/c/${CONV}/`, { redirect: "manual" });
+    expect(slashed.status).toBe(308);
+    expect(slashed.headers.get("location")).toBe(`/c/${CONV}`);
+    const followed = await fetch(`${server.url}/c/${CONV}/`);
+    expect(followed.status).toBe(200);
+    expect(followed.headers.get("content-type")).toContain("text/html");
+  });
+
   test("the frame is sandboxed without allow-same-origin, and is handed its bytes", async () => {
     const html = await (await fetch(`${server.url}/c/${CONV}`)).text();
     const src = html.match(/<script[^>]+src="([^"]+)"/)?.[1];
@@ -416,3 +430,93 @@ describe("a save is a version, not an input", () => {
     expect(artifacts[0]?.authors["2"]).toBe("human");
   });
 });
+
+test("save reports a busy record while version reads stay available", async () => {
+  writeVersion(1, DOC);
+  const lock = new Flock(join(root, CONV, "log.ndjson.lock"), CONV).acquire();
+  try {
+    const version = await api(`/api/conversations/${CONV}/artifacts/doc-1/1`);
+    expect(version.status).toBe(200);
+    lock.release();
+    const acquire = spyOn(Flock.prototype, "acquire").mockImplementation(() => {
+      throw new LockError("lock-timeout", "test-lock", "busy");
+    });
+    try {
+      const res = await fetch(`${server.url}/api/conversations/${CONV}/artifacts/doc-1/save`, {
+        method: "POST",
+        headers: { "x-lucid-token": server.token, "content-type": "application/json" },
+        body: JSON.stringify({ html: "new", basedOn: 1 }),
+      });
+      expect(res.status).toBe(503);
+      expect(res.headers.get("retry-after")).toBe("1");
+      expect(await res.json()).toEqual({ error: "record-busy" });
+    } finally {
+      acquire.mockRestore();
+    }
+  } finally {
+    lock.release();
+  }
+});
+
+for (const route of ["save", "meta", "restore"] as const) {
+  for (const boundary of [
+    "open",
+    "mutation",
+    ...(route === "restore" ? ["read" as const] : []),
+  ] as const) {
+    test.each(["lock-timeout", "corrupt-log", "fold-refused"] as const)(
+      `${route} maps %s at ${boundary} and closes a constructed writer`,
+      async (code) => {
+        writeVersion(1, DOC);
+        writeVersion(2, "second");
+        let closes = 0;
+        const fail = (): never => {
+          throw code === "lock-timeout"
+            ? new LockError(code, "test-lock", "busy")
+            : new StoreError(code, "synthetic corruption");
+        };
+        const original = hostModule.openWriter;
+        const open = spyOn(hostModule, "openWriter").mockImplementation((dir, deps) => {
+          if (boundary === "open") return fail();
+          const host = original(dir, deps);
+          return {
+            ...host,
+            ...(boundary === "read"
+              ? { readArtifact: fail }
+              : route === "meta"
+                ? { writeArtifactMeta: fail }
+                : { writeArtifact: fail }),
+            close: () => {
+              closes += 1;
+              host.close();
+            },
+          };
+        });
+        try {
+          const body =
+            route === "save"
+              ? { html: "new", basedOn: 2 }
+              : route === "meta"
+                ? { title: "new title" }
+                : { version: 1 };
+          const res = await fetch(
+            `${server.url}/api/conversations/${CONV}/artifacts/doc-1/${route}`,
+            {
+              method: "POST",
+              headers: { "x-lucid-token": server.token, "content-type": "application/json" },
+              body: JSON.stringify(body),
+            },
+          );
+          expect(res.status).toBe(code === "lock-timeout" ? 503 : 409);
+          expect(await res.json()).toEqual({
+            error: code === "lock-timeout" ? "record-busy" : "damaged",
+          });
+          if (code === "lock-timeout") expect(res.headers.get("retry-after")).toBe("1");
+          expect(closes).toBe(boundary === "open" ? 0 : 1);
+        } finally {
+          open.mockRestore();
+        }
+      },
+    );
+  }
+}

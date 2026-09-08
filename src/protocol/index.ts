@@ -16,7 +16,6 @@ export {
   EventKind,
   type HarnessEventKind,
   INPUT_QUEUE_MAX,
-  isKnownEventKind,
   LOSSLESS_KINDS,
   type PendingDroppable,
   supersedeTurn,
@@ -43,19 +42,7 @@ export {
   REFUSAL_ISSUES,
   type RefusalIssue,
 } from "./frames.js";
-export {
-  AttachmentLedger,
-  atCapacity,
-  CreditLedger,
-  clampedGrant,
-  clearRedeliver,
-  InputLedger,
-  isStarved,
-  queueDepth,
-  redeliverable,
-  renewAttachment,
-  renewLease,
-} from "./ledgers/index.js";
+export { AttachmentLedger, CreditLedger, InputLedger } from "./ledgers/index.js";
 export {
   ATTACH_GRACE_MS,
   type ChannelStatus,

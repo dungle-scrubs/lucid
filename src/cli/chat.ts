@@ -1,43 +1,12 @@
-/**
- * `lucid chat` — one window that drives, renders, and reads keys.
- *
- * Composes the pieces the ticket names: `startHeadless`'s lifecycle is
- * replicated here with the chat-specific render and input wiring. The
- * viewer and driver meet in one process: the harness is driven, the log
- * is followed under the append lock, and the keyboard is read.
- *
- * Why not just call startHeadless and layer on top: the chat needs the
- * host for enqueue, the profile for submit routing, and the tailer for
- * lock-taking reads — startHeadless hides the host. So the lifecycle
- * (ensure -> D-021 gate -> presence -> host -> source -> tailer) is
- * replicated with the same seams, and the chat adds the render and key
- * loops on top.
- *
- * The draft lives in this process and nowhere else, passed into
- * buildView on every paint. It survives repaints and does not survive
- * the process. Losing the lease does not exit: it stops accepting
- * submissions, keeps rendering, keeps the draft, and says the
- * conversation moved.
- */
-
-import { createHcnRunner } from "../harness/hcn-runner.js";
-import { nodeHarnessDeps } from "../harness/node-deps.js";
-import type { HarnessName, HarnessRunner } from "../harness/runner.js";
-import { decideAction } from "../modes/controller.js";
-import { createHeadlessHost } from "../modes/host.js";
 import { INPUT_QUEUE_MAX } from "../protocol/events.js";
-import type { Frame } from "../protocol/index.js";
 import { InputLedger } from "../protocol/ledgers/input.js";
-import { channelStatus } from "../protocol/liveness.js";
-import { createTurnIds } from "../protocol/turn-id.js";
-import { acquirePresence, type PresenceHandle } from "../store/presence.js";
-import { type HostRecord, openConversation, viewSnapshot } from "../store/store.js";
-import { createTailer, followRecord, type RecordTailer } from "../store/tailer.js";
+import { classifyStoreFailure } from "../store/errors.js";
+import { viewSnapshot } from "../store/store.js";
 import { NotTTYError, runInputLoop } from "../tui/input.js";
 import { renderLines } from "../tui/render.js";
 import { buildView } from "../tui/view.js";
-import { harnessForName, supportsSession } from "./harness.js";
-import { type Conversations, conversations } from "./record-addressing.js";
+import { conversations } from "./record-addressing.js";
+import { openDrivenConversation, PresenceAcquireError, type RuntimeDeps } from "./runtime.js";
 
 export class ChatRefused extends Error {
   constructor(
@@ -49,28 +18,12 @@ export class ChatRefused extends Error {
   }
 }
 
-export interface ChatOpts {
-  readonly rootDir?: string;
-  readonly conversationId?: string;
-  readonly harnessName?: string;
-  readonly pollMs?: number;
-  readonly now?: () => number;
-  readonly randomUUID?: () => string;
-  readonly randomConversationSuffix?: () => string;
+export interface ChatOpts extends RuntimeDeps {
   readonly keys?: AsyncIterable<string>;
   readonly stdin?: NodeJS.ReadStream;
   readonly stdout?: NodeJS.WriteStream;
-  readonly signal?: AbortSignal;
   readonly onView?: (view: ReturnType<typeof buildView>) => void;
   readonly write?: (s: string) => void;
-  readonly conversationsFactory?: (rootDir?: string) => Conversations;
-  readonly acquirePresenceFn?: typeof acquirePresence;
-  readonly openConversationFn?: typeof openConversation;
-  readonly createHeadlessHostFn?: typeof createHeadlessHost;
-  readonly runner?: HarnessRunner;
-  readonly presence?: () => boolean | undefined;
-  readonly onRecord?: (r: HostRecord) => void;
-  readonly harness?: HarnessName;
 }
 
 const isTTYStream = (s: unknown): boolean =>
@@ -90,13 +43,8 @@ const requireTty = (opts: Pick<ChatOpts, "keys" | "stdin" | "stdout">): void => 
 
 export const chatConversation = async (opts: ChatOpts = {}): Promise<void> => {
   const convsFactory = opts.conversationsFactory ?? conversations;
-  const acquirePresenceFn = opts.acquirePresenceFn ?? acquirePresence;
-  const openConversationFn = opts.openConversationFn ?? openConversation;
-  const createHeadlessHostFn = opts.createHeadlessHostFn ?? createHeadlessHost;
   const nowFn = opts.now ?? (() => Date.now());
   const uuidFn = opts.randomUUID ?? (() => crypto.randomUUID());
-  const suffixFn = opts.randomConversationSuffix ?? (() => Math.random().toString(36).slice(2, 6));
-  const harness = opts.harness ?? harnessForName(opts.harnessName);
   const presenceProbe = opts.presence ?? (() => undefined);
   const stdout = (opts.stdout ?? process.stdout) as NodeJS.WriteStream;
   const write = opts.write ?? ((s: string) => stdout.write(s));
@@ -116,9 +64,9 @@ export const chatConversation = async (opts: ChatOpts = {}): Promise<void> => {
     if (!stdinTTY || !stdoutTTY) {
       // Render once via lock-free peek (one-shot, no dispatch, so torn tail
       // tolerance is fine — it is a single paint, not an act).
-      const conversationId = opts.conversationId ?? `conv-${Date.now()}-${suffixFn()}`;
-      const dir = convsFactory(opts.rootDir).dirFor(conversationId);
+      if (opts.conversationId === undefined) throw new NotTTYError();
       try {
+        const dir = convsFactory(opts.rootDir).dirFor(opts.conversationId);
         const snap = viewSnapshot(dir, { now: nowFn, presence: presenceProbe });
         const view = buildView({
           transcript: snap.transcript,
@@ -133,106 +81,24 @@ export const chatConversation = async (opts: ChatOpts = {}): Promise<void> => {
     }
   }
 
-  const convs = convsFactory(opts.rootDir);
-  const conversationId = opts.conversationId ?? `conv-${Date.now()}-${suffixFn()}`;
-  const dir = convs.dirFor(conversationId);
-  const { secret } = convs.ensure(conversationId);
-
-  // Open host early to derive status for D-021 gate — same as runtime.
-  // The host is opened before presence, so the gate can be checked without
-  // acquiring. The presence handle does not exist yet, so executorLease
-  // answers false until acquisition.
-  let presenceHandle: PresenceHandle | undefined;
-  let receive: ((frame: Frame) => void) | undefined;
-  const host = openConversationFn(dir, {
-    now: nowFn,
-    presence: () => presenceProbe(),
-    executorLease: () => presenceHandle?.held() === true,
-    onEffect: (eff) => {
-      if (eff.type === "send") receive?.(eff.frame);
-    },
-    onRecord: (r) => opts.onRecord?.(r),
-  });
-
-  const presenceVal = presenceProbe();
-  const status = channelStatus(host.state(), nowFn(), { processAlive: presenceVal === true });
-  const action = decideAction(status);
-  if (action.action === "await-reattach") {
-    try {
-      host.close();
-    } catch {}
+  let driven: Awaited<ReturnType<typeof openDrivenConversation>>;
+  try {
+    driven = await openDrivenConversation(opts);
+  } catch (cause) {
+    if (cause instanceof PresenceAcquireError) {
+      throw new ChatRefused(
+        "lease-held",
+        `conversation is already being driven (${cause.message}) - use watch for read-only viewing`,
+      );
+    }
+    throw cause;
+  }
+  if (driven.kind === "await-reattach")
     throw new ChatRefused(
       "presence-holds",
-      `conversation ${conversationId} is already being driven (interactive session still attached) — use watch for read-only viewing`,
+      `conversation ${driven.conversationId} is already being driven (interactive session still attached) - use watch for read-only viewing`,
     );
-  }
-
-  // Try to acquire presence — failure means someone else drives.
-  let presence: PresenceHandle;
-  try {
-    presence = acquirePresenceFn(dir, conversationId, {});
-  } catch (cause) {
-    try {
-      host.close();
-    } catch {}
-    const msg = cause instanceof Error ? cause.message : String(cause);
-    throw new ChatRefused(
-      "lease-held",
-      `conversation ${conversationId} is already being driven (${msg}) — use watch for read-only viewing`,
-    );
-  }
-  presenceHandle = presence;
-  let released = false;
-  const doRelease = (): void => {
-    if (released) return;
-    released = true;
-    try {
-      presence.release();
-    } catch {}
-  };
-
-  // Unique across restarts: a reused id is refused by the reducer, and the
-  // driver would record nothing the agent says. See src/protocol/turn-id.ts.
-  const mintTurnId = createTurnIds();
-  const runner = opts.runner ?? createHcnRunner(nodeHarnessDeps());
-  const profile = (await supportsSession(runner, harness)) ? "headless-session" : "headless-turn";
-
-  const baseDeps = {
-    harness,
-    conversationId,
-    secret,
-    runner,
-    mintTurnId,
-    sendFrame: (frame: Frame) => host.handleFrame(JSON.stringify(frame)),
-    host: {
-      cursor: () => host.cursor(),
-      collectEffects: (from: number) => host.collectEffects(from),
-      advanceCursor: (off: number) => host.advanceCursor(off),
-      artifactIndex: () => host.artifactIndex(),
-      writeArtifact: (params: {
-        readonly artifactId: string;
-        readonly version: number;
-        readonly author: string;
-        readonly contentType: string;
-        readonly bytes: string;
-      }) => host.writeArtifact(params),
-    },
-  } as const;
-
-  let source: ReturnType<typeof createHeadlessHost>;
-  try {
-    source =
-      profile === "headless-session"
-        ? createHeadlessHostFn({ ...baseDeps, sessionId: uuidFn() }, "headless-session")
-        : createHeadlessHostFn(baseDeps, "headless-turn");
-  } catch (e) {
-    try {
-      host.close();
-    } catch {}
-    doRelease();
-    throw e;
-  }
-  receive = source.receive;
+  const { host, source } = driven;
 
   // Chat state — draft lives here, not in the input loop's closure, so
   // a refused submit can keep it.
@@ -240,25 +106,26 @@ export const chatConversation = async (opts: ChatOpts = {}): Promise<void> => {
   let errorBanner: string | null = null;
   let following = false;
   let terminated = false;
-
-  // Tailer for rendering — MUST use read() (lock-taking) because chat
-  // acts on what it reads. The viewer uses peek() because it only paints.
-  const tailer = createTailer(dir, { now: nowFn, presence: presenceProbe });
+  let lastPaint: string | undefined;
+  let driverEnded = false;
 
   const doRender = (): void => {
     // Lease loss detection — check handle before reading, so a lost lease
     // stops submissions even if the log has not grown.
-    if (presenceHandle && !presenceHandle.held() && !following) {
+    if (!driven.presenceHeld()) {
       following = true;
-      errorBanner = "conversation moved — another driver took over, input disabled (read-only)";
+      errorBanner = driverEnded
+        ? "driver stopped; input disabled (read-only)"
+        : "conversation moved \u2014 another driver took over, input disabled (read-only)";
     }
     let view: ReturnType<typeof buildView>;
     try {
-      // Read under the lock — the action path.
-      const tail = tailer.read();
-      const st = tail.state;
-      const chStatus = channelStatus(st, nowFn(), { processAlive: presenceProbe() === true });
-      const rung = following ? "following" : profile;
+      const tail = host.snapshot();
+      const chStatus = tail.status;
+      // The rung reads the driver's live state: a preference honored
+      // mid-conversation changes the profile, and the window must not
+      // keep painting the one this process started under (RFC-12).
+      const rung = following ? "following" : source.state().profile;
       // Build view with current draft. The draft field is what view.ts
       // already takes — this is the wiring that ticket says was missing.
       view = buildView({ transcript: tail.transcript, status: chStatus, rung, draft: chatDraft });
@@ -290,44 +157,23 @@ export const chatConversation = async (opts: ChatOpts = {}): Promise<void> => {
       opts.onView(view);
       return;
     }
-    // Paint to terminal — clear and render. In tests, write is injected
-    // but we still use renderLines for determinism.
-    const lines = renderLines(view);
-    // Use escape codes only on TTY; tests inject write/onView so this
-    // branch is skipped there. For real TTY, clear screen.
-    if (!opts.onView) {
-      write("\x1b[2J\x1b[H");
-      write(`${lines.join("\n")}\n`);
-    } else {
-      write(`${lines.join("\n")}\n`);
-    }
+    const paint = `${renderLines(view).join("\n")}\n`;
+    if (paint === lastPaint) return;
+    write("\x1b[2J\x1b[H");
+    write(paint);
+    lastPaint = paint;
   };
 
-  // Follow the log — triggers render on growth. The tailer's poll
-  // runs alongside fs.watch; the 500ms cadence is from tailer defaults.
-  const tailerAbort = new AbortController();
-  if (opts.signal) {
-    if (opts.signal.aborted) tailerAbort.abort();
-    else opts.signal.addEventListener("abort", () => tailerAbort.abort(), { once: true });
-  }
-  // onTrigger uses read() — the lock-taking path.
-  const onTrigger = (_t: RecordTailer): void => {
-    if (terminated) return;
-    // Use read() for chat — it acts on what it reads.
-    try {
-      // We call doRender which itself calls tailer.read(), so this is
-      // one read per trigger. Avoid double-read by just rendering.
-      doRender();
-    } catch {}
-  };
+  void driven.done
+    .then(() => {
+      driverEnded = true;
+      if (!terminated) doRender();
+    })
+    .catch(() => {});
 
-  const followPromise = followRecord({
-    dir,
-    pollMs: opts.pollMs ?? 50,
-    signal: tailerAbort.signal,
-    tailerDeps: { now: nowFn, presence: presenceProbe },
-    onTrigger,
-  }).catch(() => {});
+  const stopObserving = driven.observeTrigger(() => {
+    if (!terminated) doRender();
+  });
 
   // Initial render — show the conversation before any keys.
   doRender();
@@ -344,13 +190,8 @@ export const chatConversation = async (opts: ChatOpts = {}): Promise<void> => {
       doRender();
       return;
     }
-    // Read current state under lock — the decision must be on locked state.
-    let state: ReturnType<typeof host.state>;
-    try {
-      state = tailer.read().state;
-    } catch {
-      state = host.state();
-    }
+    // Submitting acts on the record, so refresh under the lock before choosing a mode.
+    const state = host.collectEffects(host.cursor()).state;
     const q = state.questionOpen;
 
     // Helper to refuse in window, keeping draft.
@@ -361,8 +202,9 @@ export const chatConversation = async (opts: ChatOpts = {}): Promise<void> => {
     };
 
     if (q !== null) {
-      // A question is open — answer path.
-      if (profile === "headless-turn") {
+      // A question is open — answer path. Read the live profile: a
+      // mid-conversation driver change can move it (RFC-12).
+      if (source.state().profile === "headless-turn") {
         refuseInWindow(
           "answering needs a session profile — this harness has no session to answer into",
         );
@@ -434,7 +276,13 @@ export const chatConversation = async (opts: ChatOpts = {}): Promise<void> => {
       },
       onSubmit: (text, mode) => {
         if (terminated) return;
-        tryEnqueue(text, mode);
+        try {
+          tryEnqueue(text, mode);
+        } catch (cause) {
+          chatDraft = text;
+          errorBanner = `send failed: ${classifyStoreFailure(cause) ?? "record operation failed"}; draft kept`;
+          doRender();
+        }
       },
       onInterrupt: () => {
         terminated = true;
@@ -448,18 +296,8 @@ export const chatConversation = async (opts: ChatOpts = {}): Promise<void> => {
     await runKeys();
   } finally {
     terminated = true;
-    try {
-      tailerAbort.abort();
-    } catch {}
-    try {
-      await followPromise;
-    } catch {}
-    try {
-      source.close();
-    } catch {}
-    try {
-      host.close();
-    } catch {}
-    doRelease();
+    stopObserving();
+    driven.abort();
+    await driven.done;
   }
 };

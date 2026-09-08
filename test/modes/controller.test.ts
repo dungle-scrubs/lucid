@@ -88,9 +88,9 @@ describe("conversation controller + handoff (M5.4)", () => {
     expect(blocked.verdict).toBe("refused");
     if (blocked.verdict === "refused") expect(blocked.issue).toBe("lease-held");
 
-    // Lease expiry: the takeover is the one legal mid-turn handoff, and it
-    // ABORTS the in-flight turn (the new writer never drains it).
+    // Lease expiry plus verified process departure permits takeover.
     r.box.now = 1_000 + 15_000;
+    r.box.presence = false;
     const forced = r.send(
       attach({ conversationId: "conv-1", secret: r.secret, profile: "headless-session" }),
     );
@@ -163,8 +163,9 @@ describe("conversation controller + handoff (M5.4)", () => {
     const r = rig();
     r.send(attach({ conversationId: "conv-1", secret: r.secret, profile: "interactive" }));
     r.send(event({ epoch: 1, n: 1, turnId: "t-1", event: { kind: "message", text: "human" } }));
-    // Lease expires mid-turn (no detach): a headless takeover ABORTS t-1.
+    // The process departs and its lease expires mid-turn: takeover aborts t-1.
     r.box.now = 1_000 + 15_000;
+    r.box.presence = false;
     const takeover = r.send(
       attach({ conversationId: "conv-1", secret: r.secret, profile: "headless-session" }),
     );

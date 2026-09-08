@@ -1,4 +1,0 @@
-RUN started_at=1786375250.048566
-SPAWN watcher pid=73981 purpose=read-only-transcript-observer
-SPAWN claude pid=73991 purpose=A-003-bare-interactive
-STOP claude pid=73991 method=TERM reason=startup-prompt-timeout

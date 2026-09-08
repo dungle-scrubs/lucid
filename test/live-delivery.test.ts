@@ -81,6 +81,7 @@ describe("live delivery — a running conversation answers an input sent by anot
     const createFakeHost = (deps: { sendFrame: (f: Frame) => unknown; harness: unknown }) => {
       sendFrame = deps.sendFrame as typeof sendFrame;
       return {
+        settled: Promise.resolve(),
         receive: (frame: Frame): void => {
           received.push(frame);
           if (frame.kind === "input") {

@@ -127,6 +127,7 @@ describe("oracle sweep (M7.1): identity collisions", () => {
 
     // A takes a takeover storm (lease lapse + re-attach); B is untouched.
     a.box.now = 1_000 + 15_000;
+    a.box.presence = false;
     a.send({
       kind: "attach",
       conversationId: "conv-a",

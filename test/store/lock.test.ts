@@ -6,12 +6,9 @@ import { join } from "node:path";
 import {
   acquireAppendLock,
   acquireWith,
-  backendFor,
-  heldLocks,
   LockError,
   type LockEvent,
-  lockBackend,
-} from "../../src/store/lock.js";
+} from "../../src/store/flock.js";
 
 const scratch = (): string => mkdtempSync(join(tmpdir(), "lucid-lock-"));
 
@@ -23,28 +20,14 @@ const scratch = (): string => mkdtempSync(join(tmpdir(), "lucid-lock-"));
  * and acquire refuses, rather than falling back to an O_EXCL lockfile that
  * cannot release on death and does not interoperate with flock.
  */
-describe("append-lock backend selection (M1.1)", () => {
-  test("selects flock when FFI provides the symbol, readonly when it does not", () => {
-    const fakeFlock = (_fd: number, _op: number): number => 0;
-    expect(backendFor(fakeFlock)).toBe("flock");
-    expect(backendFor(undefined)).toBe("readonly");
-  });
-
-  test("lockBackend() reports the live backend - flock on this machine (bun:ffi available)", () => {
-    expect(lockBackend()).toBe("flock");
-  });
-});
-
 describe("append-lock acquire / hold / release (M1.1)", () => {
-  test("acquire returns a held lock recorded in heldLocks(); release frees it", () => {
+  test("release permits the same target to be acquired again", () => {
     const dir = scratch();
     const target = join(dir, "log.ndjson");
     try {
-      expect(heldLocks()).not.toContain(target);
       const lock = acquireAppendLock(target, { timeoutMs: 1_000 });
-      expect(heldLocks()).toContain(target);
       lock.release();
-      expect(heldLocks()).not.toContain(target);
+      acquireAppendLock(target, { timeoutMs: 0 }).release();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -73,7 +56,6 @@ describe("append-lock acquire / hold / release (M1.1)", () => {
       // The first holder is untouched; releasing it frees the target.
       first.release();
       const third = acquireAppendLock(target, { timeoutMs: 1_000 });
-      expect(heldLocks()).toContain(target);
       third.release();
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -97,7 +79,6 @@ describe("append-lock unavailable backend refuses, never falls back (M1.1, D-008
       expect((err as LockError).target).toBe(target);
       // Critically: it bailed BEFORE opening any lockfile - no O_EXCL mutex.
       expect(existsSync(`${target}.lock`)).toBe(false);
-      expect(heldLocks()).not.toContain(target);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -179,7 +160,6 @@ describe("append-lock cross-process death-release (M1.1, D-008)", () => {
       await new Promise<void>((resolve) => child.on("exit", () => resolve()));
 
       const lock = acquireAppendLock(target, { timeoutMs: 3_000 });
-      expect(heldLocks()).toContain(target);
       lock.release();
     } finally {
       child.kill("SIGKILL");
@@ -196,7 +176,6 @@ describe("append-lock lifecycle robustness (M1.1 boundary-review fixes)", () => 
       const lock = acquireAppendLock(target, { timeoutMs: 1_000 });
       lock.release();
       expect(() => lock.release()).not.toThrow();
-      expect(heldLocks()).not.toContain(target);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -210,7 +189,6 @@ describe("append-lock lifecycle robustness (M1.1 boundary-review fixes)", () => 
         expect(() => acquireAppendLock(target, { timeoutMs: bad })).toThrow(RangeError);
       }
       expect(existsSync(`${target}.lock`)).toBe(false);
-      expect(heldLocks()).not.toContain(target);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -226,9 +204,7 @@ describe("append-lock lifecycle robustness (M1.1 boundary-review fixes)", () => 
       // A throwing sink must not corrupt lock lifecycle: acquire succeeds,
       // the lock is held, and release still frees it.
       const lock = acquireAppendLock(target, { timeoutMs: 1_000, onEvent: boom });
-      expect(heldLocks()).toContain(target);
       expect(() => lock.release()).not.toThrow();
-      expect(heldLocks()).not.toContain(target);
       // The target is genuinely free afterwards.
       const again = acquireAppendLock(target, { timeoutMs: 1_000 });
       again.release();

@@ -5,7 +5,7 @@
  * document, some edits, and what comes out.
  */
 import { describe, expect, test } from "bun:test";
-import { TEXT_MAX } from "../../src/protocol/frames.js";
+import { ARTIFACT_BYTES_MAX, TEXT_MAX } from "../../src/protocol/frames.js";
 import {
   applyPatch,
   PATCH_EDITS_MAX,
@@ -14,7 +14,6 @@ import {
   PATCH_REPLACE_TOTAL_MAX,
   parsePatchBody,
 } from "../../src/protocol/patch.js";
-import { ARTIFACT_BYTES_MAX } from "../../src/store/log.js";
 
 const body = (edits: unknown) => JSON.stringify({ edits });
 

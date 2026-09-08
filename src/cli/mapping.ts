@@ -11,6 +11,21 @@
  */
 
 export type MappedCommand =
+  | { readonly kind: "hcn-supervisor"; readonly argv: readonly string[] }
+  | {
+      readonly kind: "context";
+      readonly path: string;
+      readonly offset: number;
+      readonly bytes: number;
+      readonly json: boolean;
+    }
+  | { readonly kind: "name-titles"; readonly root: string }
+  | {
+      readonly kind: "managed-worker";
+      readonly root: string;
+      readonly conversationId: string;
+      readonly inputId: string;
+    }
   | { readonly kind: "send"; readonly conversationId: string; readonly text: string }
   | { readonly kind: "watch"; readonly conversationId: string }
   | {
@@ -34,6 +49,52 @@ export type MappedCommand =
 export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
   const [cmd, ...rest] = argv;
   switch (cmd) {
+    case "context": {
+      const help = {
+        kind: "help",
+        message:
+          "usage: lucid2 context <offered-directory> [--offset BYTE] [--bytes COUNT] [--json]\nRead a bounded slice of offered conversation context. Reports nextOffset and done.",
+      } as const;
+      const path = rest[0];
+      if (!path || path.startsWith("--")) return help;
+      let offset = 0;
+      let bytes = 65_536;
+      let json = false;
+      const used = new Set<string>();
+      for (let index = 1; index < rest.length; index++) {
+        const flag = rest[index];
+        if (!flag || used.has(flag)) return help;
+        used.add(flag);
+        if (flag === "--json") {
+          json = true;
+          continue;
+        }
+        const value = rest[++index];
+        if (
+          (flag !== "--offset" && flag !== "--bytes") ||
+          value === undefined ||
+          !/^\d+$/.test(value)
+        )
+          return help;
+        const number = Number(value);
+        if (!Number.isSafeInteger(number)) return help;
+        if (flag === "--offset") offset = number;
+        else bytes = number;
+      }
+      return { kind: "context", path, offset, bytes, json };
+    }
+    case "_name-titles":
+      return rest.length === 1 && rest[0]
+        ? { kind: "name-titles", root: rest[0] }
+        : { kind: "help", message: "A record root is required" };
+    case "_hcn-supervise":
+      return rest.length > 0
+        ? { kind: "hcn-supervisor", argv: rest }
+        : { kind: "help", message: "A harness command is required" };
+    case "_managed-worker":
+      return rest.length === 3 && rest[0] && rest[1] && rest[2]
+        ? { kind: "managed-worker", root: rest[0], conversationId: rest[1], inputId: rest[2] }
+        : { kind: "help", message: "A record root, conversation, and accepted input are required" };
     case "send": {
       const conversationId = rest[0];
       if (!conversationId)
@@ -100,6 +161,12 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
     case "inject":
       return { kind: "inject" };
     case "serve":
+      if (rest.length > 0)
+        return {
+          kind: "help",
+          message:
+            "usage: lucid2 serve\nOpen the local conversation hub on the configured loopback port.",
+        };
       return { kind: "serve" };
     case undefined:
     case "help":
@@ -107,7 +174,7 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
     case "-h":
       return {
         kind: "help",
-        message: "usage: lucid2 <send|watch|run|chat|serve|announce|inject> [...]",
+        message: "usage: lucid2 <send|watch|run|chat|serve|announce|inject|context> [...]",
       };
     default:
       return { kind: "help", message: `unknown command: ${cmd}` };

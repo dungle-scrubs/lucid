@@ -33,6 +33,7 @@ jobs:
       - run: bun run lint
       - run: bun run typecheck
       - run: bun test
+      - run: bun run build
 
       # The deterministic suite drives a fake hcn, so CI never spawns a
       # harness and never needs credentials. The live lanes
@@ -44,5 +45,12 @@ jobs:
         run: |
           if grep -rn 'harness-cli/src\|harness-cli/test' src test scripts; then
             echo "lucid must reach a harness through the hcn binary only (RFC-02)" >&2
+            exit 1
+          fi
+
+      - name: Confirm protocol imports no store modules
+        run: |
+          if grep -rn '\.\./store/' src/protocol; then
+            echo "protocol must not import store modules (RFC-13)" >&2
             exit 1
           fi

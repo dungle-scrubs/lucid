@@ -40,7 +40,9 @@
 import { type ChatOpts, chatConversation } from "./chat.js";
 import { type AnnounceResult, announce } from "./hooks/announce.js";
 import { readStdin } from "./hooks/delivery.js";
+
 import { type InjectResult, inject } from "./hooks/inject.js";
+
 import { type MappedCommand, mapSubcommand } from "./mapping.js";
 import { type Conversations, conversations } from "./record-addressing.js";
 import type { RunOpts, RunResult } from "./run.js";
@@ -61,6 +63,9 @@ export interface DispatchDeps {
   readonly sendInputFn?: (conversationId: string, opts: SendOpts) => { inputId: string };
   readonly watchConversationFn?: (conversationId: string, opts: WatchOpts) => Promise<void>;
   readonly runConversationFn?: (opts: RunOpts) => Promise<RunResult>;
+  readonly namingWorkerFn?: (root: string) => Promise<void>;
+  readonly managedWorkerFn?: typeof import("./managed-worker.js").runManagedWorker;
+  readonly wakeNamingFn?: (root: string) => void;
   readonly serveFn?: (opts: ServeOpts) => Promise<void>;
   readonly announceFn?: (stdin: string) => Promise<AnnounceResult>;
   readonly injectFn?: (stdin: string) => Promise<InjectResult>;
@@ -86,6 +91,10 @@ export interface DispatchDeps {
 }
 
 export type DispatchResult =
+  | { readonly kind: "hcn-supervisor" }
+  | { readonly kind: "context" }
+  | { readonly kind: "name-titles" }
+  | { readonly kind: "managed-worker" }
   | { readonly kind: "send"; readonly conversationId: string; readonly inputId: string }
   | { readonly kind: "watch"; readonly conversationId: string }
   | { readonly kind: "run"; readonly conversationId: string; readonly dir: string }
@@ -116,6 +125,17 @@ export const dispatch = async (
 
   // Help is terminal — no seams, no root, no flock.
   if (mapped.kind === "help") return { kind: "help", message: mapped.message };
+  if (mapped.kind === "context") {
+    const { readOfferedContext } = await import("../store/context-offer.js");
+    const result = readOfferedContext(mapped.path, mapped.offset, mapped.bytes);
+    const output = deps.onOutput ?? ((line: string) => console.log(line));
+    output(
+      mapped.json
+        ? JSON.stringify(result)
+        : `${result.text}\n\nnextOffset: ${result.nextOffset}; done: ${result.done}`,
+    );
+    return { kind: "context" };
+  }
   if (mapped.kind === "announce") {
     const stdin = await (deps.readStdinFn ?? readStdin)();
     const fn = deps.announceFn ?? announce;
@@ -135,6 +155,21 @@ export const dispatch = async (
       (deps.onStderr ?? ((m: string) => process.stderr.write(m)))(line);
     }
     return { kind: "inject" };
+  }
+
+  if (mapped.kind === "name-titles") {
+    const run = deps.namingWorkerFn ?? (await import("./naming.js")).runNamingWorker;
+    await run(mapped.root);
+    return { kind: "name-titles" };
+  }
+  if (mapped.kind === "hcn-supervisor") {
+    await (await import("./hcn-supervisor.js")).superviseHcn(mapped.argv);
+    return { kind: "hcn-supervisor" };
+  }
+  if (mapped.kind === "managed-worker") {
+    const run = deps.managedWorkerFn ?? (await import("./managed-worker.js")).runManagedWorker;
+    await run(mapped.root, mapped.conversationId, mapped.inputId, { signal: deps.signal });
+    return { kind: "managed-worker" };
   }
 
   // One root resolution for the three record-touching commands. Not per-branch.
@@ -160,7 +195,10 @@ export const dispatch = async (
       const serveFn =
         deps.serveFn ??
         (async (opts: ServeOpts) => (await import("./serve.js")).serveConversation(opts));
-      await serveFn({ rootDir: effectiveRoot });
+      await serveFn({
+        rootDir: effectiveRoot,
+        ...(deps.wakeNamingFn ? { wakeNaming: deps.wakeNamingFn } : {}),
+      });
       return { kind: "serve" };
     }
     case "send": {
@@ -169,6 +207,8 @@ export const dispatch = async (
         text: mapped.text,
         conversationsFactory: deps.conversationsFactory ? convFactory : boundFactory,
       });
+      if (deps.wakeNamingFn) deps.wakeNamingFn(dispatchConvs.rootDir);
+
       return { kind: "send", conversationId: mapped.conversationId, inputId };
     }
     case "watch": {

@@ -5,7 +5,7 @@
  * drives claude, and every event folds back into the store's transcript.
  * This is the on-demand, evidence-logged run the plan defers from CI - it
  * needs an installed claude and is nondeterministic. Evidence is written
- * to spikes/evidence/df-smoke.md.
+ * to artifacts/evidence/df-smoke.md.
  *
  * Run: bun scripts/smoke-live.ts
  */
@@ -13,10 +13,12 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { harnessForName } from "../src/cli/harness.js";
 import { createHcnRunner } from "../src/harness/hcn-runner.js";
 import { nodeHarnessDeps } from "../src/harness/node-deps.js";
-import { openHeadlessSession, openHeadlessTurns } from "../src/modes/headless.js";
+import { hostSeamFor, openHeadlessSession, openHeadlessTurns } from "../src/modes/host.js";
 import type { Frame } from "../src/protocol/index.js";
+import { openWriter } from "../src/store/conversation-host.js";
 import { createConversationRecord, type HostRecord, openConversation } from "../src/store/store.js";
 
 /** Which harness to drive. The seam made this a name, so the smoke takes it
@@ -24,10 +26,7 @@ import { createConversationRecord, type HostRecord, openConversation } from "../
 const HARNESS = ((): "claude" | "codex" | "pi" | "muse" => {
   const i = process.argv.indexOf("--harness");
   const v = i === -1 ? "claude" : (process.argv[i + 1] ?? "claude");
-  if (v !== "claude" && v !== "codex" && v !== "pi" && v !== "muse") {
-    throw new Error(`unknown harness ${v}`);
-  }
-  return v;
+  return harnessForName(v);
 })();
 
 /** Optional routing, for the local-provider lane: pi against LM Studio. */
@@ -111,6 +110,7 @@ const main = async (): Promise<void> => {
     conversationId,
     secret,
     runner,
+    host: hostSeamFor(host),
     mintTurnId: () => `turn-${++turnCount}`,
     sendFrame: (frame: Frame) => host.handleFrame(JSON.stringify(frame)),
   };
@@ -182,13 +182,7 @@ const main = async (): Promise<void> => {
   log("\n## kill + resume: reopen the durable log");
   source.close();
   const tFinal = host.transcript();
-  const reopened = openConversation(join(root, conversationId), {
-    now: () => Date.now(),
-    presence: () => undefined,
-    executorLease: () => false,
-    onRecord: () => {},
-    onEffect: () => {},
-  });
+  const reopened = openWriter(join(root, conversationId));
   const foldMatches = JSON.stringify(reopened.transcript()) === JSON.stringify(tFinal);
   log(
     `pre-close events=${t.events.length}; post-close seq=${host.state().seq}; reopened seq=${reopened.state().seq}; fold matches live=${foldMatches}`,
@@ -201,11 +195,11 @@ const main = async (): Promise<void> => {
     resolved === undefined
       ? "unknown"
       : `${String(resolved.version)} (${String(resolved.bin)}, via ${String(resolved.source)})`;
-  mkdirSync("spikes/evidence", { recursive: true });
+  mkdirSync("artifacts/evidence", { recursive: true });
   // The file is rewritten whole on every run, so anything a reader needs has
   // to be generated here. Prose appended by hand does not survive.
   writeFileSync(
-    `spikes/evidence/df-smoke${HARNESS === "claude" ? "" : `-${HARNESS}`}.md`,
+    `artifacts/evidence/df-smoke${HARNESS === "claude" ? "" : `-${HARNESS}`}.md`,
     [
       `# DF-SMOKE - live conversation against ${HARNESS} ${sessionId}`,
       "",

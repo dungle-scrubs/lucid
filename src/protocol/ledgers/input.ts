@@ -34,6 +34,7 @@
  * is the check `enqueueInput` refuses `input-queue-full` through, so the
  * bound and the quantity it bounds live in one module.
  */
+import type { HarnessEventKind } from "../events.js";
 
 import { EventKind, INPUT_QUEUE_MAX } from "../events.js";
 import type { QueuedInput } from "../reducer.js";
@@ -45,7 +46,7 @@ const NO_INPUTS: readonly QueuedInput[] = Object.freeze([]);
  * An `error` carrying `terminal: true` speaks for the SESSION, not a turn
  * (the host emits one when a session never opened, with no input
  * delivered), so counting it would drain a backlog that never existed. */
-const TERMINAL_EVENT_KINDS: readonly unknown[] = [EventKind.done];
+const TERMINAL_EVENT_KINDS: readonly HarnessEventKind[] = [EventKind.done];
 
 export const InputLedger = {
   /** The input bound's gate (RFC-04): a conversation already holding
@@ -74,7 +75,9 @@ export const InputLedger = {
    * the count alone; the clamp absorbs a turn no input opened (a
    * harness-spontaneous turn), so the gauge can never go negative. */
   turnEnded(inFlight: number, eventKind: unknown): number {
-    return TERMINAL_EVENT_KINDS.includes(eventKind) ? Math.max(0, inFlight - 1) : inFlight;
+    return TERMINAL_EVENT_KINDS.some((kind) => kind === eventKind)
+      ? Math.max(0, inFlight - 1)
+      : inFlight;
   },
 
   /** Inputs that need redelivery at a turn boundary (sameTurn → no redelivery). */
@@ -90,15 +93,3 @@ export const InputLedger = {
     return flagged ? inputs.map((i) => (i.redeliver ? { ...i, redeliver: false } : i)) : inputs;
   },
 } as const;
-
-export const queueDepth = (inputs: readonly QueuedInput[]): number =>
-  InputLedger.queueDepth(inputs);
-export const atCapacity = (inFlight: number): boolean => InputLedger.atCapacity(inFlight);
-export const redeliverable = (
-  inputs: readonly QueuedInput[],
-  sameTurn: boolean,
-): readonly QueuedInput[] => InputLedger.redeliverable(inputs, sameTurn);
-export const clearRedeliver = (
-  inputs: readonly QueuedInput[],
-  hadRedeliver: boolean,
-): readonly QueuedInput[] => InputLedger.clearRedeliver(inputs, hadRedeliver);

@@ -5,13 +5,19 @@ import { join } from "node:path";
 import { ChatRefused, chatConversation } from "../../src/cli/chat.js";
 import { runCli } from "../../src/cli/dispatch.js";
 import { conversations } from "../../src/cli/record-addressing.js";
+import { createHcnRunner } from "../../src/harness/hcn-runner.js";
 import type { HarnessRunner } from "../../src/harness/runner.js";
+import { HCN_MIN_VERSION } from "../../src/harness/version.js";
 import { EventKind, INPUT_QUEUE_MAX } from "../../src/protocol/events.js";
 import type { Frame } from "../../src/protocol/index.js";
 import { encodeFrame } from "../../src/protocol/index.js";
+import { viewArtifactCatalog, viewArtifactVersion } from "../../src/store/conversation-host.js";
+import { StoreError } from "../../src/store/errors.js";
+import { LockError } from "../../src/store/flock.js";
 import { openConversation } from "../../src/store/store.js";
 import { NotTTYError } from "../../src/tui/input.js";
 import type { TuiView } from "../../src/tui/view.js";
+import { FakeHcnProcess, fakeSpawner } from "../harness/fakes.js";
 import { attach } from "../protocol/helpers.js";
 
 // Helpers
@@ -96,6 +102,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
       // The chat's host is the real store host, so enqueue will write to log.
       // We just need a source that does not throw.
       return {
+        settled: Promise.resolve(),
         receive: (f: Frame) => received.push(f),
         close: () => {},
       };
@@ -166,6 +173,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
     const keys = keysOf("Draft the RFC", "\r", "\x03");
 
     const fakeHostFn = ((_deps: { sendFrame: (f: Frame) => unknown }) => ({
+      settled: Promise.resolve(),
       receive: () => {},
       close: () => {},
     })) as unknown as typeof import("../../src/modes/host.js").createHeadlessHost;
@@ -214,6 +222,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
     {
       const keys = keysOf("ordinary", "\r", "\x03");
       const fakeHostFn = (() => ({
+        settled: Promise.resolve(),
         receive: () => {},
         close: () => {},
       })) as unknown as typeof import("../../src/modes/host.js").createHeadlessHost;
@@ -265,6 +274,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
 
       const keys = keysOf("my answer", "\r", "\x03");
       const fakeHostFn = (() => ({
+        settled: Promise.resolve(),
         receive: () => {},
         close: () => {},
       })) as unknown as typeof import("../../src/modes/host.js").createHeadlessHost;
@@ -324,6 +334,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
     const keys = keysOf("second", "\r", "\x03");
 
     const fakeHostFn = (() => ({
+      settled: Promise.resolve(),
       receive: () => {},
       close: () => {},
     })) as unknown as typeof import("../../src/modes/host.js").createHeadlessHost;
@@ -394,6 +405,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
     const views: TuiView[] = [];
     const keys = keysOf("try answer", "\r", "\x03");
     const fakeHostFn = (() => ({
+      settled: Promise.resolve(),
       receive: () => {},
       close: () => {},
     })) as unknown as typeof import("../../src/modes/host.js").createHeadlessHost;
@@ -456,6 +468,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
     const views: TuiView[] = [];
     const keys = keysOf("overflow", "\r", "\x03");
     const fakeHostFn = (() => ({
+      settled: Promise.resolve(),
       receive: () => {},
       close: () => {},
     })) as unknown as typeof import("../../src/modes/host.js").createHeadlessHost;
@@ -528,6 +541,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
     // Instead test that refused draft is kept and next id is fresh.
     const keys = keysOf("kept text", "\r", "\x03");
     const fakeHostFn = (() => ({
+      settled: Promise.resolve(),
       receive: () => {},
       close: () => {},
     })) as unknown as typeof import("../../src/modes/host.js").createHeadlessHost;
@@ -684,6 +698,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
     };
 
     const fakeHostFn = (() => ({
+      settled: Promise.resolve(),
       receive: () => {},
       close: () => {},
     })) as unknown as typeof import("../../src/modes/host.js").createHeadlessHost;
@@ -742,6 +757,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
     const views: TuiView[] = [];
     const keys = keysOf("hello", "\r", "\x03");
     const fakeHostFn = (() => ({
+      settled: Promise.resolve(),
       receive: () => {},
       close: () => {},
     })) as unknown as typeof import("../../src/modes/host.js").createHeadlessHost;
@@ -794,6 +810,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
     const fakeStdout = { isTTY: true } as unknown as NodeJS.WriteStream;
 
     const fakeHostFn = (() => ({
+      settled: Promise.resolve(),
       receive: () => {},
       close: () => {},
     })) as unknown as typeof import("../../src/modes/host.js").createHeadlessHost;
@@ -848,6 +865,7 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
     const now = 1000;
     const keys = keysOf("unsent text", "\x03");
     const fakeHostFn = (() => ({
+      settled: Promise.resolve(),
       receive: () => {},
       close: () => {},
     })) as unknown as typeof import("../../src/modes/host.js").createHeadlessHost;
@@ -891,4 +909,132 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
     });
     expect(seen).toBe("demo");
   });
+});
+
+test("chat applies an artifact patch and tells the next input what the record holds", async () => {
+  const root = mkdtempSync(join(tmpdir(), "chat-artifact-"));
+  const { dir } = conversations(root).ensure("chat-artifact");
+  const proc = new FakeHcnProcess();
+  const hcn = createHcnRunner({ spawn: fakeSpawner([proc]).spawn, bin: "/fake/hcn" });
+  const runner: HarnessRunner = { ...fakeRunnerSession, openSession: hcn.openSession };
+  const sent = () => proc.commands.filter((m) => m.op === "send");
+  let patched = false;
+  const keys = (async function* () {
+    proc.emit({
+      kind: "session",
+      sessionId: "chat-session",
+      harness: "claude",
+      hcn: HCN_MIN_VERSION,
+      escalateQuestions: true,
+    });
+    yield "revise";
+    yield "\r";
+    await _until(() => sent().length === 1);
+    const first = sent()[0];
+    proc.emit({ kind: "disposition", id: first?.id, disposition: "started" });
+    proc.emit({ kind: "turn", turnId: "native-1", id: first?.id });
+    proc.emit({
+      kind: "message",
+      role: "assistant",
+      text: '```lucid-artifact\n{"id":"doc","replaces":null,"contentType":"text/html"}\n<p>one</p>\n```\n```lucid-artifact\n{"id":"doc","replaces":1,"contentType":"text/html","form":"patch"}\n{"edits":[{"find":"one","replace":"two"}]}\n```',
+    });
+    proc.emit({ kind: "done", exitCode: null, cause: "clean" });
+    await _until(
+      () =>
+        viewArtifactCatalog(dir)[0]?.versions.includes(2) === true ||
+        readFileSync(join(dir, "log.ndjson"), "utf8").includes("could not be read"),
+    );
+    patched = viewArtifactVersion(dir, "doc", 2)?.bytes === "<p>two</p>";
+    yield "again";
+    yield "\r";
+    await _until(() => sent().length >= 2);
+    expect(sent().map((c) => c.id)).toEqual([first?.id, sent()[1]?.id]);
+    yield "\x03";
+  })();
+  try {
+    await chatConversation({
+      rootDir: root,
+      conversationId: "chat-artifact",
+      runner,
+      keys,
+      onView: () => {},
+      pollMs: 10,
+    });
+    expect(patched).toBe(true);
+    expect(sent()[1]?.text).toContain("current version 2");
+    expect(sent()[1]?.text).toContain("[lucid artifact state]");
+  } finally {
+    proc.exit(0);
+  }
+});
+
+test.each(["collect", "append"] as const)(
+  "chat preserves the submitted draft when %s fails",
+  async (boundary) => {
+    const root = mkdtempSync(join(tmpdir(), "chat-submit-failure-"));
+    const views: TuiView[] = [];
+    let submitting = false;
+    const keys = (async function* () {
+      yield "keep this draft";
+      submitting = true;
+      yield "\r";
+      yield "\x03";
+    })();
+    await chatConversation({
+      rootDir: root,
+      conversationId: "submit-failure",
+      runner: fakeRunnerSession,
+      keys,
+      onView: (view) => views.push(view),
+      createHeadlessHostFn: () => ({
+        settled: Promise.resolve(),
+        receive: () => {},
+        close: () => {},
+      }),
+      openConversationFn: (dir, deps) => {
+        const host = openConversation(dir, deps);
+        return {
+          ...host,
+          collectEffects: (offset) => {
+            if (submitting && boundary === "collect")
+              throw new LockError("lock-timeout", "test-lock", "record is busy");
+            return host.collectEffects(offset);
+          },
+          enqueueInput: (params) => {
+            if (submitting && boundary === "append")
+              throw new StoreError("append-failed", "synthetic failure");
+            return host.enqueueInput(params);
+          },
+        };
+      },
+    });
+    expect(views.at(-1)?.inputBox).toContain("keep this draft");
+    expect(JSON.stringify(views.at(-1)?.lines)).toContain("send failed");
+  },
+);
+
+test("chat reports a stopped driver without claiming another driver took over", async () => {
+  const root = mkdtempSync(join(tmpdir(), "chat-driver-ended-"));
+  const views: TuiView[] = [];
+  let ended: Parameters<
+    NonNullable<import("../../src/cli/runtime.js").RuntimeDeps["createHeadlessHostFn"]>
+  >[0]["onEnded"];
+  await chatConversation({
+    rootDir: root,
+    conversationId: "driver-ended",
+    runner: fakeRunnerSession,
+    keys: (async function* () {
+      ended?.({ kind: "closed" });
+      await Promise.resolve();
+      yield "draft";
+      yield "\x03";
+    })(),
+    onView: (view) => views.push(view),
+    createHeadlessHostFn: (deps) => {
+      ended = deps.onEnded;
+      return { settled: Promise.resolve(), receive: () => {}, close: () => {} };
+    },
+  });
+  expect(JSON.stringify(views.at(-1))).toContain("driver stopped");
+  expect(JSON.stringify(views.at(-1))).not.toContain("another driver took over");
 });

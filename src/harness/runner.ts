@@ -16,10 +16,11 @@
  * What it is NOT: it is not the protocol reducer, the durable store, or the
  * flock. It is the process boundary and nothing else.
  */
+import type { HarnessName } from "../protocol/frames.js";
 import type { HarnessEvent } from "./events.js";
 
 /** A harness as hcn names it. Validated by `src/cli/harness.ts`. */
-export type HarnessName = "claude" | "codex" | "pi" | "muse";
+export type { HarnessName };
 
 /** The integration modes a capability query can ask about. */
 export type HarnessMode = "headless-turn" | "headless-session" | "interactive";
@@ -34,14 +35,49 @@ export interface CapabilityResult {
   readonly confidence: "high" | "medium" | "none";
 }
 
-/** The descriptor facts lucid reads. Everything else stays inside hcn. */
+/** Descriptor facts, plus optional uncached results for this inspection request. */
 export interface HarnessFacts {
+  /** hcn declares an accounting mechanism. A count still verifies the
+   * selected model, executable and profile before it is usable. */
+  readonly contextAccounting?: true;
+  readonly runtime?: {
+    readonly executable: { readonly path: string | null; readonly version: string | null };
+    readonly resume: { readonly status: "supported" | "unknown"; readonly reason: string | null };
+  };
+  readonly binary?: string;
   readonly name: string;
   /** Whether the harness declares a persistent session mode. Decides which
    * headless profile `lucid run` uses - a runtime-verified capability, not a
    * guess (PLAN D-008). */
   readonly session: boolean;
   readonly verifiedAgainst: string;
+  /** What a person may choose for model and effort (RFC-12), projected from
+   * the dump's `vocabulary` and `turnOptions`. Absent when the dump carries
+   * no vocabulary - the harness then has no lists to offer, and the page's
+   * rule for that is the design's own: absent, not disabled. */
+  readonly vocabulary?: HarnessVocabulary;
+}
+
+/** The choosing vocabulary hcn's descriptor dump reports for a harness
+ * (RFC-12). One source: `hcn inspect <harness> --json`, projected here, so
+ * lucid mirrors nothing about a harness's models. */
+export interface HarnessVocabulary {
+  /** `vocabulary.models`, aliases resolved: hcn's list is already the
+   * canonical ids, and `vocabulary.aliases` maps pet names onto it, so the
+   * list is served as it stands. */
+  readonly aliases?: Readonly<Record<string, string>>;
+  readonly models: readonly string[];
+  /** `vocabulary.efforts`, the harness's ladder in the dump's own order. */
+  readonly efforts: readonly string[];
+  /** `vocabulary.extensible`: the model list is open (pi registers models
+   * at runtime), so an unlisted id is a valid choice, not a mistake. */
+  readonly extensible: boolean;
+  /** Whether the harness expresses a provider dimension at all - `turnOptions`
+   * carrying `provider` (pi only today). No list exists for it: the value is
+   * open and hcn validates it at spawn. Present only where expressible,
+   * absent elsewhere - never false, which would read as "checked and
+   * refused" where the truth is "no such dimension". */
+  readonly provider?: true;
 }
 
 /**
@@ -59,6 +95,8 @@ export type Disposition = "started" | "rejected";
 
 export interface SendResult {
   readonly disposition: Disposition;
+  /** Only an explicit hcn refusal proves that the prompt was not delivered. */
+  readonly rejectionEvidence?: "harness-refusal";
   readonly reason?: string;
 }
 
@@ -87,6 +125,7 @@ export interface SessionHandle {
 }
 
 export interface OpenSessionOptions {
+  readonly signal?: AbortSignal;
   readonly harness: HarnessName;
   /** The id this session will be KNOWN BY. Names a session; does not
    * continue one. */
@@ -98,21 +137,37 @@ export interface OpenSessionOptions {
   readonly resume?: string;
   readonly model?: string;
   readonly provider?: string;
+  /** RFC-12: routing through `hcn session --effort` (hcn >= 0.6.0),
+   * validated per harness/model the same way `hcn run --effort` is. */
+  readonly effort?: string;
   readonly cwd?: string;
   /** Per-turn inactivity budget in seconds. 0 or absent means no limit. */
   readonly stallSeconds?: number;
 }
 
 export interface StreamTurnOptions {
+  /** hcn-enforced wall-clock bound in seconds. Isolated jobs default to 60. */
+  readonly timeoutSeconds?: number;
+  readonly signal?: AbortSignal;
+  readonly isolation?: "tool-free";
   readonly harness: HarnessName;
   readonly prompt: string;
   readonly resume?: string;
   readonly model?: string;
+  /** RFC-12: routing through `hcn run --provider` (pi only; hcn refuses
+   * the flag for a harness that cannot express the dimension). */
+  readonly provider?: string;
+  /** RFC-12: routing through `hcn run --effort`. The session path carries
+   * the dimension too, since hcn 0.6.0 grew `hcn session --effort`. */
+  readonly effort?: string;
   readonly cwd?: string;
   readonly turnId: string;
 }
 
 export interface HarnessRunner {
+  /** Count the complete prepared request through hcn, including recalled
+   * native history. An unavailable result never authorizes dispatch. */
+  countContext(opts: ContextCountOptions): Promise<ContextCount>;
   /** `hcn session <h> --json`. Throws HarnessRefusal when hcn refuses before
    * spawning, HarnessSpawnError when the binary will not start. */
   openSession(opts: OpenSessionOptions): Promise<SessionHandle>;
@@ -120,10 +175,62 @@ export interface HarnessRunner {
    * arrives as a failure event followed by done. */
   streamTurn(opts: StreamTurnOptions): AsyncIterable<HarnessEvent>;
   /** `hcn inspect <h> --json`, projected to what lucid reads. No spawn. */
-  inspect(harness: HarnessName): Promise<HarnessFacts>;
+  inspect(
+    harness: HarnessName,
+    choice?: {
+      readonly signal?: AbortSignal;
+      readonly model?: string;
+      readonly effort?: string;
+      readonly provider?: string;
+      readonly isolation?: "tool-free";
+      readonly runtime?: {
+        readonly cwd: string;
+        readonly profile: "headless-turn" | "headless-session";
+        readonly resume?: string;
+      };
+    },
+  ): Promise<HarnessFacts>;
   /** `hcn inspect <h> --capabilities`. No spawn. */
   capabilities(harness: HarnessName, model: string, mode: HarnessMode): Promise<CapabilityResult>;
 }
+
+export interface ContextCountOptions extends Omit<StreamTurnOptions, "turnId"> {
+  readonly profile: "headless-turn" | "headless-session";
+}
+
+export type ContextCountFailure =
+  | "accounting-refused"
+  | "invalid-accounting-response"
+  | "unknown-accounting-failure"
+  | "model-divergence"
+  | "response-limit"
+  | "auth"
+  | "limit"
+  | "native-exit"
+  | "unverified-adapter"
+  | "unsupported-adapter"
+  | "transport-limit"
+  | "transport"
+  | "protocol"
+  | "timeout"
+  | "cancelled"
+  | "cleanup"
+  | "not-configured";
+
+export type ContextCount =
+  | {
+      readonly executable: { readonly path: string; readonly version: string };
+      readonly inputLimitTokens: number;
+      readonly method: "native-context-estimate";
+      readonly model: string;
+      readonly status: "available";
+      readonly totalTokens: number;
+    }
+  | {
+      readonly issue?: string;
+      readonly reason: ContextCountFailure;
+      readonly status: "unavailable";
+    };
 
 /** hcn refused the invocation itself (exit 2). Not retryable by re-running:
  * the options or the harness have to change. */

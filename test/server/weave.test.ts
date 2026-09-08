@@ -8,6 +8,32 @@
 import { describe, expect, test } from "bun:test";
 import { type Msg, type PendingNote, weaveNotes } from "../../src/server/client/timeline.js";
 
+test("a refreshed shorter transcript keeps a later queued note visible at its end", () => {
+  const pending: PendingNote = { note: "Keep this queued note", at: 8, spots: [] };
+  expect(weaveNotes([], [pending]).map((m) => m.text)).toEqual([pending.note]);
+});
+
+test("saved versions do not move a later queued note before an earlier message", () => {
+  const messages: Msg[] = [0, 1, 2, 3].map((seq) => ({
+    id: `m${seq}`,
+    seq,
+    role: "assistant",
+    text: `Message ${seq}`,
+  }));
+  const notes: PendingNote[] = [{ note: "Written last", at: 4, spots: [] }];
+  const saves = [
+    { after: 0, line: { id: "save-1", role: "user" as const, text: "Saved v1", note: true } },
+  ];
+  expect(weaveNotes(messages, notes, saves).map((m) => m.text)).toEqual([
+    "Message 0",
+    "Saved v1",
+    "Message 1",
+    "Message 2",
+    "Message 3",
+    "Written last",
+  ]);
+});
+
 const msg = (id: string, text: string): Msg => ({ id, role: "user", text });
 const note = (text: string, at: number): PendingNote => ({
   note: text,

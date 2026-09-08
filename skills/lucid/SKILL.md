@@ -111,8 +111,10 @@ and per-spot authorship.
 - Do not defend a spot marked `human` as if you wrote it.
 - Decide where the requested change best belongs; a note points at context,
   not necessarily the only valid edit location.
-- Respond with a new version of the same artifact, using the annotation
-  batch's artifact id and version.
+- Respond with a new version of the same artifact. Use the complete current
+  document and dispatch version supplied at delivery as the revision base.
+  A comparison note's older snippet and version are historical evidence,
+  not the version to replace.
 - Preserve unaffected content and any human-authored changes.
 
 The user's normal conversation text may accompany the annotation batch. Apply

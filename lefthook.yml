@@ -6,4 +6,4 @@ pre-commit:
       stage_fixed: true
     - name: types
       glob: "*.{ts,tsx,json}"
-      run: node_modules/.bin/tsc --noEmit
+      run: bun run typecheck

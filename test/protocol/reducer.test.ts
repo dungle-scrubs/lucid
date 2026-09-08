@@ -1527,7 +1527,42 @@ describe("RFC-03: the record remembers which harness held the session", () => {
     expect(s.harnessSessions.claude).toBe("new-session");
   });
 
-  test("an interactive attachment attributes nothing", () => {
+  test("an unknown newer identity preserves the last verified participation as history", () => {
+    const attached = expectAccepted(reduce(fresh(), attach({ harness: "claude" }), 1_000));
+    const verified = expectAccepted(
+      reduce(
+        attached.state,
+        {
+          kind: "event",
+          epoch: attached.state.epoch,
+          n: 1,
+          turnId: "first",
+          event: { kind: "identity", sessionId: "verified", authority: "harness-minted" },
+        },
+        1_001,
+      ),
+    );
+    const unknown = expectAccepted(
+      reduce(
+        verified.state,
+        {
+          kind: "event",
+          epoch: attached.state.epoch,
+          n: 2,
+          turnId: "first",
+          event: { kind: "identity", sessionId: "unverified", authority: "future-authority" },
+        },
+        1_002,
+      ),
+    );
+    expect(unknown.state.harnessSessions.claude).toBe("unverified");
+    const history = verified.state.nativeSessions.claude;
+    if (!history) throw new Error("expected verified history");
+    expect(unknown.state.nativeSessions.claude).toEqual({ ...history, current: false });
+    expect(unknown.state.nativeSessions.claude?.sessionId).toBe("verified");
+  });
+
+  test("an unnamed interactive attachment leaves its native identity unattributed", () => {
     const a = reduce(fresh(), attach({ profile: "interactive" }), 1_000);
     if (a.verdict !== "accepted") throw new Error("attach refused");
     const e = reduce(
@@ -1536,7 +1571,45 @@ describe("RFC-03: the record remembers which harness held the session", () => {
       1_000,
     );
     if (e.verdict !== "accepted") throw new Error("event refused");
-    // lucid does not own that process and must never offer its id to anyone.
+    // A source that did not name its harness cannot populate another harness's map.
     expect(e.state.harnessSessions).toEqual({});
+  });
+
+  test("a named interactive identity retains its harness and producing participation after detach", () => {
+    const a = expectAccepted(
+      reduce(fresh(), attach({ profile: "interactive", harness: "claude" }), 1_000),
+    );
+    const e = expectAccepted(
+      reduce(
+        a.state,
+        {
+          kind: "event",
+          epoch: a.state.epoch,
+          n: 1,
+          turnId: "native-turn",
+          event: { kind: "identity", sessionId: "human-session", authority: "harness-minted" },
+        },
+        1_001,
+      ),
+    );
+    const detached = expectAccepted(
+      reduce(
+        e.state,
+        {
+          kind: "detach",
+          epoch: a.state.epoch,
+          reason: "yield",
+        },
+        1_002,
+      ),
+    );
+    expect(detached.state.harnessSessions.claude).toBe("human-session");
+    expect(detached.state.nativeSessions.claude).toMatchObject({
+      sessionId: "human-session",
+      profile: "interactive",
+      epoch: a.state.epoch,
+      turnId: "native-turn",
+      authority: "harness-minted",
+    });
   });
 });

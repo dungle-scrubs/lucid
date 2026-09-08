@@ -33,13 +33,18 @@ import { createRoot } from "react-dom/client";
 import {
   type Annotation,
   type AnnotationSpot,
+  type AttachedFile,
   clampSnippet,
+  detectAnnotationBatch,
   encodeAnnotationBatch,
   NOTE_QUEUE_MAX,
   queueAdmits,
 } from "../../protocol/annotations.js";
 import { ARTIFACT_TITLE_MAX } from "../../protocol/artifact-title.js";
-import { type Activity as ActivitySnapshot, describeActivity } from "./activity.js";
+import { ATTACHMENT_BYTES_MAX } from "../../protocol/attachment.js";
+import { comparisonMetadata } from "../../protocol/comparison-note.js";
+import type { ExecutionView } from "../../protocol/execution-view.js";
+import { type Activity as ActivitySnapshot, describeActivity, type Report } from "./activity.js";
 import {
   type Confidence,
   resolveSpot,
@@ -48,17 +53,70 @@ import {
   selectorsForQuote,
   sha256Hex,
 } from "./anchor.js";
+import { useArtifactWidth } from "./artifact-width-control.js";
+import type { ComparisonDraft } from "./comparison-draft.js";
+import { comparisonDraftText, restoreComparisonDraft } from "./comparison-draft.js";
+import type { ComparisonPair } from "./content-comparison.js";
+import { ContentComparisonView } from "./content-comparison.js";
+import type { DriverChoiceBody, DriverChoices, DriverPreference } from "./driver-menus.js";
+import {
+  chooseEffort,
+  chooseHarness,
+  chooseModel,
+  driverLineState,
+  effortGloss,
+  type MenuKey,
+} from "./driver-menus.js";
+import { ExecutionRecovery } from "./execution-recovery.js";
 import { isModeToggle, isQueueSend } from "./hotkeys.js";
+import {
+  ArchiveDuotone,
+  ArrowDownDuotone,
+  ArrowRightDuotone,
+  ArrowUpDuotone,
+  CaretDownDuotone,
+  FileDuotone,
+  FileTextDuotone,
+  ImageDuotone,
+  LockDuotone,
+  PaperclipDuotone,
+  PencilDuotone,
+  ProhibitDuotone,
+  TableDuotone,
+  XDuotone,
+} from "./icons.js";
+import type { PendingInput } from "./input-recovery.js";
+import { createInputRecovery, pendingInputText } from "./input-recovery.js";
+import { InputRecoveryPanel } from "./input-recovery-panel.js";
+import type { InputSubmissionResult } from "./input-submission.js";
+import { createInputSubmission } from "./input-submission.js";
+import { InputRecovery } from "./input-submission-recovery.js";
 import { ELEMENT_ID, FRAME_MESSAGE_SOURCE, instrumentArtifact } from "./instrument.js";
 import {
   CONVERSATION_MAX,
   CONVERSATION_MIN,
   clampConversationWidth,
+  clampDocumentShare,
+  DEFAULT_DOCUMENT_SHARE,
+  DOCUMENT_SHARE_MAX,
+  DOCUMENT_SHARE_MIN,
   readConversationWidth,
   writeConversationWidth,
 } from "./layout.js";
+import { LocationControl, type LocationState } from "./location-control.js";
 import { formatRoute, parseRoute, type Route, sameRoute } from "./route.js";
-import { type Msg, type PendingNote, type SentBatch, weaveNotes } from "./timeline.js";
+import { seamsForLost } from "./seams.js";
+import { SettingsForm } from "./settings-form.js";
+import { SettingsPopover } from "./settings-popover.js";
+import {
+  type Msg,
+  type PendingNote,
+  runtimeMessage,
+  type SentBatch,
+  weaveNotes,
+} from "./timeline.js";
+import { diffVersions } from "./version-diff.js";
+import { isReadOnly, versionState } from "./version-state.js";
 
 /** Kept in step with the server's own poll interval. */
 const POLL_MS = 500;
@@ -134,6 +192,11 @@ const DocName = ({
         }}
       >
         {shown}
+        {/* The affordance, on approach only: the name is the most
+            prominent word in the bar and needs no standing label beside it. */}
+        <span className="pencil">
+          <PencilDuotone size={14} />
+        </span>
       </button>
     );
   }
@@ -205,6 +268,12 @@ const linesToMessages = (lines: readonly Line[]): Msg[] =>
       role: l.kind === "agent" ? ("assistant" as const) : ("user" as const),
       text: l.text,
       ...(l.event === "tool" ? { tool: true } : {}),
+      ...(l.event === "comparison-held" ? { note: true } : {}),
+      ...(l.event === "error" || l.event === "limit"
+        ? { refusal: true }
+        : l.event === "failure"
+          ? { refusal: true, harnessFailed: true }
+          : {}),
       ...(l.batch === undefined ? {} : { sentBatch: l.batch }),
     }));
 
@@ -215,11 +284,118 @@ const linesToMessages = (lines: readonly Line[]): Msg[] =>
  * note said and what it pointed at. Context rather than a prop because the
  * component is handed to assistant-ui, which does the rendering. */
 const Resolutions = React.createContext<
-  ReadonlyMap<string, { lost: boolean; later: boolean; how: string | null }>
+  ReadonlyMap<
+    string,
+    {
+      lost: boolean;
+      later: boolean;
+      how: string | null;
+      elementId: string | null;
+      /** The version the note was made against: where a lost note still
+       * reads, and what "Open vNN beside this" opens. */
+      fromVersion: number;
+    }
+  >
 >(new Map());
+
+/** Hold one version against the one on screen (6b). Context for the same
+ * reason `Resolutions` is: the message component cannot take a prop. */
+const CompareWith = React.createContext<((version: number) => void) | null>(null);
+
+/** A thumbnail for a stored attachment, by hash. Returns the object URL if
+ * the bytes are an image, null when they are not or could not be read.
+ * Context, ditto: the chips inside note cards are rendered by assistant-ui. */
+const ThumbFor = React.createContext<((hash: string) => Promise<string | null>) | null>(null);
+
+/** Go to what a note points at.
+ *
+ * Context for the same reason `Resolutions` is: the message component is
+ * handed to assistant-ui, which does the rendering, so nothing can be passed
+ * down as a prop. `null` while no document is on screen. */
+const FocusSpot = React.createContext<((ids: readonly string[]) => void) | null>(null);
+
+/** The anchoring bands: how confidently a sent note still points where it
+ * did (handoff, "Anchoring bands").
+ *
+ * Three 5x9px bars - accent filled, accent-300 outline empty - read at a
+ * glance what the head wording used to spell out. Lost and not-on-this-
+ * version are shapes instead: a grey bar and a dashed outline. A fact about
+ * history, never an error, so nothing here is magenta. */
+const Bands = ({
+  how,
+  lost,
+  later,
+}: {
+  how: string | null;
+  lost: boolean;
+  later: boolean;
+}): React.ReactElement | null => {
+  if (lost) return <span className="bands lost" aria-hidden="true" />;
+  if (later) return <span className="bands later" aria-hidden="true" />;
+  // Made against the version on screen, or found verbatim: still exact.
+  // Reworded but matched: two. Matched without the words agreeing - by
+  // position or by path - one bar and a label that says to check it.
+  const filled = how === null || how === "exact" ? 3 : how === "approximate" ? 2 : 1;
+  return (
+    <span className="bands" aria-hidden="true">
+      {[1, 2, 3].map((n) => (
+        <span key={n} className={n <= filled ? "b on" : "b"} />
+      ))}
+    </span>
+  );
+};
+
+/** A file a SENT note carried (4a state 6, mapped to the note card). Inside
+ * the turn the chips lose their x and keep their size; the image reads its
+ * bytes back through the same token-checked fetch the composer uses, once,
+ * and stands on the design's placeholder until then. */
+const SentFileChip = ({ file }: { file: AttachedFile }): React.ReactElement => {
+  const thumbFor = React.useContext(ThumbFor);
+  const [url, setUrl] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    let alive = true;
+    if (file.contentType.startsWith("image/")) {
+      void thumbFor?.(file.hash).then((u) => {
+        if (alive) setUrl(u);
+      });
+    }
+    return () => {
+      alive = false;
+    };
+  }, [file.hash, file.contentType, thumbFor]);
+  if (file.contentType.startsWith("image/")) return <ImageChip name={file.name} url={url} />;
+  return <PillChip name={file.name} contentType={file.contentType} bytes={file.bytes} />;
+};
+
+/** The lost-note light (6a, "Target lost"): clicking a note with nowhere to
+ * go lights the note itself, in the conversation, and nothing in the
+ * document pane moves. Not drawn as an error - the light is the same accent
+ * wash a found target takes, and it fades on the same 2.6s the pulse uses. */
+const useLostLight = (): {
+  lit: string | null;
+  light: (key: string) => void;
+} => {
+  const [lit, setLit] = React.useState<string | null>(null);
+  const timer = React.useRef<number | null>(null);
+  React.useEffect(
+    () => () => {
+      if (timer.current !== null) window.clearTimeout(timer.current);
+    },
+    [],
+  );
+  const light = React.useCallback((key: string): void => {
+    setLit(key);
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setLit(null), 2600);
+  }, []);
+  return { lit, light };
+};
 
 const Message = (): React.ReactElement => {
   const resolutions = React.useContext(Resolutions);
+  const focusSpot = React.useContext(FocusSpot);
+  const compareWith = React.useContext(CompareWith);
+  const { lit, light } = useLostLight();
   const resolutionFor = (note: string, snippet: string) =>
     resolutions.get(`${note}\u0000${snippet}`);
   // A tool call is the agent working, not the agent talking. Rendered as a
@@ -243,37 +419,174 @@ const Message = (): React.ReactElement => {
 
   if (one?.sentBatch !== undefined) {
     const b = one.sentBatch;
+    if (
+      b.comparison !== undefined ||
+      b.notes.some((note) =>
+        note.spots.some(
+          (spot) => spot.sourceVersion !== undefined || spot.sourceHash !== undefined,
+        ),
+      )
+    )
+      return (
+        <MessagePrimitive.Root>
+          <div className="batch comparison-transcript-note" id={`comparison-note-${b.inputId}`}>
+            <div className="note-card-head">
+              Your note on saved v{b.version} · {b.status === "applied" ? "delivered" : "queued"}
+            </div>
+            {b.notes.map((note) => (
+              <div key={note.note}>
+                <blockquote>{note.spots.map((spot) => spot.snippet).join("\n")}</blockquote>
+                <p>{note.note}</p>
+              </div>
+            ))}
+            <p className="comparison-coverage">
+              Historical content
+              {b.comparisonUsable
+                ? `; reviewed against v${b.comparison?.reviewedVersion}`
+                : "; saved comparison navigation is unavailable"}
+              .
+            </p>
+            {b.hold ? <p role="status">{b.hold}</p> : null}
+            {b.comparisonUsable ? (
+              <a
+                className="comparison-marker"
+                href={formatRoute({
+                  conversationId: routeFromPath()?.conversationId ?? "",
+                  artifactId: b.artifactId,
+                  version: b.version,
+                })}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Inspect saved v{b.version}
+              </a>
+            ) : null}
+          </div>
+        </MessagePrimitive.Root>
+      );
     return (
       <MessagePrimitive.Root>
         <div className="batch">
           {b.notes.map((n) => {
             const spot = n.spots[0];
             const status = resolutionFor(n.note, spot?.snippet ?? "");
+            // Somewhere to go, and something to go there with. A lost note
+            // and a note written against another version both stay inert:
+            // there is no target, and scrolling somewhere arbitrary is worse
+            // than not moving.
+            // Every spot the note covers, in the order they were written.
+            // A note can point at several elements and all of them are part
+            // of what it is about.
+            const targets = n.spots
+              .map((sp) => resolutionFor(n.note, sp.snippet)?.elementId ?? null)
+              .filter((id): id is string => id !== null);
+            const canGo = focusSpot !== null && targets.length > 0;
+            // The band reads off the same resolution the travel rule does.
+            // A note made against the version on screen resolves to nothing
+            // special - which is the exact case, three bars. No entry at
+            // all means the resolutions have not landed yet: no band, no
+            // claim, rather than a guess dressed as a fact.
+            const how = status === undefined ? undefined : status.how;
+            const lost = status?.lost === true;
+            const state =
+              status === undefined
+                ? `sent · v${b.version}`
+                : lost
+                  ? "lost · nothing left to point at"
+                  : status.later === true
+                    ? "not on this version"
+                    : how === "approximate"
+                      ? "reworded, found anyway"
+                      : how === "position" || how === "css"
+                        ? "a guess · worth checking"
+                        : "still exact";
+            // 6a: a lost note is still clickable. There is nowhere to
+            // travel to, so the click lights the note here instead - the
+            // document never moves.
+            const lostKey = `${n.note}:${spot?.id ?? ""}`;
+            const goLost = (): void => light(lostKey);
+            const fromVersion = status?.fromVersion;
             return (
-              <div
-                className={
-                  status?.lost === true
-                    ? "note-card orphan"
-                    : status?.later === true
-                      ? "note-card later"
-                      : "note-card sent"
-                }
-                key={`${n.note}:${spot?.id ?? ""}`}
-              >
-                <span className="note-card-head">
-                  {status?.later === true
-                    ? `written against v${b.version} · not on this one`
-                    : status?.lost === true
-                      ? `lost its target · from v${b.version}`
-                      : status === undefined || status.how === null
-                        ? `sent · v${b.version}`
-                        : `sent · ${status.how} · v${b.version}`}
-                </span>
-                <span className="note-card-note">{n.note}</span>
-                <span className="note-card-spot">
-                  on {n.spots.map((sp) => `“${sp.snippet.slice(0, 40)}”`).join(", ")}
-                </span>
-              </div>
+              <React.Fragment key={lostKey}>
+                <div
+                  className={[
+                    "note-card",
+                    lost ? "orphan" : status?.later === true ? "later" : "sent",
+                    canGo ? "goes" : "",
+                    lit === lostKey ? "lit" : "",
+                  ]
+                    .filter((c) => c !== "")
+                    .join(" ")}
+                  {...(canGo
+                    ? {
+                        role: "button" as const,
+                        tabIndex: 0,
+                        title: "Go to what this note is about",
+                        onClick: () => focusSpot?.(targets),
+                        onKeyDown: (e: React.KeyboardEvent) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            focusSpot?.(targets);
+                          }
+                        },
+                      }
+                    : lost
+                      ? {
+                          role: "button" as const,
+                          tabIndex: 0,
+                          title: "Nothing to go to - the passage is gone from this version",
+                          onClick: goLost,
+                          onKeyDown: (e: React.KeyboardEvent) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              goLost();
+                            }
+                          },
+                        }
+                      : {})}
+                >
+                  <span className="note-card-head">
+                    <span className="note-card-kind">Your note</span>
+                    {status === undefined ? null : (
+                      <Bands how={how ?? null} lost={status.lost} later={status.later} />
+                    )}
+                    <span className="note-card-state">{state}</span>
+                  </span>
+                  <span className="note-card-quote">
+                    {n.spots.map((sp) => `“${sp.snippet.slice(0, 44)}”`).join(", ")}
+                  </span>
+                  <span className="note-card-note">{n.note}</span>
+                  {/* Sent attachments ride the note: read, never imported.
+                      The "read in full - N words, N rows" confirmation line
+                      is NOT drawn, because the client would have to compute
+                      it and the record never states it; the agent's own turn
+                      text carries whatever it measured. */}
+                  {n.files === undefined || n.files.length === 0 ? null : (
+                    <span className="note-card-files">
+                      {n.files.map((f) => (
+                        <SentFileChip file={f} key={f.hash} />
+                      ))}
+                    </span>
+                  )}
+                </div>
+                {/* 3e / 6a: a lost note still reads on the version it was
+                    written against, and the way to see that is the compare
+                    view - the passage beside its absence. */}
+                {lost && fromVersion !== undefined && compareWith !== null ? (
+                  <div className="card">
+                    <div className="card-title">A lost note is a fact, not an error.</div>
+                    <div className="card-body">
+                      The words it was attached to are not in this version. It stays in the
+                      conversation, and it still reads on v{fromVersion}, where the passage lives.
+                    </div>
+                    <div className="card-actions">
+                      <button type="button" onClick={() => compareWith(fromVersion)}>
+                        Open v{fromVersion} beside this
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </React.Fragment>
             );
           })}
         </div>
@@ -285,12 +598,41 @@ const Message = (): React.ReactElement => {
     const pn = one.pendingNote;
     return (
       <MessagePrimitive.Root>
+        {/* Yours until it is sent: the accent rule and the word queued say
+            whose it is and that nothing has left the page yet. */}
         <div className="note-card pending">
-          <span className="note-card-head">not sent</span>
-          <span className="note-card-note">{pn.note}</span>
-          <span className="note-card-spot">
-            on {pn.spots.map((sp) => `“${sp.snippet.slice(0, 44)}”`).join(", ")}
+          <span className="note-card-head">
+            <span className="note-card-kind">Your note</span>
+            <span className="note-card-state">queued · still yours to change</span>
           </span>
+          <span className="note-card-quote">
+            {pn.spots.map((sp) => `“${sp.snippet.slice(0, 44)}”`).join(", ")}
+          </span>
+          <span className="note-card-note">{pn.note}</span>
+        </div>
+      </MessagePrimitive.Root>
+    );
+  }
+
+  if (one?.refusal === true) {
+    // The substrate saying no, which is why the document did not change.
+    // Magenta and unmistakable, never alongside cyan in the same row: this
+    // is the one transcript kind that is not anybody talking. The terminal
+    // view prefixes the reason with a cross or a bang; the row already
+    // names who refused, so the prefix goes. Who said no differs: lucid
+    // refusing an input, or the harness failing a turn - a rate limit is
+    // the upstream refusing service, and the reader needs to know it was
+    // not lucid and not the agent.
+    const said = one.text.replace(/^([✗!])\s+/, "");
+    const who = one.harnessFailed === true ? "the turn failed" : "lucid refused";
+    return (
+      <MessagePrimitive.Root>
+        <div className="msg refusal">
+          <div className="refusal-head">
+            <ProhibitDuotone size={12} />
+            <span className="refusal-kind">{who}</span>
+          </div>
+          <div className="body">{said}</div>
         </div>
       </MessagePrimitive.Root>
     );
@@ -317,9 +659,10 @@ const Message = (): React.ReactElement => {
           </div>
         </div>
       </MessagePrimitive.If>
+      {/* No label: the side says whose it is. Yours is the bubble on the
+          right; the agent's is the open text on the left. */}
       <MessagePrimitive.If assistant>
         <div className="msg agent">
-          <span className="who">agent</span>
           <div className="body">
             <MessagePrimitive.Parts />
           </div>
@@ -340,52 +683,684 @@ const Message = (): React.ReactElement => {
  *
  * `ScrollToBottom` is its affordance for getting back, and it hides itself
  * when you are already there. */
+/** A file attached to the message being written. Stored already - the hash
+ * is the record's, not the page's - so the page holds a reference and a URL
+ * to show it by, never a second copy of the bytes. */
+interface Attached {
+  readonly hash: string;
+  readonly name: string;
+  readonly contentType: string;
+  readonly bytes: number;
+  readonly text: boolean;
+  /** An object URL for the thumbnail, or null for a file with no picture.
+   *
+   * An object URL rather than the endpoint's own: an `img` tag cannot send
+   * the token header every `/api/` path requires, and putting a token in a
+   * URL puts it in logs and referrers. The page fetches the bytes with the
+   * header and shows what it already holds. */
+  readonly url: string | null;
+}
+
+/** A file on its way to the store. The bytes are known the moment they are
+ * chosen - `file.size` - and that is all the chip claims: a count, never a
+ * percentage, because a fetch cannot report how much of the body has left. */
+interface Uploading {
+  readonly id: string;
+  readonly name: string;
+  readonly bytes: number;
+}
+
+/** The substrate refusing an attach or a send (4a state 5, G2). The reason
+ * rides on the chip and stays until it is dismissed: a toast that leaves on
+ * its own would take the only statement of what happened with it. */
+interface Refusal {
+  readonly id: string;
+  /** What was refused, when the refusal is about a file. */
+  readonly name: string | null;
+  readonly reason: string;
+}
+
+/** "18 KB", "3.4 MB" - one decimal under ten, whole above, as the design
+ * writes sizes on its chips. */
+const fmtBytes = (n: number): string => {
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB"];
+  let v = n / 1024;
+  let u = 0;
+  while (v >= 1024 && u < units.length - 1) {
+    v /= 1024;
+    u += 1;
+  }
+  const shown = v >= 10 || Number.isInteger(v) ? Math.round(v) : Number(v.toFixed(1));
+  return `${shown} ${units[u] as string}`;
+};
+
+/** The glyph a chip carries when it has no picture. What the file IS, read
+ * off its name and claimed type, in the design's own small vocabulary. */
+const FileGlyph = ({
+  contentType,
+  name,
+}: {
+  contentType: string;
+  name: string;
+}): React.ReactElement => {
+  const lower = name.toLowerCase();
+  if (/\.(zip|gz|tar|7z|bz2|xz)$/.test(lower)) return <ArchiveDuotone size={14} />;
+  if (/\.(csv|tsv)$/.test(lower)) return <TableDuotone size={14} />;
+  if (contentType.startsWith("text/") || /\.(md|txt|json|ya?ml|html?)$/.test(lower))
+    return <FileTextDuotone size={14} />;
+  if (contentType.startsWith("image/")) return <ImageDuotone size={14} />;
+  return <FileDuotone size={14} />;
+};
+
+/** One attached image, as the design draws it: a 64px thumb, the filename on
+ * a translucent ink strip along the bottom, an x in the corner while it can
+ * still be taken off. `url` null means the bytes are an image the page has
+ * not read back - the dot-screen placeholder stands in until they arrive. */
+const ImageChip = ({
+  name,
+  url,
+  onRemove,
+}: {
+  name: string;
+  url: string | null;
+  onRemove?: () => void;
+}): React.ReactElement => (
+  <span className="chip imgchip" title={name}>
+    {url === null ? (
+      <span className="thumb-img none" aria-hidden="true">
+        <ImageDuotone size={18} />
+      </span>
+    ) : (
+      <img src={url} alt="" className="thumb-img" />
+    )}
+    <span className="thumb-name">{name}</span>
+    {onRemove === undefined ? null : (
+      <button type="button" className="chip-x corner" title="Remove" onClick={onRemove}>
+        <XDuotone size={9} />
+      </button>
+    )}
+  </span>
+);
+
+/** One attached file that is not a picture: a 32px pill - glyph, name (128px
+ * at most), size, and an x while it is still removable. */
+const PillChip = ({
+  name,
+  contentType,
+  bytes,
+  onRemove,
+}: {
+  name: string;
+  contentType: string;
+  bytes: number;
+  onRemove?: () => void;
+}): React.ReactElement => (
+  <span className="chip pill">
+    <span className="chip-glyph" aria-hidden="true">
+      <FileGlyph contentType={contentType} name={name} />
+    </span>
+    <span className="chip-name">{name}</span>
+    <span className="chip-size">{fmtBytes(bytes)}</span>
+    {onRemove === undefined ? null : (
+      <button type="button" className="chip-x" title="Remove" onClick={onRemove}>
+        <XDuotone size={10} />
+      </button>
+    )}
+  </span>
+);
+
+/** A file on its way in (4a state 3): the same pill with a 2px accent line
+ * along its bottom edge and the byte count where the size goes. No x - a
+ * fetch in flight cannot be taken back. */
+const UploadingChip = ({ name, bytes }: { name: string; bytes: number }): React.ReactElement => (
+  <span className="chip pill uploading" title={name}>
+    <span className="chip-glyph" aria-hidden="true">
+      <FileGlyph contentType="" name={name} />
+    </span>
+    <span className="chip-name">{name}</span>
+    <span className="chip-size">{fmtBytes(bytes)}</span>
+  </span>
+);
+
+/** A refusal (4a state 5): magenta, the reason on the chip, and it stays
+ * until it is dismissed. */
+const RefusalChip = ({
+  name,
+  reason,
+  onDismiss,
+}: {
+  name: string | null;
+  reason: string;
+  onDismiss: () => void;
+}): React.ReactElement => (
+  <span className="chip pill refused">
+    {name === null ? null : <span className="chip-name">{name}</span>}
+    <span className="chip-reason">{reason}</span>
+    <button type="button" className="chip-x" title="Dismiss" onClick={onDismiss}>
+      <XDuotone size={10} />
+    </button>
+  </span>
+);
+
+/** What the mode segment's hover gloss says, one string per mode. Verbatim
+ * from the product's mode table (CONTEXT.md) as the handoff requires, so
+ * the surface and the docs cannot drift. */
+const MODE_GLOSS: Readonly<Record<string, string>> = {
+  interactive:
+    "A terminal session you own. lucid attaches, records everything, and can interject - it does not drive.",
+  "headless-session":
+    "lucid spawns the harness and drives it. The harness recalls its own session across restarts.",
+  "headless-turn":
+    "No session recall. Each send starts the harness fresh; lucid's record is what carries continuity.",
+};
+
+/** Selection uses background color; effort rows retain their explanatory gloss. */
+const DriverMenuRow = ({
+  label,
+  gloss,
+  selected,
+  onPick,
+}: {
+  label: string;
+  gloss?: string;
+  selected: boolean;
+  onPick: () => void;
+}): React.ReactElement => {
+  const hasGloss = gloss !== undefined && gloss !== "";
+  return (
+    <button
+      type="button"
+      role="menuitemradio"
+      aria-checked={selected}
+      className={
+        selected
+          ? hasGloss
+            ? "driver-row selected glossed"
+            : "driver-row selected"
+          : hasGloss
+            ? "driver-row glossed"
+            : "driver-row"
+      }
+      onClick={onPick}
+    >
+      <span className="driver-row-text">
+        <span className="driver-row-label">{label}</span>
+        {hasGloss ? <span className="driver-gloss">{gloss}</span> : null}
+      </span>
+    </button>
+  );
+};
+
+/** The menus' width, from the handoff's drawn values: the model menu draws
+ * at 214px and the effort menu at 226px; the harness menu is the same shape
+ * as the model's. One constant serves the left clamp. */
+const DRIVER_MENU_W = 226;
+
+/** The driver line (7a-7d): harness · mode · model · effort docked under
+ * the prompt, in the transcript datelines' voice. The order is the
+ * design's - harness, mode and model are one thought (the program, how
+ * lucid runs it, the weights); effort alters a turn rather than the
+ * connection, so it is last. A segment whose value the record does not
+ * carry is absent, not disabled - and so is a blank or a ghost.
+ *
+ * Harness, model and effort are controls now (RFC-12): hover takes the
+ * accent pill, opening takes the segment solid, and a pick POSTs the whole
+ * preference - the line settles from the next poll, because
+ * nothing renders because the browser believes it happened. Mode stays a
+ * report below the composer: it is not settable from the browser, and a
+ * control that cannot act is not drawn as one. Interactive offers no
+ * menus at all - the human's session chose the driver and lucid cannot
+ * change it mid-run - and its harness and model sit at 55% report ink.
+ */
+const DriverLine = ({
+  driver,
+  preference,
+  choices,
+  onChoose,
+}: {
+  driver: Driver;
+  /** What the person chose (RFC-12), beside what is driving. The menus'
+   * selected rows are these values; the labels are these where only a
+   * choice can name the dimension. */
+  preference: DriverPreference | null;
+  /** The served lists: the four harnesses, each harness's models and
+   * efforts. Null when the server did not send them, and then no menu is
+   * offered - absent, not disabled. */
+  choices: DriverChoices | null;
+  /** POST a whole preference. Answers null on success, or why it refused,
+   * drawn beside the line that made the choice. */
+  onChoose: (body: DriverChoiceBody) => Promise<string | null>;
+}): React.ReactElement | null => {
+  const mode = preference?.profile ?? driver.profile;
+  const [editor, setEditor] = React.useState<string | null>(null);
+  const wrapper = React.useRef<HTMLDivElement | null>(null);
+  const [open, setOpen] = React.useState<{ key: MenuKey; left: number } | null>(null);
+  const [choiceError, setChoiceError] = React.useState<string | null>(null);
+  const [freeModel, setFreeModel] = React.useState("");
+  React.useEffect(() => {
+    if (open === null) return;
+    // One menu at a time closes on Escape and on a click anywhere outside
+    // itself - including on another segment, which opens that one instead.
+    const close = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") setOpen(null);
+    };
+    const away = (e: PointerEvent): void => {
+      if (wrapper.current?.contains(e.target as Node | null) !== true) setOpen(null);
+    };
+    document.addEventListener("keydown", close);
+    document.addEventListener("pointerdown", away);
+    return () => {
+      document.removeEventListener("keydown", close);
+      document.removeEventListener("pointerdown", away);
+    };
+  }, [open]);
+  const pick = React.useCallback(
+    async (body: DriverChoiceBody | null): Promise<void> => {
+      setOpen(null);
+      if (body === null) return;
+      if (!preference?.model || !preference.effort || !preference.profile) {
+        setEditor(body.harness);
+        setChoiceError("Complete the settings before saving this choice.");
+        return;
+      }
+      setChoiceError(null);
+      const why = await onChoose(body);
+      if (why !== null) setChoiceError(why);
+    },
+    [onChoose, preference],
+  );
+  const state = driverLineState({
+    profile: undefined,
+    driverHarness: driver.harness,
+    driverModel: driver.model,
+    preference,
+    choices,
+  });
+  const interactive = mode === "interactive";
+  /** Open a segment's menu, its left edge on the segment - clamped so a
+   * long label near the column's right edge cannot push the menu into the
+   * document pane. Effort never comes here: it opens right-aligned. */
+  const openAt = (key: MenuKey, el: HTMLElement): void => {
+    const line = wrapper.current;
+    let left = el.offsetLeft;
+    if (line !== null) left = Math.min(left, Math.max(0, line.clientWidth - DRIVER_MENU_W - 8));
+    setFreeModel("");
+    setOpen((was) => (was !== null && was.key === key ? null : { key, left }));
+  };
+  const seg = (key: MenuKey, label: string): React.ReactElement => {
+    const live = state.menus.has(key);
+    if (!live) {
+      return (
+        <span className={interactive ? "driver-seg report" : "driver-seg"} key={key}>
+          {label}
+        </span>
+      );
+    }
+    const isOpen = open?.key === key;
+    return (
+      <button
+        type="button"
+        className="driver-seg pick"
+        key={key}
+        aria-label={`${key}: ${label}`}
+        aria-expanded={isOpen}
+        aria-haspopup="menu"
+        onClick={(e) => openAt(key, e.currentTarget)}
+      >
+        {label}
+        <span aria-hidden="true" className={isOpen ? "driver-caret flipped" : "driver-caret"}>
+          <CaretDownDuotone size={9} />
+        </span>
+      </button>
+    );
+  };
+  const segments: { key: string; el: React.ReactElement }[] = [
+    // Nothing driving and nothing chosen still names the state in the
+    // product's own words (3d: "No driver"), so the harness menu hangs
+    // somewhere and the first choice can be made from the browser - the
+    // natural moment, per RFC-12's open question 1. No menu offered, no
+    // segment: a line with nothing to say is not drawn.
+    ...(state.harness === null && !state.menus.has("harness")
+      ? []
+      : [{ key: "harness", el: seg("harness", state.harness ?? "Choose harness") }]),
+    // The model segment renders wherever a choice exists, even before one
+    // is made: until then the harness's own default runs, and "default
+    // model" names that honestly instead of hiding the dimension. Kevin's
+    // order (2026-08-29, over the handoff's): provider · model · effort ·
+    // the mode is reported separately below the composer.
+    ...(state.menus.has("model")
+      ? [{ key: "model", el: seg("model", state.model ?? "default model") }]
+      : state.model === null
+        ? []
+        : [{ key: "model", el: seg("model", state.model) }]),
+    ...(state.effort === null ? [] : [{ key: "effort", el: seg("effort", state.effort) }]),
+  ];
+  const rowsFor = (key: MenuKey): React.ReactElement[] => {
+    if (key === "harness") {
+      return (choices?.harnesses ?? []).map((h) => (
+        <DriverMenuRow
+          key={h}
+          label={h}
+          selected={h === state.harness}
+          onPick={() => {
+            setOpen(null);
+            if (chooseHarness(h, state)) setEditor(h);
+          }}
+        />
+      ));
+    }
+    const vocabulary = state.vocabulary;
+    if (vocabulary === null) return [];
+    if (key === "model") {
+      const listed = vocabulary.models.map((m) => (
+        <DriverMenuRow
+          key={m}
+          label={m}
+          selected={m === state.model}
+          onPick={() => void pick(chooseModel(m, state, preference))}
+        />
+      ));
+      // The open entry (extensible harnesses, RFC-12): pi registers models
+      // at runtime, so the listed ids are examples of a kind rather than
+      // the kind's whole population.
+      // The highlight marks the committed choice only: while a new id is
+      // being typed, the row is a field, not the selected answer.
+      const freeSelected =
+        freeModel === "" && state.model !== null && !vocabulary.models.includes(state.model);
+      return vocabulary.extensible
+        ? [
+            ...listed,
+            <div className={freeSelected ? "driver-free selected" : "driver-free"} key="free">
+              <input
+                aria-label="Another model id"
+                onChange={(e) => setFreeModel(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  const id = freeModel.trim();
+                  if (id !== "") void pick(chooseModel(id, state, preference));
+                }}
+                placeholder="other model id…"
+                spellCheck={false}
+                value={freeSelected ? (state.model ?? "") : freeModel}
+              />
+            </div>,
+          ]
+        : listed;
+    }
+    return vocabulary.efforts.map((level) => (
+      <DriverMenuRow
+        gloss={effortGloss(level, vocabulary.efforts)}
+        key={level}
+        label={level}
+        selected={level === state.effort}
+        onPick={() => void pick(chooseEffort(level, state, preference))}
+      />
+    ));
+  };
+  // A line with no segments says nothing and is not drawn - the interactive
+  // record whose server sent no lists, the dead connection the dock already
+  // hides.
+  if (segments.length === 0) return null;
+  return (
+    <div className={interactive ? "driver-line interactive" : "driver-line"} ref={wrapper}>
+      {segments.map((s) => (
+        <React.Fragment key={s.key}>{s.el}</React.Fragment>
+      ))}
+      {state.harness === null && state.menus.has("harness") ? (
+        <>
+          <button type="button" className="driver-seg pick" disabled title="Choose a harness first">
+            Model
+          </button>
+          <button type="button" className="driver-seg pick" disabled title="Choose a harness first">
+            Reasoning
+          </button>
+        </>
+      ) : null}
+      <SettingsPopover
+        label="Settings"
+        open={editor !== null}
+        onOpenChange={(value) => setEditor(value ? (state.harness ?? "") : null)}
+      >
+        <SettingsForm
+          key={`${preference?.revision ?? 0}:${editor}`}
+          initial={{
+            harness: editor ?? "",
+            model: editor === state.harness ? (state.model ?? "") : "",
+            effort: editor === state.harness ? (state.effort ?? "") : "",
+            profile: mode ?? "headless-turn",
+            ...(editor === state.harness && preference?.provider
+              ? { provider: preference.provider }
+              : {}),
+          }}
+          choices={choices}
+          submitLabel="Save settings"
+          onSave={async (settings) => {
+            const error = await onChoose({
+              v: 1,
+              ...settings,
+              expectedRevision: preference?.revision ?? 0,
+            });
+            if (!error) setEditor(null);
+            return error;
+          }}
+        />
+      </SettingsPopover>
+      {choiceError === null ? null : (
+        <span className="driver-choice-error">Choice not saved: {choiceError}</span>
+      )}
+      {open === null ? null : (
+        <div
+          className={open.key === "effort" ? "driver-menu align-right" : "driver-menu"}
+          role="menu"
+          style={open.key === "effort" ? undefined : { left: `${open.left}px` }}
+        >
+          {rowsFor(open.key)}
+          {open.key === "effort" ? null : (
+            <>
+              <div className="driver-menu-rule" />
+              <div className="driver-menu-note">
+                Changing the model does not restart the conversation.
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const Thread = ({
   pending,
   onSendNotes,
   onDiscardNotes,
   sending,
-  activity,
-  now,
-  lastChange,
+  report,
+  version,
+  dead,
+  invite,
+  collision,
+  onSave,
+  onShowWaiting,
+  attachments,
+  uploading,
+  refusals,
+  onAttach,
+  onRemoveAttachment,
+  onDismissRefusal,
+  driver,
+  driverPreference,
+  driverChoices,
+  onDriverChoice,
+  location,
+  settingsIssue,
+  onLocation,
+  recovery,
+  executionRecovery,
+  comparisonRecovery,
+  comparisonBlocked,
 }: {
   pending: readonly PendingNote[];
   onSendNotes: () => void;
   onDiscardNotes: () => void;
   sending: boolean;
-  activity: Activity;
-  /** Ticks once a second, so the count moves without a render loop. */
-  now: number;
-  /** When the transcript last changed. */
-  lastChange: number;
+  /** What the dock said about the agent, moved into the conversation's own
+   * status pill (3c, 6e Wait). Neutral ink while it is only a wait; the one
+   * warning is the stall. */
+  report: Report;
+  /** The document's version, for the stall card's facts. Null when no
+   * document is on screen. */
+  version: number | null;
+  /** The connection is dead (3d): the transcript fades, queued notes become
+   * one held card, and the composer says so. */
+  dead: boolean;
+  /** No document yet (3a): the conversation is the way in, so its field is
+   * dressed as the thing to do - accent border, ring, solid send. */
+  invite: boolean;
+  /** A version arrived underneath unsaved edits (3f): the collision card in
+   * the conversation offers both answers, and neither destroys anything. */
+  collision: { readonly arrived: number; readonly next: number } | null;
+  onSave: () => void;
+  onShowWaiting: (arrived: number) => void;
+  /** Files attached to the message being written, not yet sent. */
+  attachments: readonly Attached[];
+  uploading: readonly Uploading[];
+  refusals: readonly Refusal[];
+  onAttach: (files: FileList) => void;
+  onRemoveAttachment: (hash: string) => void;
+  onDismissRefusal: (id: string) => void;
+  /** What is driving, for the driver line docked under the composer
+   * (7a-7d) and for the composer's own variant: the mode decides whether
+   * the field sends or interjects, and whether the clip button is there. */
+  driver: Driver;
+  /** What the person chose (RFC-12) and the lists to choose from, both from
+   * the poll the client already makes. */
+  driverPreference: DriverPreference | null;
+  driverChoices: DriverChoices | null;
+  /** POST a whole driver preference; answers null or why it refused. */
+  onDriverChoice: (body: DriverChoiceBody) => Promise<string | null>;
+  location: LocationState | null;
+  settingsIssue: string | null;
+  onLocation: (folder: string, revision: number) => Promise<string | null>;
+  recovery: React.ComponentProps<typeof InputRecovery>;
+  executionRecovery?: React.ReactNode;
+  comparisonRecovery?: React.ReactNode;
+  comparisonBlocked?: boolean;
 }): React.ReactElement => {
-  const busyNow = activity.turn || activity.inFlight > 0 || activity.waiting > 0;
-  // When this stretch of work began. Held across renders because nothing in
-  // the record says it: a turn writes no line between its input and its
-  // terminal event, so the only witness to the start is the page that saw
-  // idle become busy. Adjusted during render, which is React's own form for
-  // state derived from a change in props.
-  const [wasBusy, setWasBusy] = React.useState(busyNow);
-  const [startedAt, setStartedAt] = React.useState<number | null>(busyNow ? now : null);
-  if (busyNow !== wasBusy) {
-    setWasBusy(busyNow);
-    setStartedAt(busyNow ? now : null);
-  }
-  // A turn that streams resets the clock as it goes; one that says nothing
-  // until it finishes is timed from when it started.
-  const since = Math.max(startedAt ?? now, lastChange);
-  const report = describeActivity(activity, (now - since) / 1000);
-  const { busy, stalled } = report;
+  const composerBox = React.useRef<HTMLTextAreaElement | null>(null);
+  const attachmentPicker = React.useRef<HTMLInputElement | null>(null);
+  const [modeIssue, setModeIssue] = React.useState<string | null>(null);
+  // 4a state 2: a file held over the composer is a drop target. The whole
+  // composer takes the dashed accent edge and the field says what will
+  // happen. Nothing lands on the document: a file is attached to the
+  // conversation or it goes back where it came from - never a version.
+  const [dragOver, setDragOver] = React.useState(false);
+  const stalled = report.stalled;
+  // 7c: the mode governs the composer too. interactive means a human owns
+  // the session - lucid attaches, records, and can interject, it does not
+  // drive - so the field says Interject and the clip button is gone. A
+  // file dropped on the composer still attaches: storing one is a lucid
+  // act, not a driving act.
+  const interactive = driver.profile === "interactive";
+  const inputBlocked = comparisonBlocked || recovery.busy || recovery.state.status !== "idle";
   return (
-    <ThreadPrimitive.Root className="thread-root">
+    <ThreadPrimitive.Root className={dead ? "thread-root dead" : "thread-root"}>
       {/* The half that scrolls. Only messages and note cards are in here, so
           nothing that has to stay put competes with the scrolling. */}
       <div className="thread-wrap">
-        <ThreadPrimitive.Viewport autoScroll className="thread">
+        <ThreadPrimitive.Viewport autoScroll className={dead ? "thread dead" : "thread"}>
           <ThreadPrimitive.Empty>
             <div className="empty">Nothing in this conversation yet.</div>
           </ThreadPrimitive.Empty>
           <ThreadPrimitive.Messages components={{ Message }} />
+
+          {/* 6e Wait: progress in accent ink, as the transcript's own last
+              row - the scroll absorbs it, so the composer never moves when
+              work starts and stops (the dock version reflowed the input).
+              This row sits where the eyes already are. The count joins at the 8-second
+              threshold; before that the state alone is the message. */}
+          {report.busy && !stalled ? (
+            <div className="working-row">
+              <span>
+                {report.label}
+                {report.disconnected ? null : <span aria-hidden="true" className="working-dots" />}
+              </span>
+              {report.elapsed === null ? null : (
+                <span className="working-elapsed"> · {report.elapsed}</span>
+              )}
+            </div>
+          ) : null}
+
+          {/* 3c: the agent stopped mid-turn. A card under the truncated turn
+              says what that cost - nothing was written, the version is as it
+              was, the queue is intact. The document column does not react.
+              "Pick it up" is not offered: no record behaviour resumes a
+              stalled turn, and the nearest real act - saying something
+              again - is what "Ask again" does. */}
+          {stalled ? (
+            <div className="card">
+              <div className="card-title">The agent stopped here.</div>
+              <div className="card-body">
+                Nothing was written{version === null ? "" : ` — v${version} is exactly as it was`}
+                {pending.length === 0
+                  ? ""
+                  : `, and your ${pending.length} note${pending.length === 1 ? " is" : "s are"} still queued`}
+                .
+              </div>
+              <div className="card-actions">
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={() => composerBox.current?.focus()}
+                >
+                  Ask again
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {/* 3d: queued notes while the connection is dead. Nothing was sent,
+              nothing failed, nothing is guessed at - they are held here until
+              a driver returns, and the composer below says the same. */}
+          {dead && pending.length > 0 ? (
+            <div className="held">
+              <div className="held-head">
+                <span className="held-kind">Held</span>
+                <span className="held-state">
+                  {pending.length} note{pending.length === 1 ? "" : "s"}, nothing sent
+                </span>
+              </div>
+              <div className="held-body">
+                They stay yours until a driver is back. Nothing was lost and nothing was guessed at.
+              </div>
+            </div>
+          ) : null}
+
+          {/* 3f: the agent wrote a version underneath unsaved edits. Both
+              answers keep everything, so both are offered and neither is
+              styled as a danger. */}
+          {collision === null ? null : (
+            <div className="card">
+              <div className="card-title">
+                The agent wrote v{collision.arrived} while you were editing.
+              </div>
+              <div className="card-body">
+                Your copy is held where it is. Both ways forward keep everything — no version is
+                ever destroyed.
+              </div>
+              <div className="card-actions">
+                <button type="button" className="primary" onClick={onSave} disabled={sending}>
+                  {sending ? "Saving…" : `Save mine as v${collision.next}`}
+                </button>
+                <button type="button" onClick={() => onShowWaiting(collision.arrived)}>
+                  Show v{collision.arrived}
+                </button>
+              </div>
+            </div>
+          )}
+          <InputRecovery {...recovery} />
+          {comparisonRecovery}
+          {executionRecovery}
         </ThreadPrimitive.Viewport>
         <ThreadPrimitive.ScrollToBottom asChild>
           <button type="button" className="to-bottom">
@@ -395,24 +1370,9 @@ const Thread = ({
       </div>
 
       {/* The half that does not. One solid block at the bottom: what is
-          happening, what is queued, and the box you type in. The queue bar
-          was sticky inside the scroller and lay over the conversation
-          instead of sitting under it. */}
-      <div className="dock">
-        {busy ? (
-          <div className={stalled ? "activity stalled" : "activity"}>
-            <span className="pulse" />
-            <span>
-              {report.label}
-              {report.elapsed === null
-                ? ""
-                : stalled
-                  ? ` — nothing back for ${report.elapsed}`
-                  : ` — ${report.elapsed}`}
-            </span>
-          </div>
-        ) : null}
-
+          queued, what is attached, and the box you type in. Activity
+          appears at the end of the transcript. */}
+      <div className={dead ? "dock dead" : "dock"}>
         {pending.length === 0 ? null : (
           <div className="queue-bar">
             <span>
@@ -425,23 +1385,195 @@ const Thread = ({
               type="button"
               className="primary"
               onClick={onSendNotes}
-              disabled={sending}
+              disabled={sending || inputBlocked}
               title="Send the queued notes (⌘⏎)"
             >
               {sending ? "Sending…" : "Send ⌘⏎"}
             </button>
-            <button type="button" className="discard" onClick={onDiscardNotes} title="Discard them">
+            <button
+              type="button"
+              className="discard"
+              onClick={onDiscardNotes}
+              title="Discard them"
+              disabled={inputBlocked}
+            >
               ×
             </button>
           </div>
         )}
 
-        <ComposerPrimitive.Root className="composer">
-          <ComposerPrimitive.Input autoFocus placeholder="Send to the conversation…" rows={1} />
-          <ComposerPrimitive.Send asChild>
-            <button type="submit">Send</button>
-          </ComposerPrimitive.Send>
+        {uploading.length + attachments.length + refusals.length === 0 ? null : (
+          <div className="attached">
+            {uploading.map((u) => (
+              <UploadingChip key={u.id} name={u.name} bytes={u.bytes} />
+            ))}
+            {attachments.map((a) =>
+              a.url !== null || a.contentType.startsWith("image/") ? (
+                <ImageChip
+                  key={a.hash}
+                  name={a.name}
+                  url={a.url}
+                  onRemove={() => onRemoveAttachment(a.hash)}
+                />
+              ) : (
+                <PillChip
+                  key={a.hash}
+                  name={a.name}
+                  contentType={a.contentType}
+                  bytes={a.bytes}
+                  onRemove={() => onRemoveAttachment(a.hash)}
+                />
+              ),
+            )}
+            {refusals.map((r) => (
+              <RefusalChip
+                key={r.id}
+                name={r.name}
+                reason={r.reason}
+                onDismiss={() => onDismissRefusal(r.id)}
+              />
+            ))}
+          </div>
+        )}
+
+        <ComposerPrimitive.Root
+          className={dragOver ? "composer dragover" : invite ? "composer inviting" : "composer"}
+          onDragOver={(e) => {
+            // Without the preventDefault the drop never fires and the
+            // browser navigates to the file instead.
+            if (e.dataTransfer?.types.includes("Files") !== true) return;
+            e.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={(e) => {
+            if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+            setDragOver(false);
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOver(false);
+            const files = e.dataTransfer?.files;
+            if (files !== undefined && files.length > 0) onAttach(files);
+          }}
+        >
+          <ComposerPrimitive.Input
+            autoFocus
+            ref={composerBox}
+            className={dragOver ? "drop" : undefined}
+            disabled={dead || inputBlocked}
+            placeholder={
+              dead
+                ? "Reload to write…"
+                : inputBlocked
+                  ? "Resolve the saved send to continue…"
+                  : dragOver
+                    ? "Drop to attach — the original is kept"
+                    : interactive
+                      ? "Interject…"
+                      : "Send to the conversation…"
+            }
+            rows={2}
+            aria-label={interactive ? "Interject" : "Message"}
+            title="Enter to send; Shift+Enter for a new line"
+          />
+          <div className="composer-toolbar">
+            {interactive ? null : (
+              <>
+                <button
+                  type="button"
+                  className="composer-attach"
+                  aria-label="Attach a file"
+                  title="Attach a file"
+                  disabled={dead}
+                  onClick={() => attachmentPicker.current?.click()}
+                >
+                  <span aria-hidden="true">+</span>
+                </button>
+                <input
+                  ref={attachmentPicker}
+                  type="file"
+                  multiple
+                  hidden
+                  onChange={(e) => {
+                    if (e.currentTarget.files !== null) onAttach(e.currentTarget.files);
+                    e.currentTarget.value = "";
+                  }}
+                />
+              </>
+            )}
+            {dead ? null : (
+              <DriverLine
+                driver={driver}
+                preference={driverPreference}
+                choices={driverChoices}
+                onChoose={onDriverChoice}
+              />
+            )}
+          </div>
         </ComposerPrimitive.Root>
+        {modeIssue ? (
+          <p role="alert" className="settings-error">
+            {modeIssue}
+          </p>
+        ) : null}
+        {settingsIssue ? (
+          <p role="alert" className="settings-error">
+            {settingsIssue}
+          </p>
+        ) : null}
+        {!dead && location ? (
+          <LocationControl key={location.revision} location={location} onSave={onLocation} />
+        ) : null}
+        {dead ? null : (
+          <div className="composer-mode">
+            {driverPreference?.model && driverPreference.effort && driverPreference.profile ? (
+              <select
+                className="composer-mode-name"
+                aria-label="Mode"
+                value={driverPreference.profile}
+                onChange={async (event) => {
+                  const profile = event.currentTarget.value;
+                  if (
+                    profile !== "headless-turn" &&
+                    profile !== "headless-session" &&
+                    profile !== "interactive"
+                  )
+                    return;
+                  try {
+                    setModeIssue(
+                      await onDriverChoice({
+                        v: 1,
+                        harness: driverPreference.harness,
+                        ...(driverPreference.provider
+                          ? { provider: driverPreference.provider }
+                          : {}),
+                        model: driverPreference.model ?? "",
+                        effort: driverPreference.effort ?? "",
+                        profile,
+                        expectedRevision: driverPreference.revision,
+                      }),
+                    );
+                  } catch {
+                    setModeIssue("Mode change was not confirmed. Refresh before trying again.");
+                  }
+                }}
+              >
+                <option value="headless-turn">headless-turn</option>
+                <option value="headless-session">headless-session</option>
+                <option value="interactive">interactive</option>
+              </select>
+            ) : (
+              <span className="composer-mode-name">{driver.profile ?? "No mode recorded"}</span>
+            )}
+            <span>
+              {driver.profile === undefined
+                ? driverPreference === null
+                  ? "Choose a harness to configure the model and reasoning."
+                  : "The mode is reported when an agent attaches."
+                : MODE_GLOSS[driverPreference?.profile ?? driver.profile]}
+            </span>
+          </div>
+        )}
       </div>
     </ThreadPrimitive.Root>
   );
@@ -461,6 +1593,7 @@ interface CatalogEntry {
 }
 
 interface Doc {
+  readonly hash: string;
   readonly artifactId: string;
   readonly version: number;
   readonly contentType: string;
@@ -519,9 +1652,21 @@ const DocumentFrame = ({
   capture,
   snapshot,
   deselect,
+  focusSpot,
+  place,
+  restorePlace,
+  pendingRestore,
+  pendingPulse,
+  pulseBlocks,
+  goBlock,
+  onOffscreen,
+  onTravel,
+  onMarksBelow,
+  onSeamClick,
+  seams,
   onHotkey,
   onDirty,
-  marked,
+  noteCounts,
   mode,
   readOnly,
 }: {
@@ -537,17 +1682,42 @@ const DocumentFrame = ({
   >;
   /** Handed a way to drop the frame's selection, for backing out of a note. */
   deselect: React.MutableRefObject<(() => void) | null>;
+  focusSpot: React.MutableRefObject<((ids: readonly string[]) => void) | null>;
+  place: React.MutableRefObject<{ version: number; index: number; top: number } | null>;
+  restorePlace: React.MutableRefObject<((index: number, top: number) => void) | null>;
+  pendingRestore: React.MutableRefObject<{ index: number; top: number } | null>;
+  pendingPulse: React.MutableRefObject<readonly number[] | null>;
+  pulseBlocks: React.MutableRefObject<((indexes: readonly number[]) => void) | null>;
+  goBlock: React.MutableRefObject<((index: number) => void) | null>;
+  /** Which changed blocks the reader could not see, and which edge they sit
+   * at (6a): the ones below pulse and are not offered; the ones above and
+   * below are offered at the nearer edge instead. */
+  onOffscreen: (below: readonly number[], above: readonly number[]) => void;
+  /** A note's target sat off screen (6a): the frame did not scroll, and the
+   * page docks a travel offer at the edge nearest the target instead. */
+  onTravel: (index: number, below: boolean) => void;
+  /** Which noted blocks sit wholly below the fold (3g), pushed by the frame
+   * as the reader scrolls and as notes land. */
+  onMarksBelow: (indexes: readonly number[]) => void;
+  /** A seam was clicked: open the version where the passage still lives. */
+  onSeamClick: (version: number) => void;
+  /** Where a lost note pointed (3e). Sent again whenever it changes and once
+   * the frame says it is ready. */
+  seams: readonly { before: number; label: string; version: number }[];
   /** A key the frame caught that means something to the whole page. */
   onHotkey: (which: "toggle-mode" | "send-queue") => void;
-  /** The frame says when a person has changed something in it. */
-  onDirty: () => void;
-  /** Spots that already carry a note, marked in the document while the
-   * batch is being composed. */
-  marked: readonly string[];
-  mode: "use" | "markup";
+  /** The frame says the person changed something in it, and how many blocks
+   * carry an edit - the quantity the discard dialog names (6c). */
+  onDirty: (edits: number) => void;
+  /** How many notes each block has carried, sent or queued. Drives the
+   * count chip - the one persistent mark - so the frame is told counts,
+   * not just presence: the chip is a tally, not a flag. */
+  noteCounts: ReadonlyMap<string, number>;
+  mode: "edit" | "annotate";
   /** A version that is not the current one. Neither editable nor markable
    * (RFC-07 R6, R7). Not a third mode: the mode still stands, and applies
-   * again the moment the current version is back. */
+   * again the moment the current version is back. Also true while the
+   * connection is dead (3d): every word stays, and none of it moves. */
   readOnly: boolean;
 }): React.ReactElement => {
   const ref = React.useRef<HTMLIFrameElement | null>(null);
@@ -556,6 +1726,19 @@ const DocumentFrame = ({
     new Map<string, (v: { html: string; values: Record<string, string> } | null) => void>(),
   );
   const nextToken = React.useRef(0);
+
+  // Where a lost note pointed (3e), sent whenever it changes. `seamsRef` is
+  // the copy the ready handler sends, because a fresh frame will not hear
+  // this effect again until the anchors move - and they usually just moved,
+  // which is exactly when the frame was replaced.
+  const seamsRef = React.useRef(seams);
+  React.useEffect(() => {
+    seamsRef.current = seams;
+    ref.current?.contentWindow?.postMessage(
+      { source: FRAME_MESSAGE_SOURCE, kind: "seam", seams: [...seams] },
+      "*",
+    );
+  }, [seams]);
 
   // A `message` listener hears from every frame on the page and from any
   // origin. The boundary exists only because this checks.
@@ -585,12 +1768,92 @@ const DocumentFrame = ({
         m.kind !== "selection" &&
         m.kind !== "captured" &&
         m.kind !== "snapshot-taken" &&
-        m.kind !== "dirty"
+        m.kind !== "dirty" &&
+        m.kind !== "place" &&
+        m.kind !== "ready" &&
+        m.kind !== "pulsed" &&
+        m.kind !== "focus-offscreen" &&
+        m.kind !== "marks-below" &&
+        m.kind !== "seam-clicked"
       )
         return;
-      if (m.artifactId !== doc.artifactId || m.version !== doc.version) return;
+      // A seam click carries no artifact or version: the frame that sent it
+      // is the frame that holds the seam, and the seam itself names the
+      // version to open. Everything else names the document it is about.
+      if (m.kind !== "seam-clicked") {
+        if (m.artifactId !== doc.artifactId || m.version !== doc.version) return;
+      }
+
+      // Where the reader is, pushed by the frame as they scroll (#180).
+      //
+      // Pushed rather than asked for, because by the time it is needed the
+      // frame that knew it has been unmounted. The version is recorded with
+      // it: a place in v20 means nothing in v24 until it has been followed
+      // through the versions between.
+      // A fresh frame, holding the version that has just been taken up. If a
+      // place was followed into it, this is the moment it can be given.
+      if (m.kind === "ready") {
+        const want = pendingRestore.current;
+        if (want !== null) {
+          pendingRestore.current = null;
+          restorePlace.current?.(want.index, want.top);
+        }
+        // After the restore, never before it. What counts as already in view
+        // is what the reader will be looking at, and until the place is put
+        // back the frame is still at the top showing the wrong thing.
+        const changed = pendingPulse.current;
+        if (changed !== null) {
+          pendingPulse.current = null;
+          if (changed.length > 0) pulseBlocks.current?.(changed);
+        }
+        // Where a lost note pointed. The frame has to exist before a seam
+        // can sit in it.
+        ref.current?.contentWindow?.postMessage(
+          { source: FRAME_MESSAGE_SOURCE, kind: "seam", seams: seamsRef.current },
+          "*",
+        );
+        return;
+      }
+
+      // Which of them the reader could not see, and which edge they sat
+      // at. The other half of the rule: they did not pulse, so they are
+      // offered at the nearer edge instead.
+      if (m.kind === "pulsed") {
+        const below = Array.isArray(m.below) ? (m.below as number[]) : [];
+        const above = Array.isArray(m.above) ? (m.above as number[]) : [];
+        onOffscreen(below, above);
+        return;
+      }
+
+      // A note's target sat off screen (6a). The frame did not scroll and
+      // did not light anything; the offer is the page's to dock.
+      if (m.kind === "focus-offscreen") {
+        if (typeof m.index === "number" && typeof m.below === "boolean") onTravel(m.index, m.below);
+        return;
+      }
+
+      // The fold moved, or the marks did (3g).
+      if (m.kind === "marks-below") {
+        onMarksBelow(Array.isArray(m.indexes) ? (m.indexes as number[]) : []);
+        return;
+      }
+
+      // The way back to a lost passage (3e): the seam names the version
+      // where the note still reads, and opening that beside the current
+      // one is the compare view.
+      if (m.kind === "seam-clicked") {
+        if (typeof m.version === "number" && Number.isSafeInteger(m.version))
+          onSeamClick(m.version);
+        return;
+      }
+
+      if (m.kind === "place") {
+        if (typeof m.index !== "number" || typeof m.top !== "number") return;
+        place.current = { version: doc.version, index: m.index, top: m.top };
+        return;
+      }
       if (m.kind === "dirty") {
-        onDirty();
+        onDirty(typeof m.edits === "number" && m.edits >= 1 ? m.edits : 1);
         return;
       }
 
@@ -648,7 +1911,22 @@ const DocumentFrame = ({
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [doc.artifactId, doc.version, onSelection, onHotkey, onDirty]);
+  }, [
+    doc.artifactId,
+    doc.version,
+    onSelection,
+    onHotkey,
+    onDirty,
+    place,
+    pendingRestore,
+    restorePlace,
+    pendingPulse,
+    pulseBlocks,
+    onOffscreen,
+    onTravel,
+    onMarksBelow,
+    onSeamClick,
+  ]);
 
   // Asking the frame what is at a set of spots. The parent cannot read the
   // document, so it asks and the frame answers — the boundary stays one
@@ -688,23 +1966,47 @@ const DocumentFrame = ({
         { source: FRAME_MESSAGE_SOURCE, kind: "deselect" },
         "*",
       );
+    focusSpot.current = (ids) =>
+      ref.current?.contentWindow?.postMessage(
+        { source: FRAME_MESSAGE_SOURCE, kind: "focus", ids: [...ids] },
+        "*",
+      );
+    restorePlace.current = (index, top) =>
+      ref.current?.contentWindow?.postMessage(
+        { source: FRAME_MESSAGE_SOURCE, kind: "restore-place", index, top },
+        "*",
+      );
+    pulseBlocks.current = (indexes) =>
+      ref.current?.contentWindow?.postMessage(
+        { source: FRAME_MESSAGE_SOURCE, kind: "pulse", indexes: [...indexes] },
+        "*",
+      );
+    goBlock.current = (index) =>
+      ref.current?.contentWindow?.postMessage(
+        { source: FRAME_MESSAGE_SOURCE, kind: "go-block", index },
+        "*",
+      );
     return () => {
       capture.current = null;
       snapshot.current = null;
       deselect.current = null;
+      focusSpot.current = null;
+      restorePlace.current = null;
+      pulseBlocks.current = null;
+      goBlock.current = null;
     };
-  }, [capture, snapshot, deselect]);
+  }, [capture, snapshot, deselect, focusSpot, restorePlace, pulseBlocks, goBlock]);
 
   React.useEffect(() => {
     ref.current?.contentWindow?.postMessage(
-      { source: FRAME_MESSAGE_SOURCE, kind: "mark", ids: [...marked] },
+      { source: FRAME_MESSAGE_SOURCE, kind: "mark", counts: Object.fromEntries(noteCounts) },
       "*",
     );
-  }, [marked]);
+  }, [noteCounts]);
 
   React.useEffect(() => {
     // Sent on a timer as well as on change: the frame is replaced whenever
-    // the version changes, and a fresh frame starts in use mode.
+    // the version changes, and a fresh frame starts in edit mode.
     const send = (): void =>
       ref.current?.contentWindow?.postMessage(
         { source: FRAME_MESSAGE_SOURCE, kind: "mode", mode, readOnly },
@@ -727,10 +2029,63 @@ const DocumentFrame = ({
   );
 };
 
+/** The 6c shell: the one dialog, because discard is the one control that
+ * destroys work. 392px of paper on a blurred paper wash over the window;
+ * no shadow - the edge and the wash carry it. The destructive action is
+ * filled with ink, never magenta: a choice the person made is not the
+ * substrate refusing. */
+const Dialog = ({
+  title,
+  body,
+  keep,
+  go,
+  busy,
+  onKeep,
+  onGo,
+}: {
+  title: string;
+  body: React.ReactNode;
+  keep: string;
+  go: string;
+  busy: boolean;
+  onKeep: () => void;
+  onGo: () => void;
+}): React.ReactElement => {
+  // Escape is the keep answer, like everywhere else in lucid that asks a
+  // question of the person holding the keyboard.
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onKeep();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onKeep]);
+  return (
+    <div className="dialog-backdrop">
+      <div className="dialog" role="alertdialog" aria-modal="true" aria-label={title}>
+        <div className="dialog-title">{title}</div>
+        <div className="dialog-body">{body}</div>
+        <div className="dialog-actions">
+          <button type="button" className="secondary" onClick={onKeep}>
+            {keep}
+          </button>
+          <button type="button" className="go" onClick={onGo} disabled={busy}>
+            {go}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const App = (): React.ReactElement => {
   // Read once. Where in the record the page starts is an opening question;
   // after that the page moves the address bar, not the other way round.
   const opened = React.useMemo(routeFromPath, []);
+  const navigationBlocked = React.useRef(false);
   const conversationId = opened?.conversationId ?? "";
   /** The artifact the URL asked for, until a person picks another. */
   const [wantArtifact, setWantArtifact] = React.useState<string | null>(opened?.artifactId ?? null);
@@ -738,6 +2093,15 @@ const App = (): React.ReactElement => {
    * to the artifact it came from, and carrying v7 across would ask for a
    * version of a different document. */
   const openArtifact = React.useCallback((artifactId: string): void => {
+    if (navigationBlocked.current) {
+      setComparisonRefusal(
+        "Send or cancel your comparison note before leaving. An unresolved send must be reconciled first.",
+      );
+      return;
+    }
+    setComparing(null);
+    comparingRef.current = null;
+    comparisonRequest.current++;
     setWantArtifact(artifactId);
     setPinned(null);
     setUnknownArtifact(null);
@@ -746,15 +2110,48 @@ const App = (): React.ReactElement => {
   /** An artifact the URL named that the record does not hold. */
   const [unknownArtifact, setUnknownArtifact] = React.useState<string | null>(null);
   const [token, setToken] = React.useState<string | null>(null);
+  const composerRestore = React.useRef<{ setText(text: string): void } | null>(null);
+  const [submissionBusy, setSubmissionBusy] = React.useState(false);
+  const submissionActive = React.useRef(false);
+  const [submissionReason, setSubmissionReason] = React.useState<string | null>(null);
+  const [, refreshSubmission] = React.useReducer((revision: number) => revision + 1, 0);
+  const submission = React.useMemo(
+    () =>
+      createInputSubmission({
+        conversationId,
+        mintId: () => `browser-${crypto.randomUUID()}`,
+        // Access inside the guarded operation: even the sessionStorage getter
+        // can throw when this tab cannot use browser storage.
+        storage: {
+          getItem: (key) => window.sessionStorage.getItem(key),
+          setItem: (key, value) => window.sessionStorage.setItem(key, value),
+          removeItem: (key) => window.sessionStorage.removeItem(key),
+        },
+        send: (body) =>
+          fetch(`/api/conversations/${encodeURIComponent(conversationId)}/input`, {
+            method: "POST",
+            headers: { [TOKEN_HEADER]: token ?? "", "content-type": "application/json" },
+            body,
+          }),
+      }),
+    [conversationId, token],
+  );
   const [messages, setMessages] = React.useState<Msg[]>([]);
   const [status, setStatus] = React.useState<string>("");
   /** What is driving: harness, model when known, and profile. */
   const [driver, setDriver] = React.useState<Driver>({});
+  /** What the person chose (RFC-12), beside what is driving, and the lists
+   * to choose from. Both ride on the poll the page already makes. */
+  const [location, setLocation] = React.useState<LocationState | null>(null);
+  const [settingsIssue, setSettingsIssue] = React.useState<string | null>(null);
+  const [driverPreference, setDriverPreference] = React.useState<DriverPreference | null>(null);
+  const [driverChoices, setDriverChoices] = React.useState<DriverChoices | null>(null);
   const [activity, setActivity] = React.useState<Activity>({
     turn: false,
     inFlight: 0,
     waiting: 0,
   });
+  const [executions, setExecutions] = React.useState<readonly ExecutionView[]>([]);
   /** When the transcript last changed. A conversation that is waiting and a
    * conversation that has stopped look identical without it — which is how
    * a wedged harness sat silent for ninety minutes with eight inputs
@@ -766,11 +2163,16 @@ const App = (): React.ReactElement => {
     return () => window.clearInterval(id);
   }, []);
   const [problem, setProblem] = React.useState<string | null>(null);
+  /** The record is damaged past a point (G1, the 3d family): the header
+   * goes magenta with the cause and Reload is the one action, but the words
+   * already read stay on screen - they were on disk the whole time. */
+  const [damaged, setDamaged] = React.useState(false);
   /** Set once on 401. Every fetch stops: the token can only come back by
    * reloading, and retrying a dead token forever is the failure this flag
    * exists to prevent. */
   const [dead, setDead] = React.useState(false);
   const [doc, setDoc] = React.useState<Doc | null>(null);
+  const artifactWidth = useArtifactWidth(conversationId, doc?.artifactId ?? "", doc?.bytes ?? "");
   /** Which version is on screen. Compared against the catalog so a fetch
    * happens on a new version and not on every tick. */
   const shown = React.useRef<string>("");
@@ -805,6 +2207,13 @@ const App = (): React.ReactElement => {
       readonly snippet: string;
     }[]
   >([]);
+  /** Where each lost note's passage WAS, as a seam the frame draws in the
+   * gap it left (3e). Derived in the same walk as the resolutions, because
+   * the question - where did the removed block sit relative to the ones
+   * that survived - is the same diff read another way. */
+  const [seams, setSeams] = React.useState<
+    readonly { before: number; label: string; version: number }[]
+  >([]);
   /** The version asked for. Null means "follow the newest" — the ordinary
    * state, where a new version simply appears.
    *
@@ -815,6 +2224,26 @@ const App = (): React.ReactElement => {
   // A version named in the URL opens pinned to it: a link to a version has
   // to land on that version, not on the newest one.
   const [pinned, setPinned] = React.useState<number | null>(opened?.version ?? null);
+  /** Go to the newest version even though there is work in progress.
+   *
+   * The banner offering the newer version used to call `setPinned(null)`,
+   * and in the case it appears for, `pinned` is already `null` - nothing was
+   * ever pinned. So the click changed no state, the guard below re-ran on the
+   * same values, and the button did nothing at all.
+   *
+   * State rather than a ref, because the effect has to re-run when it is set
+   * and has to read it. It is cleared as soon as it is honoured, so it asks
+   * once rather than turning following back on for good. */
+  const [forceFollow, setForceFollow] = React.useState(false);
+  const goToNewest = React.useCallback(() => {
+    // Both, because "show me the newest" has two things standing in its way
+    // and either may be present. A pin holds the target at a chosen version;
+    // work in progress holds the document where it is. Clearing only the pin
+    // was the old behaviour and did nothing when nothing was pinned; setting
+    // only the override does nothing when something is.
+    setPinned(null);
+    setForceFollow(true);
+  }, []);
   /** A version that arrived while there was work pending. It waits here and
    * is announced rather than swapped in underneath. */
   const [waiting, setWaiting] = React.useState<number | null>(null);
@@ -837,27 +2266,121 @@ const App = (): React.ReactElement => {
    * is an explicit act — nothing becomes permanent until they say so, which
    * is what stops every keystroke being a version. */
   const [edited, setEdited] = React.useState(false);
+  /** How many blocks the change touches, as the frame reports it. Names the
+   * quantity in the discard dialog (6c: "Discard your three edits?"). */
+  const [editedCount, setEditedCount] = React.useState(0);
   const [saving, setSaving] = React.useState(false);
   const [saved, setSaved] = React.useState<string | null>(null);
   /** What a click means right now. Two things wanted the same click — ticking
    * a box and picking an element to write about — so which one it is, is a
    * choice rather than a guess.
    *
-   * Mark up is the default. What a person does with a document an agent
+   * Annotate is the default. What a person does with a document an agent
    * produced is read it and say what is wrong with it; filling it in is the
    * rarer act, and it is the one that has a mode switch to reach it. */
-  const [mode, setMode] = React.useState<"use" | "markup">("markup");
+  const [mode, setMode] = React.useState<"edit" | "annotate">("annotate");
   const noteBox = React.useRef<HTMLTextAreaElement | null>(null);
   /** Where in the frame the selection sits, so the note box opens beside it
    * rather than in a panel at the bottom, away from what it is about. */
   const [selRect, setSelRect] = React.useState<SelectionRect | null>(null);
   const deselect = React.useRef<(() => void) | null>(null);
+  const focusSpot = React.useRef<((ids: readonly string[]) => void) | null>(null);
+  /** The reader's place, as the frame last reported it. */
+  const place = React.useRef<{ version: number; index: number; top: number } | null>(null);
+  const restorePlace = React.useRef<((index: number, top: number) => void) | null>(null);
+  /** A place followed into the version being taken up, waiting for its
+   * frame to exist. */
+  const pendingRestore = React.useRef<{ index: number; top: number } | null>(null);
+  /** The travel offer (6a): what a click on a note or an arriving version
+   * docks at the sheet edge nearest the target. Null while there is nothing
+   * to offer - the reader is looking at what changed, or declined to go. */
+  const [offer, setOffer] = React.useState<{
+    readonly side: "below" | "above";
+    readonly count: number;
+    readonly index: number;
+    readonly note: boolean;
+  } | null>(null);
+  /** Noted blocks wholly below the fold (3g), pushed by the frame. */
+  const [marksBelow, setMarksBelow] = React.useState<readonly number[]>([]);
+  /** Files attached to the message being written. Stored the moment they are
+   * chosen, so closing the page does not lose them. */
+  const [attached, setAttached] = React.useState<readonly Attached[]>([]);
+  /** Files on the note being written. Separate from the composer's: a note is
+   * about a spot, and its files are about that note. */
+  const [noteFiles, setNoteFiles] = React.useState<readonly Attached[]>([]);
+  /** Files on their way to the store (4a state 3), composer and note box
+   * separately - a chip belongs to the surface it was dropped on. */
+  const [uploading, setUploading] = React.useState<readonly Uploading[]>([]);
+  const [noteUploading, setNoteUploading] = React.useState<readonly Uploading[]>([]);
+  /** The substrate refused an attach or a send (4a state 5, G2). The chip
+   * stays until it is dismissed - never a toast. */
+  const [refusals, setRefusals] = React.useState<readonly Refusal[]>([]);
+  const [noteRefusals, setNoteRefusals] = React.useState<readonly Refusal[]>([]);
+  const refusalSeq = React.useRef(0);
+
+  /** A refusal as a fact the surface holds, not a message that times out. */
+  const addRefusal = React.useCallback((name: string | null, reason: string): void => {
+    const id = `r${refusalSeq.current++}`;
+    setRefusals((prev) => [...prev, { id, name, reason }]);
+  }, []);
+  const addNoteRefusal = React.useCallback((name: string | null, reason: string): void => {
+    const id = `n${refusalSeq.current++}`;
+    setNoteRefusals((prev) => [...prev, { id, name, reason }]);
+  }, []);
+  /** A comparison being read: which version the one on screen is held against,
+   * and that version's bytes once they arrive. `null` bytes mean it could not
+   * be read, which is reported rather than shown as an empty side. */
+  const [comparing, setComparing] = React.useState<(ComparisonPair & { loading: boolean }) | null>(
+    null,
+  );
+  const comparingRef = React.useRef(comparing);
+  comparingRef.current = comparing;
+  const comparisonRequest = React.useRef(0);
+  const [comparisonDraft, setComparisonDraft] = React.useState<ComparisonDraft | null>(null);
+  const [comparisonRefusal, setComparisonRefusal] = React.useState<string | null>(null);
+  const liveToken = React.useRef(token);
+  liveToken.current = token;
+  const recovery = React.useMemo(
+    () =>
+      createInputRecovery({
+        conversationId,
+        fetch: (url, init) => fetch(url, init),
+        isActive: () => parseRoute(window.location.pathname)?.conversationId === conversationId,
+        newId: () => `browser-${crypto.randomUUID()}`,
+        storage: () => sessionStorage,
+        token: () => liveToken.current,
+      }),
+    [conversationId],
+  );
+  const recoveryState = React.useSyncExternalStore(
+    recovery.subscribe,
+    recovery.getSnapshot,
+    recovery.getSnapshot,
+  );
+  const recoveryLocked = recoveryState.kind !== "idle" && recoveryState.kind !== "settled";
+  navigationBlocked.current = comparisonDraft !== null || recoveryLocked;
+  React.useEffect(() => {
+    if (
+      (recoveryState.kind === "settled" && recoveryState.outcome.kind === "accepted") ||
+      (recoveryState.kind === "storage-error" && recoveryState.outcome?.kind === "accepted")
+    )
+      setComparisonDraft(null);
+  }, [recoveryState]);
+  const docRef = React.useRef<Doc | null>(null);
+  /** Blocks this version added or changed, waiting for its frame. Sent once:
+   * the pulse marks a version arriving, not a block existing. */
+  const pendingPulse = React.useRef<readonly number[] | null>(null);
+  const pulseBlocks = React.useRef<((indexes: readonly number[]) => void) | null>(null);
+  const goBlock = React.useRef<((index: number) => void) | null>(null);
   /** What is typed, readable from a callback the frame holds. That callback
    * must keep its identity across keystrokes, so it cannot close over the
    * draft itself. */
   const draftRef = React.useRef("");
   /** Read from the hotkey callback, which must keep its identity. */
+  /** Read only, for the hotkey path. Fed from `pinnedOld`: being
+   * overtaken does not take the modes away. */
   const viewingOldRef = React.useRef(false);
+  const editedRef = React.useRef(false);
   /** A batch of notes is on its way to the record. */
   const [sending, setSending] = React.useState(false);
   const sendingNotes = React.useRef(false);
@@ -880,6 +2403,10 @@ const App = (): React.ReactElement => {
     readConversationWidth(typeof localStorage === "undefined" ? null : localStorage),
   );
   const [dragging, setDragging] = React.useState(false);
+  const [stacked, setStacked] = React.useState(
+    () => window.matchMedia("(max-width: 900px)").matches,
+  );
+  const [documentShare, setDocumentShare] = React.useState(DEFAULT_DOCUMENT_SHARE);
 
   // A pointer capture, not a window listener: the pointer crosses the frame
   // on the way, and the frame is another document that would swallow every
@@ -888,11 +2415,26 @@ const App = (): React.ReactElement => {
     e.preventDefault();
     const grip = e.currentTarget;
     grip.setPointerCapture(e.pointerId);
+    const vertical = window.matchMedia("(max-width: 900px)").matches;
+    const startY = e.clientY;
+    const startHeight = grip.previousElementSibling?.getBoundingClientRect().height ?? 0;
+    const panes = grip.parentElement;
+    const paneStyle = panes === null ? null : getComputedStyle(panes);
+    const available = Math.max(
+      1,
+      (panes?.clientHeight ?? window.innerHeight) -
+        Number.parseFloat(paneStyle?.paddingTop ?? "0") -
+        Number.parseFloat(paneStyle?.paddingBottom ?? "0"),
+    );
     const startX = e.clientX;
     const startWidth = grip.nextElementSibling?.getBoundingClientRect().width ?? 0;
     setDragging(true);
 
     const move = (ev: PointerEvent): void => {
+      if (vertical) {
+        setDocumentShare(clampDocumentShare((startHeight + ev.clientY - startY) / available));
+        return;
+      }
       // Dragging left widens the conversation: it is the right-hand pane.
       setConvWidth(clampConversationWidth(startWidth - (ev.clientX - startX), window.innerWidth));
     };
@@ -900,7 +2442,7 @@ const App = (): React.ReactElement => {
       grip.removeEventListener("pointermove", move);
       grip.removeEventListener("pointerup", done);
       grip.removeEventListener("pointercancel", done);
-      grip.releasePointerCapture(e.pointerId);
+      if (grip.hasPointerCapture(e.pointerId)) grip.releasePointerCapture(e.pointerId);
       setDragging(false);
       setConvWidth((w) => {
         if (w !== null) writeConversationWidth(localStorage, w);
@@ -932,6 +2474,23 @@ const App = (): React.ReactElement => {
   // cannot operate is a control in name only.
   const nudgeDrag = React.useCallback((e: React.KeyboardEvent<HTMLHRElement>): void => {
     const step = e.shiftKey ? 64 : 16;
+    if (window.matchMedia("(max-width: 900px)").matches) {
+      const by = e.key === "ArrowDown" ? step : e.key === "ArrowUp" ? -step : 0;
+      if (by === 0) return;
+      e.preventDefault();
+      const grip = e.currentTarget;
+      const current = grip.previousElementSibling?.getBoundingClientRect().height ?? 0;
+      const panes = grip.parentElement;
+      const style = panes === null ? null : getComputedStyle(panes);
+      const available = Math.max(
+        1,
+        (panes?.clientHeight ?? window.innerHeight) -
+          Number.parseFloat(style?.paddingTop ?? "0") -
+          Number.parseFloat(style?.paddingBottom ?? "0"),
+      );
+      setDocumentShare(clampDocumentShare((current + by) / available));
+      return;
+    }
     const by = e.key === "ArrowLeft" ? step : e.key === "ArrowRight" ? -step : 0;
     if (by === 0) return;
     e.preventDefault();
@@ -945,18 +2504,37 @@ const App = (): React.ReactElement => {
   // room for. What was dragged is kept; what is shown is what fits.
   React.useEffect(() => {
     const onResize = (): void => {
+      setStacked(window.matchMedia("(max-width: 900px)").matches);
       setConvWidth((w) => (w === null ? null : clampConversationWidth(w, window.innerWidth)));
     };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  /* Closing the tab, reloading, or following a link takes the frame with it,
+   * and the frame is where an unsaved edit lives - nothing has written it
+   * down yet. Every other way of losing it now asks first: a version
+   * arriving offers save-or-discard, and a mode switch keeps it. This was
+   * the one exit with no question on it.
+   *
+   * The browser shows its own wording and ignores ours, so there is no
+   * message here. `preventDefault` is what asks. */
+  React.useEffect(() => {
+    if (!edited && comparisonDraft === null && !recoveryLocked) return;
+    const ask = (e: BeforeUnloadEvent): void => {
+      e.preventDefault();
+    };
+    window.addEventListener("beforeunload", ask);
+    return () => window.removeEventListener("beforeunload", ask);
+  }, [edited, comparisonDraft, recoveryLocked]);
+
   const toggleMode = React.useCallback((): void => {
-    // Nothing to switch between on a version that permits neither.
-    if (viewingOldRef.current) return;
-    setMode((m) => (m === "use" ? "markup" : "use"));
-    // Leaving mark-up mode ends whatever note was being written: there is no
-    // selection in use mode for it to point at.
+    // Nothing to switch between on a version that permits neither, and
+    // nothing to switch to while the bar is asking to save or discard.
+    if (viewingOldRef.current || editedRef.current) return;
+    setMode((m) => (m === "edit" ? "annotate" : "edit"));
+    // Leaving annotate mode ends whatever note was being written: there is no
+    // selection in edit mode for it to point at.
     cancelNote();
   }, [cancelNote]);
 
@@ -1031,6 +2609,70 @@ const App = (): React.ReactElement => {
     [docKey],
   );
 
+  const performSubmission = React.useCallback(
+    async (text?: string, artifactId?: string): Promise<InputSubmissionResult> => {
+      if (submissionActive.current || (text !== undefined && recoveryLocked))
+        return { status: "blocked", reason: "Wait for the current send to finish." };
+      submissionActive.current = true;
+      const previous = submission.current();
+      const originalText = text ?? (previous.status === "unresolved" ? previous.text : "");
+      const originalArtifact =
+        artifactId ?? (previous.status === "unresolved" ? previous.request.artifactId : null);
+      setSubmissionBusy(true);
+      try {
+        const result =
+          text === undefined ? await submission.retry() : await submission.submit(text, artifactId);
+        setSubmissionReason(result.status === "accepted" ? null : result.reason);
+        if (result.status === "uncertain" && result.reload) setDead(true);
+        if (result.status === "accepted" || result.status === "refused") {
+          const batch = originalArtifact === null ? null : detectAnnotationBatch(originalText);
+          if (batch && !("malformed" in batch)) {
+            const key = `${batch.artifactId}@${batch.version}`;
+            setNotesByVersion((prior) => {
+              const queued = prior[key] ?? [];
+              const submitted = encodeAnnotationBatch(batch);
+              const prefix = encodeAnnotationBatch({
+                ...batch,
+                notes: queued.slice(0, batch.notes.length).map(({ note, spots, files }) => ({
+                  note,
+                  spots,
+                  ...(files === undefined || files.length === 0 ? {} : { files }),
+                })),
+              });
+              if (result.status === "refused")
+                return prefix === submitted
+                  ? prior
+                  : {
+                      ...prior,
+                      [key]: [
+                        ...batch.notes.map((note) => ({ ...note, at: messages.length })),
+                        ...queued,
+                      ],
+                    };
+              return prefix === submitted
+                ? { ...prior, [key]: queued.slice(batch.notes.length) }
+                : prior;
+            });
+          } else if (result.status === "refused") composerRestore.current?.setText(originalText);
+          if (result.status === "refused") {
+            if (originalArtifact === null) addRefusal(null, `Not sent: ${result.reason}`);
+            else setRefusal(result.reason);
+          }
+        } else if (result.status === "blocked" && submission.current().status === "idle") {
+          if (originalArtifact === null) composerRestore.current?.setText(originalText);
+          if (originalArtifact === null) addRefusal(null, result.reason);
+          else setRefusal(result.reason);
+        }
+        return result;
+      } finally {
+        submissionActive.current = false;
+        setSubmissionBusy(false);
+        refreshSubmission();
+      }
+    },
+    [submission, messages.length, addRefusal, recoveryLocked],
+  );
+
   React.useEffect(() => {
     let alive = true;
     fetch("/api/session")
@@ -1057,11 +2699,16 @@ const App = (): React.ReactElement => {
         if (!alive) return;
         if (res.status === 401) {
           setDead(true);
-          setProblem("This page's token is no longer valid — the server restarted. Reload.");
           return;
         }
         if (!res.ok) {
-          setProblem(`Could not read the conversation (${res.status}).`);
+          const failure = (await res.json()) as { reason?: unknown };
+          if (!alive) return;
+          setProblem(
+            typeof failure.reason === "string"
+              ? failure.reason
+              : `Could not read the conversation (${res.status}).`,
+          );
           return;
         }
         const data = (await res.json()) as {
@@ -1069,7 +2716,16 @@ const App = (): React.ReactElement => {
           status: string;
           damaged?: boolean;
           driver?: Driver;
+          driverPreference?: DriverPreference | null;
+          location?: LocationState;
+          conversationSettings?: {
+            selected: DriverPreference | null;
+            revision: number;
+            error: string | null;
+          };
+          driverChoices?: DriverChoices | null;
           activity?: Activity;
+          executions?: readonly ExecutionView[];
         };
         if (!alive) return;
         const next = linesToMessages(data.lines);
@@ -1082,12 +2738,26 @@ const App = (): React.ReactElement => {
         });
         setStatus(data.status);
         setDriver(data.driver ?? {});
-        setActivity(data.activity ?? { turn: false, inFlight: 0, waiting: 0 });
-        setProblem(
-          data.damaged === true
-            ? "This record is damaged past a point; what follows the damage is not shown."
-            : null,
+        setLocation(data.location ?? null);
+        setSettingsIssue(data.conversationSettings?.error ?? null);
+        setDriverPreference(
+          data.conversationSettings?.selected
+            ? {
+                ...data.conversationSettings.selected,
+                v: 1,
+                revision: data.conversationSettings.revision,
+              }
+            : (data.driverPreference ?? null),
         );
+        setDriverChoices(data.driverChoices ?? null);
+        setActivity(data.activity ?? { turn: false, inFlight: 0, waiting: 0 });
+        setExecutions((previous) =>
+          JSON.stringify(previous) === JSON.stringify(data.executions ?? [])
+            ? previous
+            : (data.executions ?? []),
+        );
+        setDamaged(data.damaged === true);
+        if (data.damaged !== true) setProblem(null);
       } catch (e: unknown) {
         if (alive) setProblem(String(e));
       }
@@ -1145,6 +2815,7 @@ const App = (): React.ReactElement => {
         // The version asked for, else the newest. A pin is what makes an
         // older version reachable, and marks live on the version they were
         // made against, so that version has to be reachable.
+        if (comparingRef.current !== null) return;
         const target = pinned ?? entry.latest;
         const want = `${entry.artifactId}@${target}`;
         if (want === shown.current) {
@@ -1153,12 +2824,15 @@ const App = (): React.ReactElement => {
           if (entry.latest > target) setWaiting(entry.latest);
           return;
         }
-        if (pinned === null && pendingRef.current && shown.current !== "") {
+        if (pinned === null && pendingRef.current && shown.current !== "" && !forceFollow) {
           // Nothing pinned, but there is work in progress: say a newer
-          // version exists and wait to be asked.
+          // version exists and wait to be asked. `forceFollow` is that asking.
           setWaiting(entry.latest);
           return;
         }
+        // Asked for, so spent. Anything after this holds the document again
+        // the moment there is work in progress.
+        if (forceFollow) setForceFollow(false);
         fetching.current = true;
         try {
           const one = await fetch(
@@ -1169,6 +2843,55 @@ const App = (): React.ReactElement => {
           const fetched = (await one.json()) as Doc;
           if (!alive) return;
           shown.current = want;
+
+          // Follow the reader's place into the version being taken up (#180).
+          //
+          // By block, not by scroll offset. An offset is wrong the moment
+          // anything above the reader changes length, which is exactly what
+          // a new version does. `carried` is the same walk that reports what
+          // changed, read for where things went rather than what they are.
+          //
+          // Only when the place belongs to the version being left. A place
+          // in v20 says nothing about v24, and following it through every
+          // version between is work nobody asked for - the reader who was
+          // not here does not need their seat kept.
+          pendingRestore.current = null;
+          pendingPulse.current = null;
+          setOffer(null);
+          setMarksBelow([]);
+          const here = place.current;
+          const leaving = docRef.current;
+          // One walk answers both questions - where the reader's block went,
+          // and what this version changed. They are the same comparison read
+          // two ways.
+          if (leaving !== null) {
+            try {
+              const parse = (html: string): Document =>
+                new DOMParser().parseFromString(html, "text/html");
+              const d = diffVersions(parse(leaving.bytes), parse(fetched.bytes));
+
+              if (here !== null && here.version === leaving.version) {
+                const moved = d.carried.get(here.index);
+                // Absent means the block the reader was on is gone. Putting
+                // them somewhere else that happens to share its number is
+                // worse than the top, which is at least honest.
+                if (moved !== undefined) pendingRestore.current = { index: moved, top: here.top };
+              }
+
+              // What arrived, by its place in the version that arrived. A
+              // removed block has nowhere to pulse, so it is not here.
+              const touched: number[] = [];
+              for (const c of d.changes) {
+                if (c.at !== undefined) touched.push(c.at);
+              }
+              pendingPulse.current = touched;
+            } catch {
+              // Both of these are conveniences. Failing at them must never
+              // stop the version arriving.
+            }
+          }
+          place.current = null;
+
           // A note addresses an element in the render it was made against,
           // so the selection and the draft do not carry across. Notes do:
           // they are held per version, and coming back finds them.
@@ -1178,6 +2901,7 @@ const App = (): React.ReactElement => {
           setRefusal(null);
           setWaiting(null);
           setEdited(false);
+          setEditedCount(0);
           setSaved(null);
           setDoc(fetched);
         } finally {
@@ -1194,16 +2918,45 @@ const App = (): React.ReactElement => {
       alive = false;
       window.clearInterval(id);
     };
-  }, [token, dead, conversationId, pinned, wantArtifact]);
+  }, [token, dead, conversationId, pinned, wantArtifact, forceFollow]);
 
   /** A restore waiting to be confirmed. Holding the version rather than a
    * boolean means the confirmation can name what it is about to do. */
   const [confirmRestore, setConfirmRestore] = React.useState<number | null>(null);
+  /** A newer version waiting to be shown, once it is confirmed that the
+   * unsaved edit can go. Holds the version so the confirmation can name it. */
+  const [confirmDiscard, setConfirmDiscard] = React.useState<number | null>(null);
+  /** An unsaved edit waiting to be thrown away on purpose. Separate from
+   * `confirmDiscard`, which is about going to a newer version: this one is
+   * just abandoning what was typed, with nowhere to go afterwards. */
+  const [confirmDiscardEdit, setConfirmDiscardEdit] = React.useState(false);
   const [restoring, setRestoring] = React.useState(false);
 
   /** Showing a version that is not the current one. Read-only: no editing,
    * no saving, no selecting, no annotating (RFC-07 R6, R7). */
-  const viewingOld = doc !== null && catalog !== null && doc.version !== catalog.latest;
+  /** Not the newest version. Two situations wear this, and they are not the
+   * same situation.
+   *
+   * `pinnedOld` is going back deliberately: a version was chosen from the
+   * picker. It is read only, and everything that reads "you cannot change
+   * this" belongs to it.
+   *
+   * `overtaken` is standing still while the newest moved. Nothing was
+   * chosen - the agent wrote a version, and the document was held where it
+   * was because there was work in progress. Treating that as read only
+   * disabled the save on an edit that was still live, and the server's whole
+   * superseded-save path (`basedOn`, `supersededSince`) exists for exactly
+   * this and could not be reached from the page. */
+  const shownVersion = versionState({
+    shown: doc?.version ?? null,
+    latest: catalog?.latest ?? null,
+    pinned,
+  });
+  const pinnedOld = isReadOnly(shownVersion);
+  const overtaken = shownVersion === "overtaken";
+  /** Not the newest, either way. Cosmetic only - what the picker looks like,
+   * and what the follow button says. Never what is disabled. */
+  const viewingOld = shownVersion !== "current";
 
   const addNote = React.useCallback(async (): Promise<void> => {
     const text = draft.trim();
@@ -1213,7 +2966,7 @@ const App = (): React.ReactElement => {
     // Belt as well as braces: the frame stops sending selections on a
     // read-only version, so this should be unreachable. It is here because
     // "should be unreachable" is where notes end up on the wrong version.
-    if (viewingOld) return;
+    if (pinnedOld) return;
     const room = queueAdmits(notes.length);
     if (!room.ok) {
       setRefusal(room.why);
@@ -1240,13 +2993,37 @@ const App = (): React.ReactElement => {
     });
     // Where in the timeline this happened, so it stays there when the
     // conversation carries on above and below it.
-    setNotes([...notes, { note: text, spots: withSelectors, at: messages.length }]);
+    setNotesByVersion((prior) => ({
+      ...prior,
+      [docKey]: [
+        ...(prior[docKey] ?? []),
+        {
+          note: text,
+          spots: withSelectors,
+          at: messages.length,
+          // The reference travels with the note, never the bytes. `path` is
+          // filled in when the turn is built, because where a file is offered
+          // from is a per-turn copy outside the record.
+          ...(noteFiles.length === 0
+            ? {}
+            : {
+                files: noteFiles.map((f) => ({
+                  hash: f.hash,
+                  bytes: f.bytes,
+                  contentType: f.contentType,
+                  name: f.name,
+                })),
+              }),
+        },
+      ],
+    }));
+    setNoteFiles([]);
     setDraft("");
     setSelection([]);
     setSelRect(null);
     setRefusal(null);
     deselect.current?.();
-  }, [draft, selection, notes, setNotes, doc, messages.length, viewingOld]);
+  }, [draft, selection, notes, docKey, doc, messages.length, pinnedOld, noteFiles]);
 
   const sendNotes = React.useCallback(async (): Promise<void> => {
     if (notes.length === 0 || doc === null || token === null || dead) return;
@@ -1255,7 +3032,8 @@ const App = (): React.ReactElement => {
     // sharing one piece of state, so saving a document disabled sending
     // notes and sending notes showed nothing. A key that sends makes a
     // double press easy, which is what turned this up.
-    if (sendingNotes.current) return;
+    if (sendingNotes.current || submissionActive.current || submission.current().status !== "idle")
+      return;
     sendingNotes.current = true;
     setSending(true);
     try {
@@ -1264,26 +3042,19 @@ const App = (): React.ReactElement => {
       const body = encodeAnnotationBatch({
         artifactId: doc.artifactId,
         version: doc.version,
-        notes: notes.map((n) => ({ note: n.note, spots: n.spots })),
+        notes: notes.map((n) => ({
+          note: n.note,
+          spots: n.spots,
+          ...(n.files === undefined || n.files.length === 0 ? {} : { files: n.files }),
+        })),
       });
-      const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/input`, {
-        method: "POST",
-        headers: { [TOKEN_HEADER]: token, "content-type": "application/json" },
-        body: JSON.stringify({ text: body }),
-      });
-      if (!res.ok) {
-        const said = (await res.json().catch(() => ({}))) as { error?: string };
-        // Nothing is cleared: what was written is still there to send again.
-        setRefusal(said.error === undefined ? `refused (${res.status})` : String(said.error));
-        return;
-      }
-      setNotes([]);
-      setRefusal(null);
+      const result = await performSubmission(body, doc.artifactId);
+      setRefusal(result.status === "accepted" ? null : result.reason);
     } finally {
       sendingNotes.current = false;
       setSending(false);
     }
-  }, [notes, doc, token, dead, conversationId, setNotes]);
+  }, [notes, doc, token, dead, performSubmission, submission]);
 
   // What command-Enter means right now, or null when it means nothing. A
   // ref, so the window listener and the frame's callback both read the
@@ -1293,9 +3064,54 @@ const App = (): React.ReactElement => {
   // nothing at all - which is what it did, leaving a full queue, an open note
   // box, and no way out of either without reaching for the mouse.
   queueSendRef.current =
-    notes.length > 0 && !sending && (selection.length === 0 || notes.length >= NOTE_QUEUE_MAX)
+    notes.length > 0 &&
+    !sending &&
+    !submissionBusy &&
+    submission.current().status === "idle" &&
+    (selection.length === 0 || notes.length >= NOTE_QUEUE_MAX)
       ? sendNotes
       : null;
+
+  /** Choose the driver (RFC-12): POST the whole preference the line
+   * composed. The file is written by the server and read back by the poll,
+   * so nothing here changes the line - it settles from the next poll, the
+   * same discipline as sending. Answers null on success, or why it was
+   * refused, so the line can say so beside itself. */
+  const chooseLocation = React.useCallback(
+    async (folder: string, revision: number): Promise<string | null> => {
+      if (!token) return "Not connected";
+      const response = await fetch(
+        `/api/conversations/${encodeURIComponent(conversationId)}/location`,
+        {
+          method: "POST",
+          headers: { [TOKEN_HEADER]: token, "content-type": "application/json" },
+          body: JSON.stringify({ workingDirectory: folder, expectedRevision: revision }),
+        },
+      );
+      const result = await response.json();
+      if (!response.ok) return result.reason ?? "Cannot save folder";
+      setLocation(result);
+      return null;
+    },
+    [token, conversationId],
+  );
+  const chooseDriver = React.useCallback(
+    async (body: DriverChoiceBody): Promise<string | null> => {
+      if (token === null) return "not connected";
+      const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/driver`, {
+        method: "POST",
+        headers: { [TOKEN_HEADER]: token, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        setDriverPreference(await res.json());
+        return null;
+      }
+      const said = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+      return said.reason ?? said.error ?? `refused (${res.status})`;
+    },
+    [token, conversationId],
+  );
 
   /** Write a title. Returns null on success, or why not, so the field can
    * stay open with the reason beside it rather than closing and losing what
@@ -1358,6 +3174,277 @@ const App = (): React.ReactElement => {
     }
   }, [confirmRestore, doc, token, dead, restoring, conversationId]);
 
+  const compareWith = React.useCallback(
+    async (version: number): Promise<void> => {
+      if (doc === null || token === null || catalog === null || version >= catalog.latest) return;
+      if (pending) {
+        setRefusal(
+          "Before comparing, save or discard edits and send or discard the notes on this version. Your work is still here.",
+        );
+        return;
+      }
+      const request = ++comparisonRequest.current;
+      const latest = catalog.latest;
+      const pair: ComparisonPair = {
+        earlier: null,
+        earlierVersion: version,
+        reviewed: null,
+        reviewedVersion: latest,
+      };
+      setComparing({ ...pair, loading: true });
+      comparingRef.current = { ...pair, loading: true };
+      const read = async (v: number): Promise<Doc | null> => {
+        try {
+          const response = await fetch(
+            `/api/conversations/${encodeURIComponent(conversationId)}/artifacts/${encodeURIComponent(doc.artifactId)}/${v}`,
+            { headers: { [TOKEN_HEADER]: token } },
+          );
+          return response.ok ? ((await response.json()) as Doc) : null;
+        } catch {
+          return null;
+        }
+      };
+      const [earlier, reviewed] = await Promise.all([read(version), read(latest)]);
+      if (request === comparisonRequest.current)
+        setComparing({ ...pair, earlier, reviewed, loading: false });
+    },
+    [doc, token, catalog, pending, conversationId],
+  );
+
+  const reviewLatestComparison = React.useCallback(async (): Promise<void> => {
+    if (!comparing || !catalog || !doc || !token) return;
+    const version = catalog.latest;
+    const request = ++comparisonRequest.current;
+    setComparing({ ...comparing, loading: true });
+    try {
+      const response = await fetch(
+        `/api/conversations/${encodeURIComponent(conversationId)}/artifacts/${encodeURIComponent(doc.artifactId)}/${version}`,
+        { headers: { [TOKEN_HEADER]: token } },
+      );
+      const reviewed = response.ok ? ((await response.json()) as Doc) : null;
+      if (request === comparisonRequest.current)
+        setComparing({ ...comparing, reviewed, reviewedVersion: version, loading: false });
+    } catch {
+      if (request === comparisonRequest.current)
+        setComparing({ ...comparing, reviewed: null, reviewedVersion: version, loading: false });
+    }
+  }, [comparing, catalog, doc, token, conversationId]);
+
+  const closeComparison = React.useCallback((): void => {
+    if (navigationBlocked.current) {
+      setComparisonRefusal(
+        "Send or cancel your note before closing the comparison. Reconcile an unresolved send first.",
+      );
+      return;
+    }
+    comparisonRequest.current++;
+    const reviewed = comparing?.reviewed;
+    if (reviewed) {
+      setDoc(reviewed);
+      shown.current = `${reviewed.artifactId}@${reviewed.version}`;
+      if (place.current?.version === reviewed.version) pendingRestore.current = place.current;
+    }
+    setComparing(null);
+    comparingRef.current = null;
+    setPinned(null);
+  }, [comparing]);
+
+  const sendComparisonNote = async (): Promise<void> => {
+    if (
+      !doc ||
+      !comparing ||
+      !comparisonDraft ||
+      recoveryLocked ||
+      submissionActive.current ||
+      submission.current().status !== "idle"
+    )
+      return;
+    const queued = notesByVersion[`${doc.artifactId}@${comparisonDraft.spot.sourceVersion}`] ?? [];
+    if (queued.length) {
+      setComparisonRefusal(
+        `You have unsent ordinary notes on v${comparisonDraft.spot.sourceVersion}. Resolve that queue on its original version before sending this note. Neither draft has been sent.`,
+      );
+      return;
+    }
+    if (
+      !comparisonDraft.text.trim() ||
+      !comparing.reviewed ||
+      (catalog?.latest ?? 0) > comparing.reviewedVersion
+    ) {
+      setComparisonRefusal("Review the latest saved version before sending this note.");
+      return;
+    }
+    const text = comparisonDraftText(doc.artifactId, comparing, comparisonDraft);
+    if (!text) return;
+    setComparisonRefusal(null);
+    await recovery.begin(doc.artifactId, text);
+  };
+  const restoreComparisonRequest = (request: PendingInput, error: string): void => {
+    const text = pendingInputText(request),
+      metadata = comparisonMetadata(text);
+    const draft = restoreComparisonDraft(text);
+    if (!draft || metadata.kind !== "comparison") {
+      setComparisonRefusal(
+        "This saved note cannot be restored to comparison. Its text remains in recovery.",
+      );
+      return;
+    }
+    setComparisonDraft(draft);
+    setComparisonRefusal(error);
+    const batch = metadata.batch;
+    const pair = {
+      earlier: null,
+      earlierVersion: batch.comparison.earlierVersion,
+      reviewed: null,
+      reviewedVersion: batch.comparison.reviewedVersion,
+      loading: true,
+    };
+    setWantArtifact(batch.artifactId);
+    setComparing(pair);
+    comparingRef.current = pair;
+    const requestNumber = ++comparisonRequest.current;
+    const read = async (version: number): Promise<Doc | null> => {
+      try {
+        const response = await fetch(
+          `/api/conversations/${encodeURIComponent(conversationId)}/artifacts/${encodeURIComponent(batch.artifactId)}/${version}`,
+          { headers: { [TOKEN_HEADER]: liveToken.current ?? "" } },
+        );
+        return response.ok ? ((await response.json()) as Doc) : null;
+      } catch {
+        return null;
+      }
+    };
+    void Promise.all([read(pair.earlierVersion), read(pair.reviewedVersion)]).then(
+      ([earlier, reviewed]) => {
+        if (requestNumber === comparisonRequest.current) {
+          setComparing({ ...pair, earlier, reviewed, loading: false });
+          if (reviewed) setDoc(reviewed);
+        }
+      },
+    );
+  };
+
+  /** Store a chosen file and describe it back. Shared by the composer and
+   * the note box, because storing is the same act either way - only what the
+   * reference is then attached to differs. A refusal goes to whichever
+   * surface asked, and each file settles on its own - by its place in the
+   * chosen set, since names can repeat - so its chip leaves when its own
+   * bytes have landed. */
+  const storeFiles = React.useCallback(
+    async (
+      files: FileList,
+      onRefusal: (name: string | null, reason: string) => void,
+      onSettled: (at: number) => void,
+    ): Promise<readonly Attached[]> => {
+      if (token === null || conversationId === "") return [];
+      const out: Attached[] = [];
+      for (let at = 0; at < files.length; at += 1) {
+        const file = files.item(at);
+        if (file === null) continue;
+        try {
+          const res = await fetch(
+            `/api/conversations/${encodeURIComponent(conversationId)}/attachments`,
+            {
+              method: "POST",
+              headers: {
+                [TOKEN_HEADER]: token,
+                "x-lucid-filename": file.name,
+                "content-type": file.type === "" ? "application/octet-stream" : file.type,
+              },
+              body: file,
+            },
+          );
+          if (!res.ok) {
+            const said = (await res.json().catch(() => ({}))) as { error?: string };
+            // The real bound, not the prototype's: 25 MB is what this build
+            // refuses, and the chip says that in the bound's own decimal
+            // units - the coverage ruling names the exact wording.
+            onRefusal(
+              file.name,
+              said.error === "attachment-too-large"
+                ? `over the ${ATTACHMENT_BYTES_MAX / 1_000_000} MB limit`
+                : `could not attach: ${said.error ?? res.status}`,
+            );
+            continue;
+          }
+          const a = (await res.json()) as Omit<Attached, "url">;
+          let url: string | null = null;
+          if (a.contentType.startsWith("image/")) {
+            const got = await fetch(
+              `/api/conversations/${encodeURIComponent(conversationId)}/attachments/${a.hash}`,
+              { headers: { [TOKEN_HEADER]: token } },
+            );
+            if (got.ok) {
+              const blob = await got.blob();
+              // Served as an image only when the BYTES say so: a file that
+              // claimed to be a picture and is not comes back as bytes and
+              // gets the placeholder rather than a broken one.
+              if (blob.type.startsWith("image/")) url = URL.createObjectURL(blob);
+            }
+          }
+          out.push({ ...a, url });
+        } catch (e: unknown) {
+          onRefusal(file.name, `could not attach: ${String(e)}`);
+        } finally {
+          onSettled(at);
+        }
+      }
+      return out;
+    },
+    [token, conversationId],
+  );
+
+  const attachToNote = React.useCallback(
+    async (files: FileList): Promise<void> => {
+      const chips = Array.from(files).map((f, i) => ({ id: `n${i}`, name: f.name, bytes: f.size }));
+      setNoteUploading((prev) => [...prev, ...chips]);
+      const stored = await storeFiles(files, addNoteRefusal, (at) => {
+        const id = `n${at}`;
+        setNoteUploading((prev) => prev.filter((u) => u.id !== id));
+      });
+      setNoteFiles((prev) => [
+        ...prev,
+        ...stored.filter((a) => !prev.some((p) => p.hash === a.hash)),
+      ]);
+    },
+    [storeFiles, addNoteRefusal],
+  );
+
+  const removeNoteFile = React.useCallback((hash: string): void => {
+    setNoteFiles((prev) => {
+      const going = prev.find((a) => a.hash === hash);
+      if (going?.url !== null && going?.url !== undefined) URL.revokeObjectURL(going.url);
+      return prev.filter((a) => a.hash !== hash);
+    });
+  }, []);
+
+  const attachFiles = React.useCallback(
+    async (files: FileList): Promise<void> => {
+      const chips = Array.from(files).map((f, i) => ({ id: `u${i}`, name: f.name, bytes: f.size }));
+      setUploading((prev) => [...prev, ...chips]);
+      const stored = await storeFiles(files, addRefusal, (at) => {
+        const id = `u${at}`;
+        setUploading((prev) => prev.filter((u) => u.id !== id));
+      });
+      setAttached((prev) => [
+        ...prev,
+        ...stored.filter((a) => !prev.some((p) => p.hash === a.hash)),
+      ]);
+    },
+    [storeFiles, addRefusal],
+  );
+
+  /** Take it off the message. The bytes stay in the record - nothing removes
+   * anything from a record - and this is the message forgetting it. */
+  const removeAttachment = React.useCallback((hash: string): void => {
+    setAttached((prev) => {
+      // The object URL holds the bytes in the page until it is revoked.
+      const going = prev.find((a) => a.hash === hash);
+      if (going?.url !== null && going?.url !== undefined) URL.revokeObjectURL(going.url);
+      return prev.filter((a) => a.hash !== hash);
+    });
+  }, []);
+
   const save = React.useCallback(async (): Promise<void> => {
     if (doc === null || token === null || dead || snapshot.current === null) return;
     setSaving(true);
@@ -1388,6 +3475,7 @@ const App = (): React.ReactElement => {
       }
       const body = (await res.json()) as { version: number; supersededSince: boolean };
       setEdited(false);
+      setEditedCount(0);
       setRefusal(null);
       setSaved(
         body.supersededSince
@@ -1424,8 +3512,14 @@ const App = (): React.ReactElement => {
         how: Confidence | null;
         why: string | null;
         snippet: string;
+        selectors: SpotSelectors | undefined;
       }[] = [];
       const target = new DOMParser().parseFromString(doc.bytes, "text/html");
+      if (alive) setSeams([]);
+      // The parsed bytes of each older version that verified, kept for the
+      // seam walk: where a lost note's passage WAS is a question about the
+      // old document, not the one on screen.
+      const olderDocs = new Map<number, Document>();
       for (const [key, list] of Object.entries(sentNotes)) {
         const sep = key.lastIndexOf("@");
         if (sep === -1 || key.slice(0, sep) !== doc.artifactId) continue;
@@ -1438,6 +3532,11 @@ const App = (): React.ReactElement => {
         if (from === doc.version) {
           for (const n of list) {
             for (const sp of n.spots) {
+              if (
+                sp.sourceVersion !== undefined &&
+                (sp.sourceVersion !== doc.version || sp.sourceHash !== doc.hash)
+              )
+                continue;
               out.push({
                 note: n.note,
                 fromVersion: from,
@@ -1445,6 +3544,7 @@ const App = (): React.ReactElement => {
                 how: null,
                 why: null,
                 snippet: sp.snippet,
+                selectors: sp.selectors as SpotSelectors | undefined,
               });
             }
           }
@@ -1464,6 +3564,8 @@ const App = (): React.ReactElement => {
             if (res.ok) {
               const src = (await res.json()) as { bytes: string; hash: string };
               ok = (await sha256Hex(src.bytes)) === src.hash;
+              if (ok === true && !olderDocs.has(from))
+                olderDocs.set(from, new DOMParser().parseFromString(src.bytes, "text/html"));
             } else {
               ok = false;
             }
@@ -1477,6 +3579,7 @@ const App = (): React.ReactElement => {
         for (const n of list) {
           // Each spot resolves on its own, and whichever survive are kept.
           for (const sp of n.spots) {
+            if (sp.sourceVersion !== undefined || sp.sourceHash !== undefined) continue;
             const sel = sp.selectors as SpotSelectors | undefined;
             if (sel === undefined) {
               out.push({
@@ -1486,6 +3589,7 @@ const App = (): React.ReactElement => {
                 how: null,
                 why: "no-selectors",
                 snippet: sp.snippet,
+                selectors: undefined,
               });
               continue;
             }
@@ -1502,6 +3606,7 @@ const App = (): React.ReactElement => {
                 how: null,
                 why: "later-version",
                 snippet: sp.snippet,
+                selectors: sel,
               });
               continue;
             }
@@ -1515,6 +3620,7 @@ const App = (): React.ReactElement => {
                     how: r.how,
                     why: null,
                     snippet: sp.snippet,
+                    selectors: sel,
                   }
                 : {
                     note: n.note,
@@ -1523,12 +3629,29 @@ const App = (): React.ReactElement => {
                     how: null,
                     why: r.why,
                     snippet: sp.snippet,
+                    selectors: sel,
                   },
             );
           }
         }
       }
       if (alive) setAnchored(out);
+
+      // Where a lost note pointed (3e): the seam's placement is proven in
+      // seams.ts against documents, not trusted from the one place it runs.
+      // The older bytes were fetched above for the hash check and kept
+      // parsed; the lost spots are everything the resolutions marked lost.
+      if (alive)
+        setSeams(
+          seamsForLost(
+            out
+              .filter((a) => a.elementId === null && a.why !== "later-version" && a.why !== null)
+              .map((a) => ({ fromVersion: a.fromVersion, selectors: a.selectors })),
+            olderDocs,
+            target,
+            doc.version,
+          ),
+        );
     })();
     return () => {
       alive = false;
@@ -1541,23 +3664,13 @@ const App = (): React.ReactElement => {
         .filter((p) => p.type === "text")
         .map((p) => p.text ?? "")
         .join("");
-      if (text.trim() === "" || token === null || dead) return;
-      const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/input`, {
-        method: "POST",
-        headers: { [TOKEN_HEADER]: token, "content-type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
-      if (res.status === 401) {
-        setDead(true);
-        setProblem("This page's token is no longer valid — the server restarted. Reload.");
+      if (text.trim() === "" || token === null || dead) {
+        composerRestore.current?.setText(text);
         return;
       }
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        setProblem(`Not sent: ${body.error ?? res.status}`);
-      }
+      await performSubmission(text);
     },
-    [conversationId, token, dead],
+    [token, dead, performSubmission],
   );
 
   // A save is an artifact version entry, not an input, so it is not in the
@@ -1593,31 +3706,21 @@ const App = (): React.ReactElement => {
         },
       }));
 
-    if (placed.length === 0) return weaveNotes(messages, notes);
-
-    const woven: Msg[] = [];
-    let next = 0;
-    for (const m of messages) {
-      // Every save whose place is at or before this line goes in first.
-      while (next < placed.length && (placed[next]?.after ?? 0) < (m.seq ?? 0)) {
-        woven.push(placed[next++]?.line as Msg);
-      }
-      woven.push(m);
-    }
-    while (next < placed.length) woven.push(placed[next++]?.line as Msg);
-    return weaveNotes(woven, notes);
-  }, [messages, catalog, notes]);
+    // Dead (3d): queued notes leave the timeline and become one held card
+    // under it - "N notes, nothing sent" - because nothing can be sent and
+    // a queue that looks live would say otherwise.
+    return weaveNotes(messages, dead ? [] : notes, placed);
+  }, [messages, catalog, notes, dead]);
 
   const runtime = useExternalStoreRuntime<Msg>({
     messages: withSaves,
     setMessages: (next) => setMessages([...next]),
     onNew,
-    convertMessage: (m: Msg) => ({
-      id: m.id,
-      role: m.role,
-      content: [{ type: "text" as const, text: m.text }],
-    }),
+    // A new converter invalidates assistant-ui's object cache when a save or
+    // pending note shifts an existing message's position.
+    convertMessage: (m: Msg, index: number) => runtimeMessage(m, index),
   });
+  composerRestore.current = runtime.thread.composer;
 
   /** What to do next, in one line.
    *
@@ -1627,12 +3730,47 @@ const App = (): React.ReactElement => {
    * the page is in and what the next act is. */
   /** Keyed the way the batch line looks a note up: what it said, and what
    * it pointed at. */
+  /** The count chip's data: every note each block has carried, answered or
+   * not (handoff, "State needed": noteCountByBlock). The record hands the
+   * page notes, not counts - sent ones as anchors against the version on
+   * screen, queued ones as the batch being composed - so the tally is
+   * derived here, client-side, from what the page already holds. A note
+   * pointing at the same block twice counts once for that block; the chip
+   * answers "how many notes", not "how many spots". */
+  const noteCountByBlock = React.useMemo(() => {
+    const counts = new Map<string, number>();
+    const seen = new Set<string>();
+    const add = (id: string, by: string): void => {
+      const key = `${by}\u0000${id}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    };
+    for (const a of anchored) if (a.elementId !== null) add(a.elementId, a.note);
+    for (const n of notes) for (const sp of n.spots) add(sp.id, n.note);
+    return counts;
+  }, [anchored, notes]);
+
   const resolutions = React.useMemo(() => {
-    const m = new Map<string, { lost: boolean; later: boolean; how: string | null }>();
+    const m = new Map<
+      string,
+      {
+        lost: boolean;
+        later: boolean;
+        how: string | null;
+        elementId: string | null;
+        fromVersion: number;
+      }
+    >();
     for (const a of anchored) {
       m.set(`${a.note}\u0000${a.snippet}`, {
         lost: a.elementId === null && a.why !== "later-version",
         later: a.why === "later-version",
+        // What the note points at in the version on screen. Already resolved
+        // - it is what decides the "found again, exactly" line below - so
+        // going there needs no second search.
+        elementId: a.elementId,
+        fromVersion: a.fromVersion,
         how:
           a.how === null
             ? null
@@ -1648,19 +3786,36 @@ const App = (): React.ReactElement => {
     return m;
   }, [anchored]);
 
-  viewingOldRef.current = viewingOld;
+  viewingOldRef.current = pinnedOld;
+  // The save bar hides the mode control while an edit is pending, so the
+  // hotkey goes with it. A key that still worked would be an unlabelled
+  // way past a bar whose whole claim is that there are two things to do.
+  editedRef.current = edited;
+  // The version on screen, for readers that must not re-run when it
+  // changes. The document channel is one: making it depend on `doc`
+  // would restart a fetching effect every time a fetch finished.
+  docRef.current = doc;
 
   const guidance = ((): { text: string; tone: "idle" | "ready" | "warn" } => {
     if (doc === null) return { text: "No document in this conversation yet.", tone: "idle" };
     if (refusal !== null) return { text: refusal, tone: "warn" };
     // Said before anything else about the document, because it explains why
     // every other affordance is missing.
-    if (viewingOld)
+    if (pinnedOld)
       return {
         text: `Version ${doc?.version} — read only. Only the current version can be edited or written about.`,
         tone: "warn",
       };
-    if (edited) return { text: "You changed the document. Save to keep it.", tone: "ready" };
+    // Being overtaken is not read only, so it does not take this branch. An
+    // edit in progress keeps saying what it says, and the banner above the
+    // document is what reports the newer version.
+    if (edited)
+      return {
+        text: overtaken
+          ? "You changed the document. Save to keep it — it will land on top of the newer version."
+          : "You changed the document. Save to keep it.",
+        tone: "ready",
+      };
     // What the last save did. It was recorded and never shown, so a save the
     // server turned down looked exactly like one that worked.
     if (saved !== null)
@@ -1674,351 +3829,1019 @@ const App = (): React.ReactElement => {
         text: `${notes.length} note${notes.length === 1 ? "" : "s"} ready. ⌘⏎ sends them, or select more.`,
         tone: "ready",
       };
-    if (mode === "markup")
-      return {
-        text: "Marking up: click a part of the document to select it, ⌘-click to add more. ⌥⌫ goes back to using it.",
-        tone: "idle",
-      };
-    return {
-      text: "Using the document: tick boxes, fill fields, and click text to edit it. ⌥⌫ switches to Mark up to write notes about it.",
-      tone: "idle",
-    };
+    // The mode how-to is gone (Kevin, 2026-08-29): the sheet's tab carries
+    // the mode, and a hint that repeats it forever stops being read. What
+    // renders down here now is only what is news - a warning, an outcome,
+    // a count. Nothing to say, nothing drawn.
+    return { text: "", tone: "idle" };
   })();
+
+  /** Handed to every note card. Refuses while an older version is pinned:
+   * the note's target was resolved against what is on screen, and jumping
+   * inside a version the note was not written against points at the wrong
+   * place rather than at nothing. */
+  const goToSpot = React.useCallback(
+    (ids: readonly string[]) => {
+      if (pinnedOld) return;
+      focusSpot.current?.(ids);
+    },
+    [pinnedOld],
+  );
+
+  /** The frame says the person changed the document, and by how many blocks
+   * (6c names the quantity in the discard dialog). */
+  const onDirty = React.useCallback((edits: number): void => {
+    setEdited(true);
+    setEditedCount(edits);
+  }, []);
+
+  /** What a version changed out of sight (6a). Shown blocks pulsed; these
+   * are offered at the sheet edge nearest them instead, and taking the
+   * offer is the only thing that moves the page. */
+  const onOffscreen = React.useCallback(
+    (below: readonly number[], above: readonly number[]): void => {
+      if (below.length === 0 && above.length === 0) {
+        setOffer(null);
+        return;
+      }
+      const side = below.length > 0 ? "below" : "above";
+      const list = side === "below" ? below : above;
+      setOffer({ side, count: list.length, index: list[0] as number, note: false });
+    },
+    [],
+  );
+
+  /** A note's target sat off screen (6a). The frame refused to scroll; the
+   * offer docks here and says the note is the reason. */
+  const onTravel = React.useCallback((index: number, below: boolean): void => {
+    setOffer({ side: below ? "below" : "above", count: 1, index, note: true });
+  }, []);
+
+  /** A thumbnail for a stored attachment, read back once per hash through
+   * the token-checked endpoint. Null when the bytes are not a picture; a
+   * failed read leaves the design's placeholder rather than a broken img. */
+  const thumbCache = React.useRef(new Map<string, string | null>());
+  const thumbFor = React.useCallback(
+    (hash: string): Promise<string | null> => {
+      const had = thumbCache.current.get(hash);
+      if (had !== undefined) return Promise.resolve(had);
+      return (async (): Promise<string | null> => {
+        let url: string | null = null;
+        try {
+          if (token !== null) {
+            const got = await fetch(
+              `/api/conversations/${encodeURIComponent(conversationId)}/attachments/${hash}`,
+              { headers: { [TOKEN_HEADER]: token } },
+            );
+            if (got.ok) {
+              const blob = await got.blob();
+              if (blob.type.startsWith("image/")) url = URL.createObjectURL(blob);
+            }
+          }
+        } catch {
+          url = null;
+        }
+        thumbCache.current.set(hash, url);
+        return url;
+      })();
+    },
+    [token, conversationId],
+  );
+
+  /** Activity at the end of the transcript, counted and clocked (3c, 6e Wait).
+   * No activity produces no status message. */
+  const busy = activity.turn || activity.inFlight > 0 || activity.waiting > 0;
+  // When this stretch of work began. Held across renders because nothing in
+  // the record says it: a turn writes no line between its input and its
+  // terminal event, so the only witness to the start is the page that saw
+  // idle become busy. Adjusted during render, which is React's own form for
+  // state derived from a change in props.
+  const [wasBusy, setWasBusy] = React.useState(busy);
+  const [startedAt, setStartedAt] = React.useState<number | null>(busy ? now : null);
+  if (busy !== wasBusy) {
+    setWasBusy(busy);
+    setStartedAt(busy ? now : null);
+  }
+  // A turn that streams resets the clock as it goes; one that says nothing
+  // until it finishes is timed from when it started.
+  const since = Math.max(startedAt ?? now, lastChange);
+  const report = describeActivity(
+    activity,
+    (now - since) / 1000,
+    status !== "agent-gone" && status !== "no record",
+  );
+  /** The header over the document column, in its three states (README \u00a71):
+   * reading on the ground, ink while changes are unsaved, and the one
+   * magenta state when there is no driver. Everything it shows is decided by
+   * data the page already holds - it never invents a state. */
+  const headerTitle = (doc: Doc): React.ReactNode => {
+    if (dead || damaged)
+      return (
+        <>
+          <span className="none-name">{dead ? "No driver" : "Damaged record"}</span>
+          <span className="head-cause">
+            {dead
+              ? "this page's token is no longer valid · your work is on disk"
+              : "the log is damaged past a point · what follows is not shown"}
+          </span>
+        </>
+      );
+    const title = allArtifacts.find((a) => a.artifactId === doc.artifactId)?.title;
+    return (
+      <DocName
+        artifactId={doc.artifactId}
+        {...(title === undefined ? {} : { title })}
+        onRename={rename}
+      />
+    );
+  };
+
+  const nextVersion = (catalog?.latest ?? doc?.version ?? 0) + 1;
+  /** The number of saved versions, for the discard dialog's second fact. */
+  const savedCount = catalog?.versions.length ?? null;
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <Resolutions.Provider value={resolutions}>
-        <header className="head">
-          <span className="id">{conversationId === "" ? "no conversation" : conversationId}</span>
-          {driver.harness === undefined ? null : (
-            <span className="driver">
-              {driver.harness}
-              {driver.model === undefined ? "" : ` · ${driver.model}`}
-              {driver.harnessVersion === undefined ? "" : ` · ${driver.harnessVersion}`}
-            </span>
-          )}
-          <span className="status">{status}</span>
-        </header>
-        {problem === null ? null : <div className="notice">{problem}</div>}
-
-        <div className="panes">
-          {/* The document is the thing being worked on, so it gets the room
-            and the left side. The conversation is the margin note. */}
-          <div className="pane document">
-            {unknownArtifact !== null ? (
-              // A link naming an artifact this record does not hold. Said
-              // plainly, with the way on, rather than quietly showing a
-              // different document or rendering a blank frame.
-              <div className="empty doc-empty">
-                <p>This conversation has no artifact called “{unknownArtifact}”.</p>
-                {/* A conversation holds one artifact, so there is one thing
-                    to offer and it is named. This is what the list used to
-                    do for this page; without a replacement, saying the
-                    artifact does not exist and offering nothing makes the
-                    page a dead end. */}
-                {allArtifacts.length === 0 ? (
-                  <p>It has no artifact yet. Ask the agent for a document.</p>
-                ) : (
-                  <button
-                    type="button"
-                    className="primary"
-                    onClick={() => openArtifact((allArtifacts[0] as CatalogEntry).artifactId)}
-                  >
-                    Open “{displayName(allArtifacts[0] as CatalogEntry)}”
-                  </button>
-                )}
-              </div>
-            ) : doc === null ? (
-              <div className="empty doc-empty">
-                Nothing to mark up yet. Ask the agent for a document.
-              </div>
-            ) : (
-              <>
-                <div className="doc-head">
-                  <DocName
-                    artifactId={doc.artifactId}
-                    {...(allArtifacts.find((a) => a.artifactId === doc.artifactId)?.title ===
-                    undefined
-                      ? {}
-                      : {
-                          title: allArtifacts.find((a) => a.artifactId === doc.artifactId)
-                            ?.title as string,
-                        })}
-                    onRename={rename}
-                  />
-                  {/* One version is a badge with nothing to open. More than
-                    one is a dropdown, newest first: a row of buttons does not
-                    survive a hundred versions, which is what a long
-                    conversation produces. A native select because it is the
-                    affordance, and the visual treatment belongs to the design
-                    pass rather than to this. */}
-                  {catalog === null || catalog.versions.length < 2 ? (
-                    <span className="doc-version">v{doc.version}</span>
-                  ) : (
-                    <select
-                      className={viewingOld ? "doc-version-pick old" : "doc-version-pick"}
-                      value={String(doc.version)}
-                      aria-label="Version"
-                      onChange={(e) => {
-                        const picked = Number.parseInt(e.target.value, 10);
-                        // Choosing the current version is choosing to follow
-                        // it, not to pin it there. Otherwise the newest
-                        // version arriving would leave you on a stale one
-                        // that the picker calls current.
-                        setPinned(picked === catalog.latest ? null : picked);
-                      }}
-                    >
-                      {[...catalog.versions].reverse().map((v) => (
-                        <option key={v} value={String(v)}>
-                          v{v}
-                          {catalog.authors?.[v] === "human" ? " · saved by you" : " · by the agent"}
-                          {v === catalog.latest ? " · current" : ""}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  {pinned === null ? null : (
-                    <button type="button" className="v latest" onClick={() => setPinned(null)}>
-                      {viewingOld ? "Back to current" : "Follow newest"}
-                    </button>
-                  )}
-                  {viewingOld ? (
-                    <button
-                      type="button"
-                      className="v restore"
-                      onClick={() => setConfirmRestore(doc.version)}
-                      title={`Make v${doc.version} the current version`}
-                    >
-                      Restore this version
-                    </button>
-                  ) : null}
-                  <span className="modes">
-                    <button
-                      type="button"
-                      className={mode === "use" ? "m current" : "m"}
-                      onClick={() => setMode("use")}
-                      disabled={viewingOld}
-                      title="Tick boxes, fill fields, and edit text (⌥⌫)"
-                    >
-                      Use
-                    </button>
-                    <button
-                      type="button"
-                      className={mode === "markup" ? "m current" : "m"}
-                      onClick={() => setMode("markup")}
-                      disabled={viewingOld}
-                      title="Click parts of the document to write notes about them (⌥⌫)"
-                    >
-                      Mark up
-                    </button>
-                  </span>
+        <FocusSpot.Provider value={goToSpot}>
+          <CompareWith.Provider value={(v: number) => void compareWith(v)}>
+            <ThumbFor.Provider value={thumbFor}>
+              {problem === null || dead || damaged ? null : (
+                <div className="notice" role="alert">
+                  {problem}
                 </div>
+              )}
 
-                {waiting === null || waiting <= doc.version ? null : (
-                  <div className="doc-waiting">
-                    Version {waiting} has arrived.{" "}
-                    {/* Follow rather than pin, for the reason the save path
-                      gives: pinning to the newest version now means being
-                      read-only against the one after it. */}
-                    <button type="button" onClick={() => setPinned(null)}>
-                      show it
-                    </button>
-                  </div>
-                )}
-
-                {/* The frame and the note box share one positioned box, so
-                  a rect in the frame's own viewport is also a position on
-                  this page and the anchor needs no arithmetic. */}
-                <div className="doc-stage">
-                  <DocumentFrame
-                    doc={doc}
-                    onSelection={onSelected}
-                    capture={capture}
-                    snapshot={snapshot}
-                    deselect={deselect}
-                    onHotkey={onHotkey}
-                    onDirty={() => setEdited(true)}
-                    marked={[
-                      ...notes.flatMap((n) => n.spots.map((sp) => sp.id)),
-                      ...anchored.flatMap((a) => (a.elementId === null ? [] : [a.elementId])),
-                    ]}
-                    mode={mode}
-                    readOnly={viewingOld}
-                  />
-
-                  {/* Written where you clicked. The box used to be a panel at
-                    the bottom of the pane, so the thing being written about
-                    and the writing were at opposite ends of the screen. */}
-                  <Popover.Root
-                    open={selection.length > 0 && selRect !== null}
-                    // Whether it is open is a fact about the selection, so
-                    // the selection is the only thing that decides it. The
-                    // library asked to close on any click outside and took
-                    // a half-written note with it; refusing here means the
-                    // ways out are Cancel, Escape, and Add note.
-                    onOpenChange={() => {}}
-                  >
-                    <Popover.Anchor asChild>
-                      <div
-                        className="sel-anchor"
-                        style={
-                          selRect === null
-                            ? { display: "none" }
-                            : {
-                                left: `${selRect.x}px`,
-                                top: `${selRect.y}px`,
-                                width: `${selRect.width}px`,
-                                height: `${selRect.height}px`,
-                              }
-                        }
-                      />
-                    </Popover.Anchor>
-                    <Popover.Portal>
-                      <Popover.Content
-                        className="note-pop"
-                        // Under the line, not beside it. A block in a
-                        // document is as wide as the column, so there is
-                        // never room to the side — Radix said so, reporting
-                        // 128px available, and the box hung off the screen.
-                        // Below, it flips above near the bottom and slides
-                        // sideways to stay in view.
-                        side="bottom"
-                        align="start"
-                        // Stepped in from the left edge of what it points at.
-                        // Flush, its edge lined up with the paragraph's and
-                        // the two read as one block.
-                        alignOffset={28}
-                        sideOffset={8}
-                        collisionPadding={12}
-                        // Only Escape and the buttons close it. A click into
-                        // the document is how a second spot is added, and it
-                        // must not throw away what is already typed.
-                        onInteractOutside={(e) => e.preventDefault()}
-                        onFocusOutside={(e) => e.preventDefault()}
-                        onEscapeKeyDown={cancelNote}
-                        onOpenAutoFocus={(e) => {
-                          e.preventDefault();
-                          noteBox.current?.focus();
-                        }}
-                      >
-                        <div className="note-pop-head">
-                          {notes.length >= NOTE_QUEUE_MAX
-                            ? `${NOTE_QUEUE_MAX} notes queued — send them before writing another`
-                            : `${selection.length} selected${selection.length > 1 ? " — ⌘-click adds more" : ""}`}
+              <div className="panes">
+                {/* The document is the thing being worked on, so it gets the room
+                and the left side. The conversation is the margin note. */}
+                <div
+                  className="pane document"
+                  style={{ "--document-height": `${documentShare * 100}%` } as React.CSSProperties}
+                >
+                  {comparisonRefusal && !comparing ? <p role="alert">{comparisonRefusal}</p> : null}
+                  {unknownArtifact !== null ? (
+                    <>
+                      {/* 6d: the address named an artifact this record does not
+                          hold. Not an error and not styled as one - the way
+                          on is the artifact it does hold, named plainly. */}
+                      <div className="doc-head">
+                        <a className="doc-mark" href="/" aria-label="Lucid hub">
+                          <span className="dot" />
+                          <span className="word">lucid</span>
+                        </a>
+                        <span className="doc-head-sep" aria-hidden="true" />
+                        {allArtifacts.length === 0 ? (
+                          <span className="none-name">No document</span>
+                        ) : (
+                          <span className="dim-name">
+                            {displayName(allArtifacts[0] as CatalogEntry)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="doc-ground">
+                        <div className="empty-panel">
+                          <div className="miss-heading">
+                            This conversation has no artifact called{" "}
+                            <code className="miss-name">{unknownArtifact}</code>.
+                          </div>
+                          <div className="miss-line">
+                            It holds {allArtifacts.length} artifact
+                            {allArtifacts.length === 1 ? "" : "s"}. Nothing is missing and nothing
+                            failed — the address simply named something else.
+                          </div>
+                          {allArtifacts.length === 0 ? null : (
+                            <div className="artifact-row">
+                              <span className="artifact-glyph" aria-hidden="true">
+                                <FileTextDuotone size={20} />
+                              </span>
+                              <span className="artifact-meta">
+                                <span className="artifact-name">
+                                  {displayName(allArtifacts[0] as CatalogEntry)}
+                                </span>
+                                <span className="artifact-facts">
+                                  {(() => {
+                                    const one = allArtifacts[0] as CatalogEntry;
+                                    return `v${one.latest} · latest of ${one.versions.length} · saved by ${one.authors?.[one.latest] === "human" ? "you" : "the agent"}`;
+                                  })()}
+                                </span>
+                              </span>
+                              <button
+                                type="button"
+                                className="primary"
+                                onClick={() =>
+                                  openArtifact((allArtifacts[0] as CatalogEntry).artifactId)
+                                }
+                              >
+                                Open
+                              </button>
+                            </div>
+                          )}
                         </div>
-                        <textarea
-                          ref={noteBox}
-                          value={draft}
-                          onChange={(e) => setDraft(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                              e.preventDefault();
-                              void addNote();
-                            }
-                          }}
-                          placeholder={`What about ${selection.length === 1 ? "this" : `these ${selection.length}`}? (⌘⏎ to add)`}
-                          rows={3}
-                        />
-                        <div className="note-pop-actions">
-                          <button type="button" className="ghost" onClick={cancelNote}>
-                            Cancel
+                        {/* The guidance line, under the panel on the ground. */}
+                        <div className="doc-panel">
+                          <div className="guidance idle">
+                            Ask the agent for “{unknownArtifact}” and it becomes a second artifact
+                            here.
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  ) : doc === null ? (
+                    <>
+                      {/* 3a: no document, so no version pill and no mode toggle
+                          - the header says so rather than showing dead
+                          controls. The way in is the conversation. */}
+                      <div className="doc-head">
+                        <a className="doc-mark" href="/" aria-label="Lucid hub">
+                          <span className="dot" />
+                          <span className="word">lucid</span>
+                        </a>
+                        <span className="doc-head-sep" aria-hidden="true" />
+                        <span className="none-name">No document</span>
+                      </div>
+                      <div className="doc-ground">
+                        <div className="empty-panel">
+                          <div className="empty-line">
+                            Nothing here yet. Send a prompt, or attach a file. Either way lucid
+                            writes v1 and keeps it.
+                          </div>
+                          {/* Attaching here is the composer's own act: the file
+                              is stored and rides the next thing said, exactly
+                              as if the clip on the right had been pressed.
+                              Dropping a file ONTO the document is not a
+                              gesture - a file is never a version. */}
+                          <label className="v choose">
+                            Choose a file
+                            <input
+                              className="sr-only"
+                              type="file"
+                              multiple
+                              onChange={(e) => {
+                                if (e.currentTarget.files !== null)
+                                  attachFiles(e.currentTarget.files);
+                                e.currentTarget.value = "";
+                              }}
+                            />
+                          </label>
+                        </div>
+                        <div className="doc-panel">
+                          <div className="guidance idle">No document in this conversation yet.</div>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {/* Unsaved edits retain the name and local width control.
+                    Version and mode controls give way to Save and Discard.
+
+                    3f is the same bar: a version arriving underneath changes
+                    only the clause it states and the number it offers, and
+                    the conversation card below carries the same two answers. */}
+                      {dead || damaged ? (
+                        <div className="doc-head dead">
+                          <a className="doc-mark" href="/" aria-label="Lucid hub">
+                            <span className="dot" />
+                            <span className="word">lucid</span>
+                          </a>
+                          <span className="doc-head-sep" aria-hidden="true" />
+                          {headerTitle(doc)}
+                          {/* Reload restores the connection. Local width adjustment
+                              remains available without a valid token. The token cannot
+                              come back any other way, and the work is already
+                              on disk. */}
+                          <button
+                            type="button"
+                            className="v reload"
+                            onClick={() => window.location.reload()}
+                          >
+                            Reload
+                          </button>
+                          {comparing === null ? artifactWidth.control : null}
+                        </div>
+                      ) : edited ? (
+                        <div className="doc-head saving-bar">
+                          <a className="doc-mark" href="/" aria-label="Lucid hub">
+                            <span className="dot" />
+                            <span className="word">lucid</span>
+                          </a>
+                          <span className="doc-head-sep" aria-hidden="true" />
+                          {headerTitle(doc)}
+                          {comparing === null ? artifactWidth.control : null}
+                          <span className="saving-clause">
+                            {waiting !== null && waiting > doc.version
+                              ? `unsaved · v${waiting} arrived while you typed`
+                              : "unsaved changes"}
+                          </span>
+                          <button
+                            type="button"
+                            className="v"
+                            onClick={() => setConfirmDiscardEdit(true)}
+                            disabled={saving}
+                          >
+                            Discard
                           </button>
                           <button
                             type="button"
-                            className="primary"
-                            onClick={() => void addNote()}
-                            disabled={draft.trim() === "" || notes.length >= NOTE_QUEUE_MAX}
+                            className="v primary"
+                            onClick={() => void save()}
+                            disabled={saving}
                           >
-                            Add note
+                            {saving ? "Saving…" : `Save as v${nextVersion}`}
                           </button>
                         </div>
-                        <Popover.Arrow className="note-pop-arrow" width={12} height={6} />
-                      </Popover.Content>
-                    </Popover.Portal>
-                  </Popover.Root>
+                      ) : (
+                        <div className="doc-head">
+                          {/* lucid, over the document: the mark, a hairline, then
+                      the name. Nothing else above the sheet. */}
+                          <a className="doc-mark" href="/" aria-label="Lucid hub">
+                            <span className="dot" />
+                            <span className="word">lucid</span>
+                          </a>
+                          <span className="doc-head-sep" aria-hidden="true" />
+                          {headerTitle(doc)}
+                          {/* One version is a badge with nothing to open. More than
+                    one is the version pill: its closed state is the design's,
+                    and the invisible select over it opens the native dropdown.
+                    A hundred versions is a hundred buttons otherwise, and a
+                    long conversation produces a hundred versions. */}
+                          {comparing !== null ? (
+                            <span className="doc-version-pill compare-pill">
+                              <span className="v">v{comparing.earlierVersion}</span>
+                              <span className="arrow" aria-hidden="true">
+                                <ArrowRightDuotone />
+                              </span>
+                              <span className="v">v{comparing.reviewedVersion}</span>
+                            </span>
+                          ) : catalog === null || catalog.versions.length < 2 ? (
+                            <span className="doc-version">v{doc.version}</span>
+                          ) : (
+                            <span className="doc-version-pill">
+                              <span className="v">v{doc.version}</span>
+                              {viewingOld ? null : (
+                                <span className="of">latest of {catalog.versions.length}</span>
+                              )}
+                              <span className="caret" aria-hidden="true">
+                                <CaretDownDuotone />
+                              </span>
+                              <select
+                                className="pill-select"
+                                value={String(doc.version)}
+                                aria-label="Version"
+                                onChange={(e) => {
+                                  const picked = Number.parseInt(e.target.value, 10);
+                                  // Choosing the current version is choosing to follow
+                                  // it, not to pin it there. Otherwise the newest
+                                  // version arriving would leave you on a stale one
+                                  // that the picker calls current.
+                                  setPinned(picked === catalog.latest ? null : picked);
+                                }}
+                              >
+                                {[...catalog.versions].reverse().map((v) => (
+                                  <option key={v} value={String(v)}>
+                                    v{v}
+                                    {catalog.authors?.[v] === "human"
+                                      ? " · saved by you"
+                                      : " · by the agent"}
+                                    {v === catalog.latest ? " · current" : ""}
+                                  </option>
+                                ))}
+                              </select>
+                            </span>
+                          )}
+                          {/* G4: a pinned old version states its rule in the
+                          lock vocabulary - read-only, neutral ink, never
+                          magenta, because going back on purpose refused
+                          nothing. */}
+                          {pinnedOld && comparing === null ? (
+                            <span className="lock-chip">
+                              <LockDuotone size={11} />
+                              viewing v{doc.version} · read-only
+                            </span>
+                          ) : null}
+                          {/* Offered only where there is something to compare
+                      against: one version has nothing to be held against, and
+                      while a comparison is open the header already states
+                      which two it holds. */}
+                          {comparing !== null ||
+                          catalog === null ||
+                          catalog.versions.length < 2 ? null : (
+                            <select
+                              className="compare-pick"
+                              value=""
+                              aria-label="Compare with another version"
+                              onChange={(e) => {
+                                const v = Number.parseInt(e.target.value, 10);
+                                if (Number.isSafeInteger(v)) void compareWith(v);
+                                e.currentTarget.value = "";
+                              }}
+                            >
+                              <option value="">Compare with…</option>
+                              {[...catalog.versions]
+                                .reverse()
+                                .filter((v) => v < catalog.latest)
+                                .map((v) => (
+                                  <option key={v} value={String(v)}>
+                                    v{v}
+                                  </option>
+                                ))}
+                            </select>
+                          )}
+                          {comparing === null ? artifactWidth.control : null}
+                          {comparing === null && pinned !== null ? (
+                            <button
+                              type="button"
+                              className="v latest"
+                              onClick={() => setPinned(null)}
+                            >
+                              {viewingOld ? "Back to current" : "Follow newest"}
+                            </button>
+                          ) : null}
+                          {comparing === null && pinnedOld ? (
+                            <button
+                              type="button"
+                              className="v restore"
+                              onClick={() => setConfirmRestore(doc.version)}
+                              title={`Make v${doc.version} the current version`}
+                            >
+                              Restore this version
+                            </button>
+                          ) : null}
+                          {comparing !== null ? (
+                            /* 6b: there is no mode here and neither side takes a
+                          caret, so the toggle is replaced by the lock chip
+                          and the way out. */
+                            <>
+                              <span className="lock-chip">
+                                <LockDuotone size={11} />
+                                Comparing
+                              </span>
+                              <button type="button" className="v" onClick={closeComparison}>
+                                Close
+                              </button>
+                            </>
+                          ) : (
+                            <span className="modes">
+                              <button
+                                type="button"
+                                className={mode === "annotate" ? "m current" : "m"}
+                                onClick={() => setMode("annotate")}
+                                disabled={pinnedOld}
+                                title="Click parts of the document to write notes about them (⌥⌫)"
+                              >
+                                Annotate
+                              </button>
+                              <button
+                                type="button"
+                                className={mode === "edit" ? "m current" : "m"}
+                                onClick={() => setMode("edit")}
+                                disabled={pinnedOld}
+                                title="Tick boxes, fill fields, and edit text (⌥⌫)"
+                              >
+                                Edit
+                              </button>
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* The other half of the update-location rule (#181). What
+                  the reader could see pulsed and is not mentioned; what they
+                  could not see did not pulse and is offered here - at the
+                  sheet edge nearest the target, per 6a. Saying both would be
+                  saying it twice. */}
+                      {offer === null ? null : (
+                        <button
+                          type="button"
+                          className={`travel-offer ${offer.side}`}
+                          title="Put the target at the centre of the sheet"
+                          onClick={() => {
+                            goBlock.current?.(offer.index);
+                            setOffer(null);
+                          }}
+                        >
+                          <span className="t-arrow" aria-hidden="true">
+                            {offer.side === "below" ? <ArrowDownDuotone /> : <ArrowUpDuotone />}
+                          </span>
+                          <span className="t">
+                            {offer.note
+                              ? `1 change ${offer.side} · the note points there`
+                              : `${offer.count} change${offer.count === 1 ? "" : "s"} ${offer.side}`}
+                          </span>
+                          <span className="jump">Jump</span>
+                        </button>
+                      )}
+
+                      {waiting === null ||
+                      waiting <= doc.version ||
+                      edited ||
+                      dead ||
+                      damaged ? null : (
+                        <div className="doc-waiting">
+                          Version {waiting} has arrived.{" "}
+                          {/* Follow rather than pin, for the reason the save path
+                        gives: pinning to the newest version now means being
+                        read-only against the one after it. */}
+                          <button type="button" onClick={goToNewest}>
+                            show it
+                          </button>
+                        </div>
+                      )}
+
+                      {/* A comparison replaces the sheet on the ground (6b); the
+                    header above it states which two versions, and leaving it
+                    returns to the version that was being read, exactly where
+                    it was. */}
+                      {comparing === null ? (
+                        <div
+                          className={
+                            mode === "edit" && !(pinnedOld || dead || damaged)
+                              ? "doc-ground edit"
+                              : "doc-ground"
+                          }
+                        >
+                          {/* The frame and the note box share one positioned box, so
+                  a rect in the frame's own viewport is also a position on
+                  this page and the anchor needs no arithmetic. The box is
+                  the sheet: --paper, the mode's 1px border, radius 12px. */}
+                          <div
+                            ref={artifactWidth.stage}
+                            style={artifactWidth.style}
+                            className={[
+                              "doc-stage",
+                              pinnedOld ? "ro" : "",
+                              dead || damaged ? "dead" : "",
+                            ]
+                              .filter((c) => c !== "")
+                              .join(" ")}
+                          >
+                            {/* The tab on the sheet's top edge carries the mode. An
+                    indicator only - the toggle in the header is the control.
+                    A version that refuses everything says that instead: grey,
+                    edge ink, no mode named (G4, 3d). */}
+                            {dead || damaged ? (
+                              <div className="doc-tab grey" aria-hidden="true">
+                                {dead ? "Read only — no driver" : "Read only"}
+                              </div>
+                            ) : pinnedOld ? (
+                              <div className="doc-tab grey" aria-hidden="true">
+                                Read only
+                              </div>
+                            ) : (
+                              <div className="doc-tab" aria-hidden="true">
+                                {mode === "edit" ? "Edit" : "Annotate"}
+                              </div>
+                            )}
+                            <DocumentFrame
+                              doc={doc}
+                              onSelection={onSelected}
+                              capture={capture}
+                              snapshot={snapshot}
+                              deselect={deselect}
+                              focusSpot={focusSpot}
+                              place={place}
+                              restorePlace={restorePlace}
+                              pendingRestore={pendingRestore}
+                              pendingPulse={pendingPulse}
+                              pulseBlocks={pulseBlocks}
+                              goBlock={goBlock}
+                              onOffscreen={onOffscreen}
+                              onTravel={onTravel}
+                              onMarksBelow={setMarksBelow}
+                              onSeamClick={(v) => void compareWith(v)}
+                              seams={seams}
+                              onHotkey={onHotkey}
+                              onDirty={onDirty}
+                              noteCounts={noteCountByBlock}
+                              mode={mode}
+                              readOnly={pinnedOld || dead || damaged}
+                            />
+
+                            {/* 3g: most of the marks are below the fold on a long
+                        document. The bottom 56px of the sheet fades to
+                        paper and one ink pill says how many are down there;
+                        taking it goes to the next one. The scrollbar stays
+                        a scrollbar - no tick marks, no minimap. */}
+                            {marksBelow.length === 0 ? null : (
+                              <>
+                                <div className="sheet-fade" aria-hidden="true" />
+                                <button
+                                  type="button"
+                                  className="marks-pill"
+                                  title="Go to the next noted block"
+                                  onClick={() => {
+                                    const first = marksBelow[0];
+                                    if (first !== undefined) goBlock.current?.(first);
+                                  }}
+                                >
+                                  <span className="dot" aria-hidden="true" />
+                                  {marksBelow.length} note{marksBelow.length === 1 ? "" : "s"} below
+                                </button>
+                              </>
+                            )}
+
+                            {/* Written where you clicked. The box used to be a panel at
+                    the bottom of the pane, so the thing being written about
+                    and the writing were at opposite ends of the screen. */}
+                            <Popover.Root
+                              open={selection.length > 0 && selRect !== null}
+                              // Whether it is open is a fact about the selection, so
+                              // the selection is the only thing that decides it. The
+                              // library asked to close on any click outside and took
+                              // a half-written note with it; refusing here means the
+                              // ways out are Cancel, Escape, and Add note.
+                              onOpenChange={() => {}}
+                            >
+                              <Popover.Anchor asChild>
+                                <div
+                                  className="sel-anchor"
+                                  style={
+                                    selRect === null
+                                      ? { display: "none" }
+                                      : {
+                                          left: `${selRect.x}px`,
+                                          top: `${selRect.y}px`,
+                                          width: `${selRect.width}px`,
+                                          height: `${selRect.height}px`,
+                                        }
+                                  }
+                                />
+                              </Popover.Anchor>
+                              <Popover.Portal>
+                                <Popover.Content
+                                  className="note-pop"
+                                  // Under the line, not beside it. A block in a
+                                  // document is as wide as the column, so there is
+                                  // never room to the side — Radix said so, reporting
+                                  // 128px available, and the box hung off the screen.
+                                  // Below, it flips above near the bottom and slides
+                                  // sideways to stay in view.
+                                  side="bottom"
+                                  align="start"
+                                  // Stepped in from the left edge of what it points at.
+                                  // Flush, its edge lined up with the paragraph's and
+                                  // the two read as one block.
+                                  alignOffset={28}
+                                  sideOffset={8}
+                                  collisionPadding={12}
+                                  // Only Escape and the buttons close it. A click into
+                                  // the document is how a second spot is added, and it
+                                  // must not throw away what is already typed.
+                                  onInteractOutside={(e) => e.preventDefault()}
+                                  onFocusOutside={(e) => e.preventDefault()}
+                                  onEscapeKeyDown={cancelNote}
+                                  onOpenAutoFocus={(e) => {
+                                    e.preventDefault();
+                                    noteBox.current?.focus();
+                                  }}
+                                >
+                                  <div className="note-pop-head">
+                                    {notes.length >= NOTE_QUEUE_MAX
+                                      ? `${NOTE_QUEUE_MAX} notes queued — send them before writing another`
+                                      : `${selection.length} selected${selection.length > 1 ? " — ⌘-click adds more" : ""}`}
+                                  </div>
+                                  <textarea
+                                    ref={noteBox}
+                                    value={draft}
+                                    onChange={(e) => setDraft(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                                        e.preventDefault();
+                                        void addNote();
+                                      }
+                                    }}
+                                    placeholder={`What about ${selection.length === 1 ? "this" : `these ${selection.length}`}? (⌘⏎ to add)`}
+                                    rows={3}
+                                  />
+                                  {noteFiles.length + noteUploading.length + noteRefusals.length ===
+                                  0 ? null : (
+                                    <div className="attached in-note">
+                                      {noteUploading.map((u) => (
+                                        <UploadingChip key={u.id} name={u.name} bytes={u.bytes} />
+                                      ))}
+                                      {noteFiles.map((a) =>
+                                        a.url !== null || a.contentType.startsWith("image/") ? (
+                                          <ImageChip
+                                            key={a.hash}
+                                            name={a.name}
+                                            url={a.url}
+                                            onRemove={() => removeNoteFile(a.hash)}
+                                          />
+                                        ) : (
+                                          <PillChip
+                                            key={a.hash}
+                                            name={a.name}
+                                            contentType={a.contentType}
+                                            bytes={a.bytes}
+                                            onRemove={() => removeNoteFile(a.hash)}
+                                          />
+                                        ),
+                                      )}
+                                      {noteRefusals.map((r) => (
+                                        <RefusalChip
+                                          key={r.id}
+                                          name={r.name}
+                                          reason={r.reason}
+                                          onDismiss={() =>
+                                            setNoteRefusals((prev) =>
+                                              prev.filter((x) => x.id !== r.id),
+                                            )
+                                          }
+                                        />
+                                      ))}
+                                    </div>
+                                  )}
+                                  <div className="note-pop-actions">
+                                    {/* The half that carries this feature: a
+                              screenshot of what is wrong with a paragraph is
+                              marking up, which is what lucid is for. */}
+                                    <label className="attach" title="Attach a file to this note">
+                                      <PaperclipDuotone size={16} />
+                                      <input
+                                        type="file"
+                                        multiple
+                                        onChange={(e) => {
+                                          if (e.currentTarget.files !== null)
+                                            void attachToNote(e.currentTarget.files);
+                                          e.currentTarget.value = "";
+                                        }}
+                                      />
+                                    </label>
+                                    <button type="button" className="ghost" onClick={cancelNote}>
+                                      Cancel
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="primary"
+                                      onClick={() => void addNote()}
+                                      disabled={
+                                        draft.trim() === "" || notes.length >= NOTE_QUEUE_MAX
+                                      }
+                                    >
+                                      Add note
+                                    </button>
+                                  </div>
+                                  <Popover.Arrow className="note-pop-arrow" width={12} height={6} />
+                                </Popover.Content>
+                              </Popover.Portal>
+                            </Popover.Root>
+                          </div>
+
+                          {/* The guidance line, under the sheet on the ground.
+                              Empty when there is nothing to say. */}
+                          <div className="doc-panel">
+                            {guidance.text === "" ? null : (
+                              <div className={`guidance ${guidance.tone}`}>{guidance.text}</div>
+                            )}
+
+                            {/* Saving moved to the top bar with #171, and this is
+                        what is left: the last save's outcome, which is news
+                        rather than an action. A second Save down here would be
+                        a second place to look for the same thing. */}
+                            {saved === null ? null : <div className="note-actions">{saved}</div>}
+                          </div>
+                        </div>
+                      ) : (
+                        <ContentComparisonView
+                          artifactId={doc.artifactId}
+                          pair={comparing}
+                          latest={catalog?.latest ?? comparing.reviewedVersion}
+                          loading={comparing.loading}
+                          onReview={() => void reviewLatestComparison()}
+                          draft={comparisonDraft}
+                          onDraft={(next) => {
+                            setComparisonDraft(next);
+                            setComparisonRefusal(null);
+                          }}
+                          onSend={() => void sendComparisonNote()}
+                          locked={
+                            recoveryLocked ||
+                            submissionBusy ||
+                            submission.current().status !== "idle"
+                          }
+                          refusal={comparisonRefusal}
+                          sent={messages.flatMap((message) =>
+                            message.sentBatch?.comparison && message.sentBatch.comparisonUsable
+                              ? [message.sentBatch]
+                              : [],
+                          )}
+                        />
+                      )}
+                    </>
+                  )}
                 </div>
 
-                {/* Everything below here has a fixed height and never scrolls
-                  out of view. The actions were reachable only by scrolling a
-                  panel that grew with the notes in it. */}
-                {/* A confirmation, because a restore puts a new version in
-                  front of the agent. It says the undo out loud: someone
-                  deciding whether to restore is deciding whether it is
-                  reversible, and here it is - permanently, because nothing
-                  is overwritten. */}
-                {confirmRestore === null ? null : (
-                  <div className="confirm">
-                    <span>
-                      Make v{confirmRestore} the current version? It is copied to the end of the
-                      list as v{(catalog?.latest ?? doc.version) + 1}. Nothing is deleted, and going
-                      back is restoring v{catalog?.latest ?? doc.version} the same way.
-                    </span>
-                    <button
-                      type="button"
-                      className="primary"
-                      onClick={() => void restore()}
-                      disabled={restoring}
-                    >
-                      {restoring ? "Restoring…" : "Restore"}
-                    </button>
-                    <button type="button" onClick={() => setConfirmRestore(null)}>
-                      Cancel
-                    </button>
-                  </div>
-                )}
-
-                <div className="doc-panel">
-                  <div className={`guidance ${guidance.tone}`}>{guidance.text}</div>
-
-                  <div className="note-actions">
-                    <button
-                      type="button"
-                      onClick={() => void save()}
-                      disabled={!edited || saving || viewingOld}
-                      title="Double-click text in the document to edit it; controls work as they are"
-                    >
-                      {saving ? "Saving…" : edited ? "Save changes" : "Saved"}
-                    </button>
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* An `hr`, because that is what a separator is. It carries its
+                {/* An `hr`, because that is what a separator is. It carries its
               width so a reader that cannot see the drag is still told what
               the arrow keys just did. */}
-          <hr
-            className={dragging ? "pane-grip dragging" : "pane-grip"}
-            onPointerDown={startDrag}
-            onKeyDown={nudgeDrag}
-            tabIndex={0}
-            aria-orientation="vertical"
-            aria-label="Resize the conversation"
-            aria-valuemin={CONVERSATION_MIN}
-            aria-valuemax={CONVERSATION_MAX}
-            aria-valuenow={convWidth ?? undefined}
-          />
+                <hr
+                  className={dragging ? "pane-grip dragging" : "pane-grip"}
+                  onPointerDown={startDrag}
+                  onKeyDown={nudgeDrag}
+                  tabIndex={0}
+                  aria-orientation={stacked ? "horizontal" : "vertical"}
+                  aria-label={stacked ? "Resize document height" : "Resize the conversation"}
+                  aria-valuemin={stacked ? DOCUMENT_SHARE_MIN * 100 : CONVERSATION_MIN}
+                  aria-valuemax={stacked ? DOCUMENT_SHARE_MAX * 100 : CONVERSATION_MAX}
+                  aria-valuenow={
+                    stacked ? Math.round(documentShare * 100) : (convWidth ?? undefined)
+                  }
+                  aria-valuetext={
+                    stacked
+                      ? "Document uses " +
+                        Math.round(documentShare * 100) +
+                        "% of the available height"
+                      : undefined
+                  }
+                />
 
-          <div
-            className="pane conversation"
-            style={
-              convWidth === null
-                ? undefined
-                : ({ "--conversation-width": `${convWidth}px` } as React.CSSProperties)
-            }
-          >
-            <Thread
-              pending={notes}
-              onSendNotes={() => void sendNotes()}
-              onDiscardNotes={() => setNotes([])}
-              sending={sending}
-              activity={activity}
-              now={now}
-              lastChange={lastChange}
-            />
-          </div>
-        </div>
+                <div
+                  className="pane conversation"
+                  style={
+                    convWidth === null
+                      ? undefined
+                      : ({ "--conversation-width": `${convWidth}px` } as React.CSSProperties)
+                  }
+                >
+                  <Thread
+                    pending={notes}
+                    onSendNotes={() => void sendNotes()}
+                    onDiscardNotes={() => setNotes([])}
+                    sending={sending}
+                    report={report}
+                    version={doc?.version ?? null}
+                    dead={dead}
+                    invite={doc === null && !dead}
+                    collision={
+                      edited && waiting !== null && waiting > (doc?.version ?? 0)
+                        ? { arrived: waiting, next: nextVersion }
+                        : null
+                    }
+                    onSave={() => void save()}
+                    onShowWaiting={(arrived) => setConfirmDiscard(arrived)}
+                    attachments={attached}
+                    uploading={uploading}
+                    refusals={refusals}
+                    onAttach={(files) => void attachFiles(files)}
+                    onRemoveAttachment={removeAttachment}
+                    onDismissRefusal={(id) =>
+                      setRefusals((prev) => prev.filter((r) => r.id !== id))
+                    }
+                    driver={driver}
+                    driverPreference={driverPreference}
+                    driverChoices={driverChoices}
+                    onDriverChoice={chooseDriver}
+                    location={location}
+                    settingsIssue={settingsIssue}
+                    onLocation={chooseLocation}
+                    comparisonBlocked={recoveryLocked}
+                    comparisonRecovery={
+                      <InputRecoveryPanel
+                        recovery={recovery}
+                        onReload={() => window.location.reload()}
+                        onRestore={restoreComparisonRequest}
+                      />
+                    }
+                    executionRecovery={executions.map((entry) => (
+                      <ExecutionRecovery
+                        key={`${entry.inputId}:${entry.attempt}`}
+                        entry={entry}
+                        disabled={dead || token === null}
+                        send={async (inputId, body) => {
+                          if (token === null || dead) return "Reload to reconnect before recovery.";
+                          const response = await fetch(
+                            `/api/conversations/${encodeURIComponent(conversationId)}/inputs/${encodeURIComponent(inputId)}/recovery`,
+                            {
+                              method: "POST",
+                              headers: {
+                                [TOKEN_HEADER]: token,
+                                "content-type": "application/json",
+                              },
+                              body,
+                            },
+                          );
+                          if (response.status === 401) {
+                            setDead(true);
+                            return "Lucid restarted. Reload to reconnect.";
+                          }
+                          if (response.ok) return null;
+                          const failure = (await response.json()) as { reason?: string };
+                          return (
+                            failure.reason ??
+                            "Recovery could not be confirmed. Refresh the conversation."
+                          );
+                        }}
+                      />
+                    ))}
+                    recovery={{
+                      state: submission.current(),
+                      busy: submissionBusy,
+                      dead: dead || token === null,
+                      reason:
+                        token === null
+                          ? "Connecting before this send can be checked…"
+                          : submissionReason,
+                      onRetry: () => {
+                        if (!dead && token !== null) void performSubmission();
+                      },
+                      onDiscard: () => {
+                        if (!submission.discardInvalid())
+                          setSubmissionReason(
+                            "Cannot remove local recovery data. Browser storage is still unavailable.",
+                          );
+                        refreshSubmission();
+                      },
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* 6c: discard confirms, and the G5 restore confirm in the same
+              shell. The only dialogs, because discard is the only control
+              that destroys work - and the filled action is ink, never
+              magenta, because a choice the person made is not the substrate
+              refusing. */}
+              {confirmDiscardEdit ? (
+                <Dialog
+                  title={
+                    editedCount > 1
+                      ? `Discard your ${editedCount} edits?`
+                      : editedCount === 1
+                        ? "Discard your edit?"
+                        : "Discard your changes?"
+                  }
+                  body={
+                    <>
+                      They have not been saved to a version, so discarding is the one thing in lucid
+                      that destroys work.
+                      {savedCount === null ? (
+                        " Every version already saved is untouched."
+                      ) : (
+                        <> Every version already saved — all {savedCount} — is untouched.</>
+                      )}
+                    </>
+                  }
+                  keep="Keep editing"
+                  go="Discard them"
+                  busy={saving}
+                  onKeep={() => setConfirmDiscardEdit(false)}
+                  onGo={() => {
+                    setConfirmDiscardEdit(false);
+                    setEdited(false);
+                    setEditedCount(0);
+                    // The change lives in the frame, so the frame has to
+                    // be rebuilt from the stored bytes to be rid of it.
+                    setDoc((d) => (d === null ? d : { ...d }));
+                  }}
+                />
+              ) : null}
+              {confirmDiscard === null ? null : (
+                <Dialog
+                  title={`Discard your edits and show v${confirmDiscard}?`}
+                  body={
+                    <>
+                      Your changes have not been saved to a version, so this is the one thing in
+                      lucid that destroys work. Saving instead keeps them: they land on top of v
+                      {confirmDiscard} as v{nextVersion}, and the agent is told what they were based
+                      on.
+                      {savedCount === null
+                        ? ""
+                        : ` All ${savedCount} saved versions are untouched.`}
+                    </>
+                  }
+                  keep="Keep editing"
+                  go="Discard them"
+                  busy={saving}
+                  onKeep={() => setConfirmDiscard(null)}
+                  onGo={() => {
+                    setEdited(false);
+                    setEditedCount(0);
+                    setConfirmDiscard(null);
+                    goToNewest();
+                  }}
+                />
+              )}
+              {confirmRestore === null ? null : (
+                <Dialog
+                  title={`Restore v${confirmRestore}?`}
+                  body={
+                    <>
+                      The old bytes land as a new version at the end of the list — v
+                      {(catalog?.latest ?? doc?.version ?? 0) + 1}. Nothing is destroyed: every
+                      version stays in the record, and going back is restoring v
+                      {catalog?.latest ?? doc?.version ?? 0} the same way.
+                    </>
+                  }
+                  keep="Keep viewing"
+                  go={restoring ? "Restoring…" : "Restore"}
+                  busy={restoring}
+                  onKeep={() => setConfirmRestore(null)}
+                  onGo={() => void restore()}
+                />
+              )}
+            </ThumbFor.Provider>
+          </CompareWith.Provider>
+        </FocusSpot.Provider>
       </Resolutions.Provider>
     </AssistantRuntimeProvider>
   );

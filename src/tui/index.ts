@@ -11,7 +11,6 @@ export {
   type InputOptions,
   type InputResult,
   NotTTYError,
-  readInput,
   runInputLoop,
   type SubmitMode,
 } from "./input.js";

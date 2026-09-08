@@ -1,4 +1,0 @@
-RUN started_at=1786375222.718351
-SPAWN dropper_one pid=72588 purpose=queue-after-first-posttool
-SPAWN dropper_two pid=72589 purpose=queue-for-stop-hook
-SPAWN claude pid=72596 purpose=A-002-interactive

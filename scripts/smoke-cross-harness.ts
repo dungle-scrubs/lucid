@@ -15,7 +15,7 @@
  * honest demonstration that the durable log carries enough to do it.
  *
  * Run: bun scripts/smoke-cross-harness.ts [--from claude] [--to pi]
- * Evidence: spikes/evidence/cross-harness-handoff.md
+ * Evidence: artifacts/evidence/cross-harness-handoff.md
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,8 +23,9 @@ import { join } from "node:path";
 import { createHcnRunner } from "../src/harness/hcn-runner.js";
 import { nodeHarnessDeps } from "../src/harness/node-deps.js";
 import type { HarnessName } from "../src/harness/runner.js";
-import { openHeadlessSession, openHeadlessTurns } from "../src/modes/headless.js";
+import { hostSeamFor, openHeadlessSession, openHeadlessTurns } from "../src/modes/host.js";
 import type { Frame } from "../src/protocol/index.js";
+import { openWriter } from "../src/store/conversation-host.js";
 import { createConversationRecord, type HostRecord, openConversation } from "../src/store/store.js";
 
 const arg = (flag: string, fallback: string): string => {
@@ -83,6 +84,7 @@ const main = async (): Promise<void> => {
       conversationId,
       secret,
       runner,
+      host: hostSeamFor(host),
       mintTurnId: () => `${turnPrefix}-${++n}`,
       sendFrame: (f: Frame) => host.handleFrame(JSON.stringify(f)),
     };
@@ -177,13 +179,7 @@ const main = async (): Promise<void> => {
   // --- the record holds both harnesses' work ------------------------------
   b.source.close();
   await sleep(1500);
-  const finalHost = openConversation(dir, {
-    now: () => Date.now(),
-    presence: () => undefined,
-    executorLease: () => false,
-    onRecord: () => {},
-    onEffect: () => {},
-  });
+  const finalHost = openWriter(dir);
   const t = finalHost.transcript();
   const turnIds = [...new Set(t.events.map((e) => e.turnId))];
   const fromBoth =
@@ -198,9 +194,9 @@ const main = async (): Promise<void> => {
     ok = false;
   }
 
-  mkdirSync("spikes/evidence", { recursive: true });
+  mkdirSync("artifacts/evidence", { recursive: true });
   writeFileSync(
-    "spikes/evidence/cross-harness-handoff.md",
+    "artifacts/evidence/cross-harness-handoff.md",
     [
       `# Cross-harness handoff - ${FROM} then ${TO}`,
       "",

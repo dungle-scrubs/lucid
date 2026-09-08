@@ -7,10 +7,12 @@
  * on the surface hcn shipped in HCN_MIN_VERSION; an older binary on PATH
  * fails loudly here rather than producing a stream lucid cannot read.
  */
+
 import { spawn as nodeSpawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { selfInvocation } from "../cli/invocation.js";
 import type { HarnessDeps, HcnProcess, SpawnHcn } from "./process.js";
 import { HarnessSpawnError, HarnessVersionError } from "./runner.js";
 import { belowFloor, HCN_MIN_VERSION } from "./version.js";
@@ -69,19 +71,36 @@ const toLines = (stream: NodeJS.ReadableStream | null): AsyncIterable<string> =>
   },
 });
 
-export const nodeSpawnHcn: SpawnHcn = (argv, opts): HcnProcess => {
-  const [bin, ...args] = argv;
+/** Kept separate so compiled routing can be checked without launching a child. */
+export const hcnSupervisorInvocation = (argv: readonly string[]): readonly string[] => {
+  return selfInvocation(["_hcn-supervise", ...argv]);
+};
+
+const spawnHcn = (
+  argv: readonly string[],
+  opts: { readonly cwd?: string },
+  supervised: boolean,
+): HcnProcess => {
+  const supervisor = hcnSupervisorInvocation(argv);
+  const [bin, ...args] = supervised ? supervisor : argv;
   if (bin === undefined) throw new HarnessSpawnError("empty argv");
   let child: ReturnType<typeof nodeSpawn>;
   try {
     child = nodeSpawn(bin, args, {
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: supervised ? ["pipe", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "pipe"],
       ...(opts.cwd === undefined ? {} : { cwd: opts.cwd }),
     });
   } catch (cause) {
     throw new HarnessSpawnError(cause);
   }
+  if (supervised) {
+    child.send("ready", () => {});
+  }
+  const inputError = new Promise<void>((resolve) => {
+    child.stdin?.once("error", () => resolve());
+  });
   return {
+    inputError,
     stdout: toLines(child.stdout),
     stderr: toLines(child.stderr),
     exited: new Promise<number | null>((res) => {
@@ -94,11 +113,17 @@ export const nodeSpawnHcn: SpawnHcn = (argv, opts): HcnProcess => {
     endInput(): void {
       child.stdin?.end();
     },
+    disposeOutput(): void {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+    },
     kill(signal: "SIGTERM" | "SIGKILL" = "SIGTERM"): void {
       child.kill(signal);
     },
   };
 };
+
+export const nodeSpawnHcn: SpawnHcn = (argv, opts) => spawnHcn(argv, opts, false);
 
 /** Production deps: the resolved binary, version-checked, with the choice
  * recorded so evidence names which hcn actually ran. */
@@ -106,5 +131,9 @@ export const nodeHarnessDeps = (log?: (event: Record<string, unknown>) => void):
   const { bin, source } = resolveHcnBin();
   const version = assertHcnVersion(bin);
   log?.({ event: "hcn_resolved", bin, source, version });
-  return { spawn: nodeSpawnHcn, bin, ...(log === undefined ? {} : { log }) };
+  return {
+    spawn: (argv, opts) => spawnHcn(argv, opts, true),
+    bin,
+    ...(log === undefined ? {} : { log }),
+  };
 };

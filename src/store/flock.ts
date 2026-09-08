@@ -49,10 +49,6 @@ const loadFlock = (): FlockFn | undefined => {
 
 const flock: FlockFn | undefined = loadFlock();
 
-export type LockBackend = "flock" | "readonly";
-export const backendFor = (fn: FlockFn | undefined): LockBackend => (fn ? "flock" : "readonly");
-export const lockBackend = (): LockBackend => backendFor(flock);
-
 export class LockError extends Error {
   override readonly name = "LockError";
   constructor(
@@ -83,9 +79,6 @@ export interface AcquireOpts {
   readonly label?: string;
   readonly onEvent?: (event: LockEvent) => void;
 }
-
-const held = new Set<string>();
-export const heldLocks = (): readonly string[] => [...held];
 
 const emit = (opts: AcquireOpts | undefined, event: LockEvent): void => {
   try {
@@ -139,7 +132,6 @@ export const acquireWith = (
       }
       sleepSync(RETRY_MS);
     }
-    held.add(normalizedTarget);
     let released = false;
     const lock: AppendLock = {
       release(): void {
@@ -151,7 +143,6 @@ export const acquireWith = (
           try {
             closeSync(lockFd);
           } finally {
-            held.delete(normalizedTarget);
             emit(opts, { event: "lock.release", target: normalizedTarget, label: opts?.label });
           }
         }
@@ -165,7 +156,6 @@ export const acquireWith = (
       try {
         closeSync(lockFd);
       } catch {}
-      held.delete(normalizedTarget);
     }
   }
 };

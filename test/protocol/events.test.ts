@@ -4,7 +4,7 @@ import {
   coalesceDroppable,
   DROPPABLE_KINDS,
   DROPPABLE_QUEUE_MAX,
-  isKnownEventKind,
+  EventKind,
   LOSSLESS_KINDS,
   type PendingDroppable,
   supersedeTurn,
@@ -12,19 +12,12 @@ import {
 
 describe("event classes + coalescing (M4.3)", () => {
   test("the class split matches PLAN Part 0, and anything unclassifiable is lossless", () => {
-    expect([...DROPPABLE_KINDS]).toEqual(["token", "progress", "context"]);
-    expect([...LOSSLESS_KINDS]).toEqual(["identity", "message", "tool", "limit", "error", "done"]);
+    expect([...DROPPABLE_KINDS, ...LOSSLESS_KINDS].sort()).toEqual(Object.values(EventKind).sort());
     for (const kind of DROPPABLE_KINDS) expect(classOfEventKind(kind)).toBe("droppable");
     for (const kind of LOSSLESS_KINDS) expect(classOfEventKind(kind)).toBe("lossless");
     expect(classOfEventKind(undefined)).toBe("lossless");
     expect(classOfEventKind(42)).toBe("lossless");
     expect(classOfEventKind("brand-new-kind")).toBe("lossless");
-    // Unknown kinds are treated lossless but stay DETECTABLE - the drift
-    // probe for a harness that renames an event kind.
-    for (const kind of [...DROPPABLE_KINDS, ...LOSSLESS_KINDS])
-      expect(isKnownEventKind(kind)).toBe(true);
-    expect(isKnownEventKind("brand-new-kind")).toBe(false);
-    expect(isKnownEventKind(undefined)).toBe(false);
     expect(DROPPABLE_QUEUE_MAX).toBeGreaterThan(0);
   });
 

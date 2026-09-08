@@ -4,7 +4,7 @@
  * this process - proving the kernel releases the flock on holder death, not on
  * an explicit release.
  */
-import { acquireAppendLock } from "../../src/store/lock.js";
+import { acquireAppendLock } from "../../src/store/flock.js";
 
 const target = process.argv[2];
 if (target === undefined) {

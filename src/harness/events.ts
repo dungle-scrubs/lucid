@@ -5,13 +5,12 @@
  * hcn owns the wire; this owns lucid's reading of it. The kind strings are
  * derived from `src/protocol/events.ts`, never mirrored (C1): a rename there
  * is a single edit. hcn's stream carries kinds lucid's protocol does not
- * classify (`failure`, `question`, and the session control events), so those
+ * classify (the session control events), so those
  * are named here and everything else passes through untouched.
  *
  * The passthrough matters. hcn promises its event kinds are additive, so a
  * kind lucid does not recognise is data lucid must not drop or throw on - the
- * reducer's ledger records it and the drift probe in protocol/events can flag
- * it. A decoder that threw here would turn a normalizer release into an
+ * reducer's ledger records it. A decoder that threw here would turn a normalizer release into an
  * outage.
  *
  * What it is NOT: it is not the protocol reducer, the store, or the frame
@@ -30,16 +29,8 @@ export interface HarnessFailure {
   readonly [extra: string]: unknown;
 }
 
-/** Why a turn or a session ended. Mirrors hcn's ExitCause; carried as a
- * string so a new cause does not need a lucid release. */
-export const HARNESS_AWAITING_INPUT = "awaiting-input" as const;
-
-/** Why a turn or a session ended. Mirrors hcn's ExitCause; carried as a
- * string so a new cause does not need a lucid release. The
- * "awaiting-input" cause is named because it means the asking turn ended
- * while the session stays ready - the question becoming answerable, not
- * closing. */
-export type HarnessCause = typeof HARNESS_AWAITING_INPUT | string;
+/** Why a turn or session ended. New hcn causes remain readable. */
+export type HarnessCause = string;
 
 /** One decoded line of `hcn --json`. The turn kinds lucid's protocol already
  * knows, the two hcn adds, and the four session control events. */
@@ -56,9 +47,9 @@ export type HarnessEvent =
   | { readonly kind: typeof EventKind.context; readonly usedPct: number }
   | { readonly kind: typeof EventKind.limit; readonly code: string; readonly message: string }
   | { readonly kind: typeof EventKind.error; readonly message: string; readonly terminal?: boolean }
-  | ({ readonly kind: "failure" } & HarnessFailure)
+  | ({ readonly kind: typeof EventKind.failure } & HarnessFailure)
   | {
-      readonly kind: "question";
+      readonly kind: typeof EventKind.question;
       readonly question: string;
       readonly options: readonly string[];
       readonly recommended?: string;

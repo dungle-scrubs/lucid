@@ -10,6 +10,7 @@ import {
   CONVERSATION_MAX,
   CONVERSATION_MIN,
   clampConversationWidth,
+  clampDocumentShare,
   DOCUMENT_MIN,
   readConversationWidth,
   STORAGE_KEY,
@@ -104,5 +105,17 @@ describe("remembering it", () => {
     };
     expect(readConversationWidth(throwing)).toBe(null);
     expect(() => writeConversationWidth(throwing, 400)).not.toThrow();
+  });
+});
+
+describe("the stacked document share", () => {
+  test("keeps a requested share within both pane limits", () => {
+    expect(clampDocumentShare(0.4)).toBe(0.4);
+    expect(clampDocumentShare(-1)).toBe(0.15);
+    expect(clampDocumentShare(2)).toBe(0.7);
+  });
+  test("invalid measurements restore the conversation to the bottom third", () => {
+    expect(clampDocumentShare(Number.NaN)).toBe(2 / 3);
+    expect(clampDocumentShare(Number.POSITIVE_INFINITY)).toBe(2 / 3);
   });
 });

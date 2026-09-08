@@ -1,2 +1,0 @@
-SPAWN claude pid=64456 purpose=settings-sources-minimal-check
-EXIT claude pid=64456 fate=natural

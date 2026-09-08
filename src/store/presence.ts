@@ -15,11 +15,6 @@ export interface PresenceHandle {
 /** Resolve the presence lock path for a record. */
 export const presenceLockPath = (recordDir: string): string => join(recordDir, "presence.lock");
 
-/** Also via RecordPaths (kept for uniformity with the append lock). */
-export const presencePaths = (recordDir: string): { lockPath: string } => ({
-  lockPath: presenceLockPath(recordDir),
-});
-
 /** Acquire the presence lock for `recordDir` and hold it for the
  * caller's lifetime. Emits `presence.acquire` on success and
  * `presence.released` on release. The lock is a real `flock`, so the
@@ -27,11 +22,15 @@ export const presencePaths = (recordDir: string): { lockPath: string } => ({
 export const acquirePresence = (
   recordDir: string,
   conversationId: string,
-  opts: { onEvent?: (e: PresenceEvent) => void; onLockEvent?: (e: LockEvent) => void } = {},
+  opts: {
+    onEvent?: (e: PresenceEvent) => void;
+    onLockEvent?: (e: LockEvent) => void;
+    timeoutMs?: number;
+  } = {},
 ): PresenceHandle => {
   const lockPath = presenceLockPath(recordDir);
   const flock = new Flock(lockPath, conversationId);
-  const lock = flock.acquire({ onEvent: opts.onLockEvent });
+  const lock = flock.acquire({ onEvent: opts.onLockEvent, timeoutMs: opts.timeoutMs });
   let held = true;
   opts.onEvent?.({ event: "presence.acquire", conversationId });
 
@@ -46,17 +45,6 @@ export const acquirePresence = (
   };
 
   return { release, held: () => held };
-};
-
-/** Bind a presence handle's lifetime to a child process's death via
- * pipe-EOF. The holder watches `child.pid` - when the child exits, the
- * presence lock is released. This is the pipe-EOF reap that makes a
- * false-alive impossible after death. */
-export const bindToProcess = (
-  handle: PresenceHandle,
-  child: { readonly pid?: number; on: (event: "exit", cb: () => void) => void },
-): void => {
-  child.on("exit", () => handle.release());
 };
 
 /** Whether some process holds this record's presence lock — that is,

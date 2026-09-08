@@ -87,6 +87,7 @@ describe("an idle driver still receives what is sent to it", () => {
         harness: "claude",
       } as unknown as Frame);
       return {
+        settled: Promise.resolve(),
         receive: (frame: Frame): void => {
           if (frame.kind !== "input") return;
           delivered.push(frame.text);

@@ -59,25 +59,12 @@ describe("lucid watch over the shared tailer (RFC-04 step 4 regression)", () => 
     await watching;
   });
 
-  test("a missing record paints a watch-error view, and the poll picks the record up once it exists", async () => {
+  test("an unknown identity is refused instead of following a guessed directory", async () => {
     const root = freshRoot();
-    const controller = new AbortController();
     const views: TuiView[] = [];
-    const watching = watchConversation("conv-late", {
-      rootDir: root,
-      pollMs: 10,
-      signal: controller.signal,
-      onView: (v) => views.push(v),
-    });
-    expect(views[0]?.status).toBe("error");
-    expect(views[0]?.lines[0]?.text).toMatch(/^watch error: /);
-
-    createConversationRecord(root, "conv-late");
-    const host = writer(root, "conv-late");
-    host.enqueueInput({ id: "in-1", text: "late", mode: "queue" });
-    await until(() => views.some((v) => humanText(v).includes("late")));
-
-    controller.abort();
-    await watching;
+    await expect(
+      watchConversation("conv-late", { rootDir: root, onView: (view) => views.push(view) }),
+    ).rejects.toThrow("not-found");
+    expect(views).toEqual([]);
   });
 });

@@ -7,11 +7,12 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "isolatedModules": true,
+    "jsx": "react-jsx",
     "skipLibCheck": true,
     "noEmit": true,
     "forceConsistentCasingInFileNames": true,
     "types": ["bun"]
   },
-  "include": ["src", "test", "types"],
+  "include": ["src", "test", "types", "scripts"],
   "exclude": ["src/server/client"]
 }

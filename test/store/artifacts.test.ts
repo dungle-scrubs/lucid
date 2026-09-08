@@ -1,8 +1,13 @@
-import { describe, expect, test } from "bun:test";
-import { appendFileSync, mkdtempSync, readFileSync } from "node:fs";
+import { describe, expect, spyOn, test } from "bun:test";
+import { spawn } from "node:child_process";
+import { appendFileSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { artifactKey, foldLog, hashArtifactBytes } from "../../src/store/log.js";
+import { ARTIFACT_BYTES_MAX } from "../../src/protocol/frames.js";
+import { openWriter, viewArtifactCatalog } from "../../src/store/conversation-host.js";
+import { Flock, LockError, type LockEvent } from "../../src/store/flock.js";
+import * as logModule from "../../src/store/log.js";
+import { foldLog, hashArtifactBytes } from "../../src/store/log.js";
 import { createConversationRecord, openConversation, StoreError } from "../../src/store/store.js";
 
 const freshRoot = (): string => mkdtempSync(join(tmpdir(), "lucid-artifact-"));
@@ -112,7 +117,7 @@ describe("artifact versions (RFC-06 storage)", () => {
     // Index built during fold at open — available immediately, no extra fold for read
     const idx = host.artifactIndex();
     expect(idx.size).toBe(3);
-    expect(idx.has(artifactKey("doc-1", 2))).toBe(true);
+    expect(host.artifactHeads().get("doc-1")).toBe(3);
     // Reading v2 via seek returns exact bytes
     const v2 = host.readArtifact("doc-1", 2);
     expect(v2?.bytes).toBe("v2");
@@ -438,4 +443,203 @@ describe("artifact versions (RFC-06 storage)", () => {
     if (clash.verdict === "refused") expect(clash.issue).toBe("artifact-version-exists");
     expect(host.readArtifact("a1", 1)?.bytes).toBe("<p>one</p>");
   });
+});
+
+test("artifact heads and headers retain version placement across reopening", () => {
+  const root = freshRoot();
+  createConversationRecord(root, "headers");
+  const open = () =>
+    openConversation(recordDir(root, "headers"), {
+      now: () => 1000,
+      presence: () => undefined,
+      executorLease: () => false,
+      onEffect: () => {},
+      onRecord: () => {},
+    });
+  const host = open();
+  host.writeArtifact({
+    artifactId: "doc",
+    version: 1,
+    author: "agent",
+    contentType: "text/html",
+    bytes: "first",
+  });
+  host.enqueueInput({ id: "input", text: "change", mode: "queue" });
+  const afterSeq = host.state().seq;
+  host.writeArtifact({
+    artifactId: "doc",
+    version: 2,
+    author: "human",
+    contentType: "text/html",
+    bytes: "second",
+    basedOn: 1,
+  });
+  expect(host.artifactHeads()).toEqual(new Map([["doc", 2]]));
+  const versions = host.artifactVersions();
+  expect(versions.get("doc")?.get(1)).toMatchObject({ author: "agent", afterSeq: 0 });
+  expect(versions.get("doc")?.get(2)).toMatchObject({ author: "human", afterSeq, basedOn: 1 });
+  host.close();
+  const reopened = open();
+  expect(reopened.artifactVersions()).toEqual(versions);
+  reopened.close();
+});
+
+test("artifact writes use the host clock", () => {
+  const root = freshRoot();
+  createConversationRecord(root, "clock");
+  const host = openWriter(join(root, "clock"), { now: () => 1234 });
+  try {
+    host.writeArtifact({
+      artifactId: "doc",
+      version: 1,
+      author: "agent",
+      contentType: "text/html",
+      bytes: "one",
+    });
+    expect(host.readArtifact("doc", 1)?.at).toBe(1234);
+  } finally {
+    host.close();
+  }
+});
+
+test("indexed artifact reads are lock-free; a stale index reports its fallback timeout", async () => {
+  const root = freshRoot();
+  createConversationRecord(root, "read-lock");
+  const dir = join(root, "read-lock");
+  const lockEvents: LockEvent[] = [];
+  const host = openConversation(dir, {
+    now: () => 1000,
+    presence: () => undefined,
+    executorLease: () => false,
+    onEffect: () => {},
+    onRecord: () => {},
+    onLockEvent: (e) => lockEvents.push(e),
+  });
+  host.writeArtifact({
+    artifactId: "doc",
+    version: 1,
+    author: "agent",
+    contentType: "text/html",
+    bytes: "one",
+  });
+  const child = spawn(
+    process.execPath,
+    [join(import.meta.dir, "lock-hold-child.ts"), join(dir, "log.ndjson")],
+    { stdio: ["ignore", "pipe", "inherit"] },
+  );
+  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  const acquired = new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("child did not acquire the lock")), 5000);
+    child.stdout?.once("data", (data: Buffer) => {
+      clearTimeout(timer);
+      if (data.toString().includes("ACQUIRED")) resolve();
+      else reject(new Error("child did not report ACQUIRED"));
+    });
+    child.once("error", (cause) => {
+      clearTimeout(timer);
+      reject(cause);
+    });
+  });
+  const acquire = Flock.prototype.acquire;
+  const shortLock = spyOn(Flock.prototype, "acquire").mockImplementation(function (
+    this: Flock,
+    opts,
+  ) {
+    return acquire.call(this, { ...opts, timeoutMs: 0 });
+  });
+  try {
+    await acquired;
+    lockEvents.length = 0;
+    expect(host.readArtifact("doc", 1)?.bytes).toBe("one");
+    expect(lockEvents).toEqual([]);
+    writeFileSync(join(dir, "log.ndjson"), "");
+    expect(() => host.readArtifact("doc", 1)).toThrow(LockError);
+    expect(lockEvents.some((e) => e.event === "lock.timeout")).toBe(true);
+  } finally {
+    shortLock.mockRestore();
+    child.kill("SIGTERM");
+    await exited;
+    host.close();
+  }
+});
+
+test("headers preserve the first accepted version and exclude oversized versions", () => {
+  const entries = [
+    {
+      v: 1,
+      at: 1,
+      src: "artifact",
+      artifactId: "doc",
+      version: 1,
+      author: "agent",
+      contentType: "text/html",
+      hash: hashArtifactBytes("first"),
+      bytes: "first",
+    },
+    {
+      v: 1,
+      at: 2,
+      src: "artifact",
+      artifactId: "doc",
+      version: 1,
+      author: "human",
+      contentType: "text/html",
+      hash: hashArtifactBytes("later"),
+      bytes: "later",
+      basedOn: 9,
+    },
+    {
+      v: 1,
+      at: 3,
+      src: "artifact",
+      artifactId: "doc",
+      version: 2,
+      author: "agent",
+      contentType: "text/html",
+      hash: hashArtifactBytes("x"),
+      bytes: "x".repeat(ARTIFACT_BYTES_MAX + 1),
+    },
+  ];
+  const raw = Buffer.from(`${entries.map((e) => JSON.stringify(e)).join("\n")}\n`);
+  const folded = foldLog("headers", "secret", raw);
+  expect(folded.artifactHeads.get("doc")).toBe(1);
+  expect(folded.artifactVersions.get("doc")?.get(1)).toEqual({
+    offset: 0,
+    author: "agent",
+    at: 1,
+    afterSeq: 0,
+  });
+  expect(folded.artifactVersions.get("doc")?.has(2)).toBe(false);
+});
+
+test("the catalog builds from fold headers without reading version lines again", () => {
+  const root = freshRoot();
+  createConversationRecord(root, "catalog-headers");
+  const dir = join(root, "catalog-headers");
+  const host = openWriter(dir);
+  host.writeArtifact({
+    artifactId: "doc",
+    version: 1,
+    author: "agent",
+    contentType: "text/html",
+    bytes: "one",
+  });
+  host.writeArtifact({
+    artifactId: "doc",
+    version: 2,
+    author: "human",
+    contentType: "text/html",
+    bytes: "two",
+    basedOn: 1,
+  });
+  const reader = spyOn(logModule, "readArtifactVersion");
+  try {
+    const catalog = viewArtifactCatalog(dir);
+    expect(catalog[0]?.versions).toEqual([1, 2]);
+    expect(catalog[0]?.latest).toBe(host.artifactHeads().get("doc"));
+    expect(reader).not.toHaveBeenCalled();
+  } finally {
+    reader.mockRestore();
+    host.close();
+  }
 });

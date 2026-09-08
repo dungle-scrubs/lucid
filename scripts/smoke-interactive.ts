@@ -6,11 +6,8 @@
  * lucid, with lucid's hooks installed in project scope. lucid attaches when
  * the session starts, and interjects a queued input at the turn boundary.
  *
- * PLAN.md gates the artifact layer on the substrate being tested "through
- * every integration mode". Headless-session, headless-turn and handoff each
- * had a lane; this mode had a spike (A-002, the injection contract on claude
- * 2.1.227) and no lane. A spike proves a mechanism. A lane proves the mode
- * against lucid's own protocol, which is what the constraint asks for.
+ * This lane verifies hook attachment and delivery against the same
+ * durable protocol as the headless lanes.
  *
  * What it proves, and why each part matters:
  *
@@ -24,14 +21,15 @@
  *                                    process lucid never owned
  *
  * Run: bun scripts/smoke-interactive.ts
- * Evidence: spikes/evidence/interactive.md
+ * Evidence: artifacts/evidence/interactive.md
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LUCID_RECORD_DIR } from "../src/cli/env-stamp.js";
+import { LUCID_RECORD_DIR } from "../src/cli/record-addressing.js";
 import { sendInput } from "../src/cli/send.js";
-import { createConversationRecord, openConversation } from "../src/store/store.js";
+import { openWriter } from "../src/store/conversation-host.js";
+import { createConversationRecord } from "../src/store/store.js";
 
 const CODEWORD = "pomegranate";
 const lines: string[] = [];
@@ -121,13 +119,7 @@ const main = async (): Promise<void> => {
   if (err.trim() !== "") log(`stderr: ${err.trim().slice(0, 200)}`);
 
   // --- what the record shows -----------------------------------------------
-  const host = openConversation(dir, {
-    now: () => Date.now(),
-    presence: () => undefined,
-    executorLease: () => false,
-    onEffect: () => {},
-    onRecord: () => {},
-  });
+  const host = openWriter(dir);
   const t = host.transcript();
   const raw = readFileSync(join(dir, "log.ndjson"), "utf8");
 
@@ -154,20 +146,14 @@ const main = async (): Promise<void> => {
   log(`transcript: ${t.events.length} events, ${t.inputs.length} inputs`);
 
   // --- the record survives the session -------------------------------------
-  const reopened = openConversation(dir, {
-    now: () => Date.now(),
-    presence: () => undefined,
-    executorLease: () => false,
-    onEffect: () => {},
-    onRecord: () => {},
-  });
+  const reopened = openWriter(dir);
   const foldOk = reopened.state().seq === host.state().seq;
   log(`\n## one record, folded the same twice: ${foldOk} (seq ${host.state().seq})`);
   if (!foldOk) ok = false;
 
-  mkdirSync("spikes/evidence", { recursive: true });
+  mkdirSync("artifacts/evidence", { recursive: true });
   writeFileSync(
-    "spikes/evidence/interactive.md",
+    "artifacts/evidence/interactive.md",
     [
       "# Interactive adapter - claude, hooks in project scope",
       "",
@@ -182,9 +168,7 @@ const main = async (): Promise<void> => {
       "boundary through the Stop hook.",
       "",
       "The other live lanes drive a harness lucid owns, through hcn. This one",
-      "involves no hcn at all. PLAN.md gates the artifact layer on the",
-      "substrate being tested through every integration mode, and this was",
-      "the mode with a spike (A-002) but no lane.",
+      "verifies the human-owned integration mode through project hooks.",
       "",
       "## Run",
       "",

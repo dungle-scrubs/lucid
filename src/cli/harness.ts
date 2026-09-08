@@ -42,4 +42,21 @@ export const harnessNames = (): readonly string[] => Object.keys(BY_NAME);
 export const supportsSession = async (
   runner: HarnessRunner,
   harness: HarnessName,
-): Promise<boolean> => (await runner.inspect(harness)).session;
+  signal?: AbortSignal,
+): Promise<boolean> => (await runner.inspect(harness, signal ? { signal } : undefined)).session;
+
+/** RFC-12 startup resolution. An explicit harness named at spawn - a flag
+ * or `LUCID_HARNESS` - pins the harness for the process's life and is
+ * returned as such; otherwise the caller applies the driver preference
+ * over the returned default. */
+export const resolveStartupHarness = (opts: {
+  readonly harness?: HarnessName;
+  readonly harnessName?: string;
+}): { readonly pinned: boolean; readonly harness: HarnessName } => {
+  const envSet = (process.env.LUCID_HARNESS ?? "").trim() !== "";
+  const pinned = opts.harness !== undefined || opts.harnessName !== undefined || envSet;
+  return {
+    pinned,
+    harness: pinned ? (opts.harness ?? harnessForName(opts.harnessName)) : "claude",
+  };
+};

@@ -32,7 +32,7 @@
 
 import { stripAnnotationBatch } from "../protocol/annotations.js";
 import { stripArtifactBlocks } from "../protocol/artifacts.js";
-import { EventKind } from "../protocol/events.js";
+import { EventKind, type HarnessEventKind } from "../protocol/events.js";
 import type { ChannelStatus } from "../protocol/index.js";
 import type { Transcript, TranscriptInput } from "../store/store.js";
 
@@ -134,6 +134,21 @@ const eventText = (event: Record<string, unknown>): string => {
   if ((kind === EventKind.error || kind === EventKind.limit) && typeof event.message === "string")
     return `${kind === EventKind.error ? "✗" : "!"} ${event.message}`;
   if (kind === EventKind.progress && typeof event.label === "string") return `… ${event.label}`;
+  if (kind === EventKind.failure) {
+    // The harness naming what went wrong. The message carries the reason;
+    // when a limit lifts, that is the one fact a reader can act on - until
+    // then, nothing.
+    const f = event as { class?: unknown; message?: unknown; resetsAt?: unknown };
+    const reason =
+      typeof f.message === "string" && f.message !== ""
+        ? f.message
+        : `${typeof f.class === "string" ? f.class : "unknown"} failure`;
+    const resets =
+      typeof f.resetsAt === "number"
+        ? ` Resets at ${new Date(f.resetsAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`
+        : "";
+    return `✗ ${reason}${resets}`;
+  }
   return `[${kind}]`;
 };
 
@@ -142,7 +157,7 @@ const eventText = (event: Record<string, unknown>): string => {
  * the durable log, and neither is anything a person said or was told. Left
  * unfiltered, `identity` fell through to the `[kind]` fallback and printed a
  * bare `[identity]` line between the question and the answer. */
-const UNRENDERED: ReadonlySet<string> = new Set([EventKind.done, EventKind.identity]);
+const UNRENDERED: readonly HarnessEventKind[] = [EventKind.done, EventKind.identity];
 
 export const buildView = (input: {
   readonly transcript: Transcript;
@@ -169,15 +184,17 @@ export const buildView = (input: {
     .filter(
       (e) => !((e.event.kind as string) === EventKind.token && turnsWithMessage.has(e.turnId)),
     )
-    .filter((e) => !UNRENDERED.has(e.event.kind as string))
+    .filter((e) => !UNRENDERED.some((kind) => kind === e.event.kind))
     .map((e) => ({
       kind: "agent",
       seq: e.seq,
       text: eventText(e.event),
       event:
-        typeof (e.event as { kind?: unknown }).kind === "string"
-          ? (e.event as { kind: string }).kind
-          : undefined,
+        e.event.code === "E-COMP-07"
+          ? "comparison-held"
+          : typeof (e.event as { kind?: unknown }).kind === "string"
+            ? (e.event as { kind: string }).kind
+            : undefined,
       aborted: abortedTurns.has(e.turnId) && !completed.has(e.turnId),
     }));
 

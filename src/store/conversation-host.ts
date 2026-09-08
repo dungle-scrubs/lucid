@@ -1,3 +1,4 @@
+import { completeLegacyPreference, type DriverChoice } from "./driver-preference.js";
 /**
  * ConversationHost — the deep module that owns the durable store's
  * read and write discipline.
@@ -36,7 +37,27 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { basename } from "node:path";
+import { ownerPresence, terminalPresence } from "../process-owner.js";
+import {
+  type ContextFact,
+  type ContextOfferRequest,
+  confirmedContextThrough,
+  contextAttempt,
+  contextConfirmationLimit,
+  parseContextFact,
+  reduceContextCoverage,
+} from "../protocol/context-coverage.js";
+import {
+  type AttemptStart,
+  appliedRecovery,
+  parseExecutionFact,
+  reconcileExecutionFact,
+  reduceExecution,
+  refuseExecution,
+} from "../protocol/execution.js";
+import type { Frame, HarnessName } from "../protocol/frames.js";
+import { supportsManagedInput } from "../protocol/frames.js";
+import { HubError } from "../protocol/hub-errors.js";
 import type { Effect } from "../protocol/index.js";
 import {
   type ChannelState,
@@ -52,18 +73,25 @@ import {
   reduce,
   type TransitionRecord,
 } from "../protocol/index.js";
+import { enqueueManagedInput, inputFrame } from "../protocol/reducer.js";
+import {
+  captureDispatchContext,
+  type DispatchSnapshot,
+  dispatchStamp,
+} from "./dispatch-context.js";
 import { pathsForDir, type RecordPaths, StoreError } from "./errors.js";
-import type { LockEvent } from "./lock.js";
+import type { LockEvent } from "./flock.js";
+import type { ArtifactVersions } from "./log.js";
 import {
   type AppendEvent,
   type ArtifactVersion,
-  artifactKey,
   type CollectedBatch,
   createLog,
   foldLog,
   type LogEntry,
   readArtifactVersion,
 } from "./log.js";
+import { readRecordIdentity } from "./record-identity.js";
 
 const REDACTED = "redacted";
 
@@ -79,6 +107,10 @@ export type {
 } from "./log.js";
 
 export interface HostDeps {
+  readonly ownerPresence?: (
+    owner: import("../protocol/process-owner.js").ProcessOwner,
+  ) => boolean | undefined;
+  readonly expectedConversationId?: string;
   readonly now: () => number;
   /** The normalizer's ps-level INTERACTIVE-process probe. Liveness
    * arithmetic and the attach reducer's presence corroboration read it.
@@ -154,14 +186,32 @@ export const readRecordFiles = (
   const secret = readFileSync(paths.secretPath, "utf8").trim();
   if (!HEX_SECRET.test(secret))
     throw new StoreError("invalid-secret", `malformed secret file: ${paths.secretPath}`);
-  const conversationId = existsSync(paths.metaPath)
-    ? (JSON.parse(readFileSync(paths.metaPath, "utf8")) as { conversationId: string })
-        .conversationId
-    : basename(dir);
+  const conversationId = readRecordIdentity(dir);
   return { secret, conversationId, paths };
 };
 
 export interface ConversationHost {
+  captureDispatch(
+    inputId: string,
+    from: number | ((state: ChannelState) => number),
+  ): DispatchSnapshot;
+  writePreparedExecution(fact: AttemptStart, stamp: string): ReduceResult;
+  hasAcceptedInput(id: string): boolean;
+  recoveryInputs(): readonly Frame[];
+  contextCoverage(harness: HarnessName, sessionId: string): number;
+  offerConversationContext(offer: ContextOfferRequest): ReduceResult;
+  confirmConversationContext(turnId: string): ReduceResult;
+  writeExecution(fact: unknown, applicable?: () => boolean): ReduceResult;
+  reconcileExecution(inputId: string, expectedAttempt: number): ReduceResult;
+  acceptInput(
+    input: { readonly id: string; readonly text: string; readonly mode: "queue" },
+    options?: { readonly completeSettings?: DriverChoice; readonly managed?: boolean },
+  ):
+    | {
+        readonly verdict: "accepted";
+        readonly receipt: { readonly inputId: string; readonly seq: number };
+      }
+    | { readonly verdict: "refused"; readonly issue: string };
   readonly conversationId: string;
   readonly dir: string;
   /** Atomic snapshot: one `log.state()` read → transcript + status. */
@@ -171,12 +221,22 @@ export interface ConversationHost {
   readonly status: () => ChannelStatus;
   readonly close: () => void;
   handleFrame(line: string): ReduceResult | { verdict: "refused"; wire: true; issue: DecodeIssue };
-  enqueueInput(input: {
+  enqueueInput(
+    input: {
+      readonly id: string;
+      readonly text: string;
+      readonly mode: InputMode;
+      readonly turnId?: string;
+    },
+    completeSettings?: DriverChoice,
+  ): ReduceResult;
+  /** Browser-style queue submission with accepted-history reconciliation. */
+  submitInput(input: {
     readonly id: string;
     readonly text: string;
-    readonly mode: InputMode;
-    readonly turnId?: string;
-  }): ReduceResult;
+  }):
+    | { readonly inputId: string; readonly verdict: "accepted" }
+    | { readonly issue: string; readonly verdict: "refused" };
   grantCredit(tokens: number): ReduceResult;
   /** Fold the log under the append lock and collect effects from `fromOffset`.
    * Thin delegation to the log's seam — the lock, repair, and return-
@@ -189,6 +249,8 @@ export interface ConversationHost {
   /** Seek index built during the fold that already happens at open — reading
    * a version is a seek, not a fold. */
   artifactIndex(): ReadonlyMap<string, number>;
+  artifactHeads(): ReadonlyMap<string, number>;
+  artifactVersions(): ArtifactVersions;
   /** artifactId -> its title. An id absent from this map has no title and
    * displays as its id (RFC-07 R11). */
   artifactTitles(): ReadonlyMap<string, string>;
@@ -198,7 +260,21 @@ export interface ConversationHost {
     readonly artifactId: string;
     readonly title?: string;
   }): { verdict: "accepted" } | { verdict: "refused"; issue: string };
+  /** Store a file a person attached, and record that it exists (RFC-11).
+   * Returns the hash it is stored under. */
+  writeAttachment(params: {
+    readonly bytes: Uint8Array;
+    readonly contentType: string;
+    readonly name: string;
+    readonly text: boolean;
+  }):
+    | { verdict: "accepted"; hash: string }
+    | { verdict: "refused"; issue: "attachment-too-large" | "attachment-invalid" };
   /** Read an artifact version by seek. */
+  comparisonSnapshot(artifactId: string): {
+    readonly head: number | null;
+    readonly artifact: import("./log.js").ArtifactVersion | null;
+  };
   readArtifact(artifactId: string, version: number): import("./log.js").ArtifactVersion | null;
   /** Append an artifact version. Over-size is refused and the record still
    * opens; hash is written for every version from the first. */
@@ -218,7 +294,10 @@ export interface ConversationHost {
 export const createConversationHost = (dir: string, deps: HostDeps): ConversationHost => {
   const { secret, conversationId, paths } = readRecordFiles(dir);
 
+  if (deps.expectedConversationId !== undefined && deps.expectedConversationId !== conversationId)
+    throw new StoreError("corrupt-log", "Record identity changed");
   const log = createLog(paths, secret, conversationId, {
+    now: deps.now,
     onLockEvent: deps.onLockEvent,
     onAppendEvent: deps.onAppendEvent,
   });
@@ -234,27 +313,30 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     epoch: log.state().epoch,
   });
 
-  const transact = (
-    entry: LogEntry | null,
-    produce: (s: ChannelState) => {
-      result: ReduceResult;
-      frame: import("../protocol/index.js").Frame | null;
-    },
-  ): ReduceResult => {
-    const result = log.append((s) => {
-      const { result: r, frame } = produce(s);
-      return { entry, result: r, frame };
-    });
+  const publish = (result: ReduceResult): ReduceResult => {
+    if (deps.executorLease()) for (const effect of result.effects) deps.onEffect(effect);
+    deps.onRecord(result.record);
+    return result;
+  };
+
+  const transactDynamic = (produce: Parameters<typeof log.append>[0]): ReduceResult => {
+    const result = log.append(produce);
     // RFC-04 R2: only the presence-lock holder acts on effects. A
     // non-holder's write still lands and the reduce still returns its
     // effects — the holder rediscovers them on its catch-up fold — but
     // this process hands none to its own sink. The gate reads
     // `executorLease`, never `presence`: that probe reports the
     // interactive process's liveness, not this process's lock ownership.
-    if (deps.executorLease()) for (const effect of result.effects) deps.onEffect(effect);
-    deps.onRecord((result as unknown as { record: HostRecord }).record);
-    return result;
+    return publish(result);
   };
+
+  const transact = (
+    entry: LogEntry | null,
+    produce: (s: ChannelState) => {
+      result: ReduceResult;
+      frame: import("../protocol/index.js").Frame | null;
+    },
+  ): ReduceResult => transactDynamic((s) => ({ entry, ...produce(s) }));
 
   const snapshot = (): HostSnapshot => {
     const s = log.state();
@@ -267,7 +349,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
 
   const collectEffects = (fromOffset: number): CollectedBatch => log.collectEffects(fromOffset);
   const cursor = (): number => log.cursor();
-  const advanceCursor = (offset: number): void => log.advanceCursor(offset, deps.now());
+  const advanceCursor = (offset: number): void => log.advanceCursor(offset);
   const artifactIndex = (): ReadonlyMap<string, number> => log.artifactIndex();
   const readArtifact = (
     artifactId: string,
@@ -279,6 +361,15 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     readonly title?: string;
   }): { verdict: "accepted" } | { verdict: "refused"; issue: string } =>
     log.writeArtifactMeta(params);
+  const writeAttachment = (params: {
+    readonly bytes: Uint8Array;
+    readonly contentType: string;
+    readonly name: string;
+    readonly text: boolean;
+  }):
+    | { verdict: "accepted"; hash: string }
+    | { verdict: "refused"; issue: "attachment-too-large" | "attachment-invalid" } =>
+    log.writeAttachment(params);
   const writeArtifact = (params: {
     readonly artifactId: string;
     readonly version: number;
@@ -292,20 +383,136 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     | { verdict: "refused"; issue: "artifact-too-large" | "artifact-version-exists" } =>
     log.writeArtifact(params);
 
+  const writeContext = (produce: (state: ChannelState) => ContextFact | null): ReduceResult => {
+    const at = deps.now();
+    return transactDynamic((state) => {
+      const fact = parseContextFact(produce(state));
+      const result = reduceContextCoverage(state, fact, at, deps.executorLease());
+      return {
+        result,
+        frame: null,
+        entry:
+          fact && result.verdict === "accepted" && result.state !== state
+            ? { v: 1, at, src: "context", payloadVersion: 1, fact }
+            : null,
+      };
+    });
+  };
+
+  const writeExecution = (
+    produce: (state: ChannelState) => ReturnType<typeof reconcileExecutionFact>,
+  ): ReduceResult => {
+    const at = deps.now();
+    return transactDynamic((state) => {
+      const decision = produce(state);
+      const fact = "issue" in decision ? null : decision;
+      const result =
+        "issue" in decision
+          ? refuseExecution(state, at, decision.issue)
+          : reduceExecution(state, fact, at, deps.executorLease());
+      return {
+        result,
+        frame: null,
+        entry:
+          fact && result.verdict === "accepted" && result.state !== state
+            ? { v: 1, at, src: "execution", payloadVersion: 1, fact }
+            : null,
+      };
+    });
+  };
+
   return {
+    captureDispatch: (inputId, from) =>
+      log.inspect((snapshot) => captureDispatchContext(dir, inputId, from, snapshot)),
+    writePreparedExecution: (fact, stamp) =>
+      writeExecution((state) => {
+        if (
+          dispatchStamp(dir, fact.inputId, fact.context, state.epoch, log.artifactHeads()) !== stamp
+        )
+          return { issue: "execution-stale" };
+        // Concurrent appends do not change the captured immutable range.
+        // Confirmation stops at that gap so the next turn receives it.
+        return fact;
+      }),
+    hasAcceptedInput: (id) => log.acceptedInput(id) !== undefined,
+    recoveryInputs: () => {
+      const state = log.state();
+      return Object.entries(state.executions)
+        .filter(([id]) => appliedRecovery(state, id))
+        .flatMap(([id]) => {
+          const input = log.acceptedInput(id);
+          return input ? [inputFrame({ ...input, mode: "queue", managed: true })] : [];
+        })
+        .sort((a, b) => (a.kind === "input" ? a.seq : 0) - (b.kind === "input" ? b.seq : 0));
+    },
+    reconcileExecution: (inputId, attempt) =>
+      writeExecution((state) => reconcileExecutionFact(state, inputId, attempt)),
+    contextCoverage: (harness, sessionId) =>
+      confirmedContextThrough(log.state(), harness, sessionId),
+    offerConversationContext: (offer) =>
+      writeContext((state) => {
+        const attempt = contextAttempt(state, offer.turnId);
+        return {
+          ...offer,
+          epoch: state.epoch,
+          kind: "coverage-offered",
+          ...(attempt?.kind === "attempt-started"
+            ? { managed: { inputId: attempt.inputId, attempt: attempt.attempt } }
+            : {}),
+        };
+      }),
+    confirmConversationContext: (turnId) =>
+      writeContext((state) => {
+        let offer = state.contextOffers[turnId];
+        if (offer?.kind === "coverage-confirmed") return offer;
+        if (!offer) {
+          const attempt = contextAttempt(state, turnId);
+          const native = state.contextTurns[turnId];
+          if (
+            attempt &&
+            native?.sessionId &&
+            native.harness === attempt.driver.harness &&
+            native.epoch === attempt.epoch
+          )
+            offer = {
+              kind: "coverage-offered",
+              epoch: attempt.epoch,
+              harness: attempt.driver.harness,
+              sessionId: native.sessionId,
+              turnId,
+              context: attempt.context,
+              managed: { inputId: attempt.inputId, attempt: attempt.attempt },
+            };
+        }
+        const terminalSeq = state.completedTurns[turnId];
+        if (!offer || terminalSeq === undefined) return null;
+        // A turn knows its own output, but it did not consume new work
+        // appended concurrently after its captured context. Stop at that gap.
+        const through = contextConfirmationLimit(state, offer, terminalSeq);
+        return {
+          ...offer,
+          kind: "coverage-confirmed",
+          evidence: { kind: "completed-turn", seq: terminalSeq },
+          through,
+        };
+      }),
     conversationId,
     dir,
     snapshot,
     artifactTitles,
     writeArtifactMeta,
-    state: (): ChannelState => snapshot().state,
+    writeAttachment,
+    state: (): ChannelState => log.state(),
     close: (): void => log.close(),
-    transcript: () => snapshot().transcript,
+    transcript: () => log.transcript(),
     status: (): ChannelStatus => snapshot().status,
     cursor,
     advanceCursor,
     collectEffects,
     artifactIndex,
+    artifactHeads: () => log.artifactHeads(),
+    comparisonSnapshot: (artifactId) => log.comparisonSnapshot(artifactId),
+    artifactVersions: () => log.artifactVersions(),
     readArtifact,
     writeArtifact,
     handleFrame: (
@@ -337,32 +544,149 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
         return { verdict: "refused", wire: true, issue: decoded.issue };
       }
       const presence = decoded.frame.kind === "attach" ? deps.presence() : undefined;
+      const claim = decoded.frame.kind === "attach" ? decoded.frame.owner : undefined;
+      const owner =
+        claim && (deps.ownerPresence ?? ownerPresence)(claim) === true ? claim : undefined;
       const durable =
         decoded.frame.kind === "attach" ? { ...decoded.frame, secret: REDACTED } : decoded.frame;
       const entry: LogEntry = {
         v: 1,
         at,
         src: "frame",
+        ...(decoded.frame.kind === "attach" && decoded.frame.profile !== "interactive"
+          ? { ownersDeparted: true }
+          : {}),
         frame: durable as unknown as Record<string, unknown>,
         ...(presence === undefined ? {} : { presence }),
+        ...(owner === undefined ? {} : { owner }),
       };
       return transact(entry, (s) => {
-        const r = reduce(s, decoded.frame, at, ctxOf(presence));
+        const r = reduce(s, decoded.frame, at, {
+          ...(decoded.frame.kind === "attach" && decoded.frame.profile !== "interactive"
+            ? { ownersDeparted: true }
+            : {}),
+          ...ctxOf(presence),
+          ...(owner === undefined ? {} : { owner }),
+        });
+        // Recheck under the append lock. A terminal can attach while a
+        // worker waits for its executor lease or validates a harness.
+        if (
+          r.verdict === "accepted" &&
+          decoded.frame.kind === "attach" &&
+          decoded.frame.profile !== "interactive" &&
+          terminalPresence(s.terminalParticipations, (owner) =>
+            owner === undefined ? deps.presence() : (deps.ownerPresence ?? ownerPresence)(owner),
+          ) !== false
+        )
+          throw new HubError(
+            "The terminal owner has not departed. Keep the input pending.",
+            "E-HUB-03",
+            409,
+          );
         return { result: r, frame: decoded.frame };
       });
     },
-    enqueueInput: (input: {
-      readonly id: string;
-      readonly text: string;
-      readonly mode: InputMode;
-      readonly turnId?: string;
-    }): ReduceResult => {
+    enqueueInput: (
+      input: {
+        readonly id: string;
+        readonly text: string;
+        readonly mode: InputMode;
+        readonly turnId?: string;
+      },
+      completeSettings?: DriverChoice,
+    ): ReduceResult => {
       const at = deps.now();
-      const entry: LogEntry = { v: 1, at, src: "input", input };
-      return transact(entry, (s) => {
-        const r = enqueueInput(s, input, at);
-        return { result: r, frame: null };
+      return transactDynamic((state) => {
+        const managed =
+          input.mode === "queue" && supportsManagedInput(state.attachment?.capabilities);
+        const result = managed
+          ? enqueueManagedInput(state, input, at)
+          : enqueueInput(state, input, at);
+        if (result.verdict === "accepted" && completeSettings)
+          completeLegacyPreference(dir, completeSettings);
+        const entry: LogEntry = managed
+          ? {
+              v: 1,
+              at,
+              src: "managed-input",
+              payloadVersion: 1,
+              input: { ...input, mode: "queue" },
+              namingEligible: true,
+              intent: { kind: "requested", attempt: 0 },
+            }
+          : { v: 1, at, src: "input", input, namingEligible: true };
+        return { entry, result, frame: null };
       });
+    },
+    acceptInput: (input, options = {}) => {
+      const at = deps.now();
+      let conflict = false;
+      let acceptedSeq = 0;
+      const result = transactDynamic((state) => {
+        // append refreshes the transcript under its lock before this lookup.
+        const previous = log.acceptedInput(input.id);
+        if (previous && previous.text === input.text && previous.mode === input.mode) {
+          acceptedSeq = previous.seq;
+          return {
+            entry: null,
+            frame: null,
+            result: {
+              verdict: "accepted",
+              state,
+              effects: [],
+              record: {
+                verdict: "accepted",
+                kind: "input",
+                conversationId,
+                epoch: state.epoch,
+                seq: previous.seq,
+                now: at,
+              },
+            },
+          };
+        }
+        conflict = previous !== undefined;
+        const result = options.managed
+          ? enqueueManagedInput(state, input, at)
+          : enqueueInput(state, input, at);
+        if (result.verdict === "accepted") {
+          acceptedSeq = result.state.seq;
+          if (options.completeSettings) completeLegacyPreference(dir, options.completeSettings);
+        }
+        return {
+          entry: options.managed
+            ? {
+                v: 1,
+                at,
+                src: "managed-input",
+                payloadVersion: 1,
+                input,
+                namingEligible: true,
+                intent: { kind: "requested", attempt: 0 },
+              }
+            : { v: 1, at, src: "input", input, namingEligible: true },
+          result,
+          frame: null,
+        };
+      });
+      return result.verdict === "accepted"
+        ? { verdict: "accepted", receipt: { inputId: input.id, seq: acceptedSeq } }
+        : { verdict: "refused", issue: conflict ? "E-COMP-06" : result.issue };
+    },
+    writeExecution: (raw, applicable) =>
+      writeExecution(() =>
+        applicable && !applicable()
+          ? { issue: "execution-stale" }
+          : (parseExecutionFact(raw) ?? { issue: "invalid-execution" }),
+      ),
+    submitInput: (input) => {
+      const submission = log.submitInput(input, deps.now());
+      if (submission.kind === "replay") return { inputId: submission.inputId, verdict: "accepted" };
+      if (submission.kind === "conflict") return { issue: "E-COMP-06", verdict: "refused" };
+      const result = publish(submission.result);
+      return result.verdict === "accepted"
+        ? { inputId: input.id, verdict: "accepted" }
+        : { issue: result.issue, verdict: "refused" };
     },
     grantCredit: (tokens: number): ReduceResult => {
       const at = deps.now();
@@ -385,12 +709,18 @@ export const openConversation = createConversationHost;
  */
 export const viewConversation = (
   dir: string,
-): { state: ChannelState; transcript: import("./log.js").Transcript; goodBytes: number } => {
+): {
+  state: ChannelState;
+  transcript: import("./log.js").Transcript;
+  goodBytes: number;
+  artifactHeads: ReadonlyMap<string, number>;
+} => {
   const { secret, conversationId, paths } = readRecordFiles(dir);
   const raw = existsSync(paths.logPath) ? readFileSync(paths.logPath) : Buffer.alloc(0);
   const folded = foldLog(conversationId, secret, raw);
   return {
     state: folded.state,
+    artifactHeads: folded.artifactHeads,
     transcript: {
       events: [...folded.transcript.events],
       inputs: [...folded.transcript.inputs],
@@ -429,9 +759,7 @@ export interface ArtifactCatalogEntry {
   /** Ascending. Every version the record holds, not a range. */
   readonly versions: readonly number[];
   readonly latest: number;
-  /** Who authored each version, by version number. Read by seeking to each
-   * version's line for its header only — a catalog still carries no
-   * document bytes. */
+  /** Who authored each version, from the fold headers without document bytes. */
   readonly authors: Readonly<Record<number, string>>;
   /** Per version, the seq of the last frame accepted before it: where it sits
    * in the conversation. An artifact entry carries no seq of its own, because
@@ -449,43 +777,24 @@ export interface ArtifactCatalogEntry {
 export const viewArtifactCatalog = (dir: string): readonly ArtifactCatalogEntry[] => {
   const { secret, conversationId, paths } = readRecordFiles(dir);
   const raw = existsSync(paths.logPath) ? readFileSync(paths.logPath) : Buffer.alloc(0);
-  const { artifactIndex, artifactAfterSeq, artifactTitles } = foldLog(conversationId, secret, raw);
-  const byId = new Map<string, number[]>();
-  for (const key of artifactIndex.keys()) {
-    // `artifactKey` joins on NUL, which cannot occur in either half.
-    const sep = key.indexOf("\0");
-    if (sep === -1) continue;
-    const id = key.slice(0, sep);
-    const version = Number(key.slice(sep + 1));
-    if (!Number.isSafeInteger(version)) continue;
-    const seen = byId.get(id);
-    if (seen === undefined) byId.set(id, [version]);
-    else seen.push(version);
-  }
-  return [...byId.entries()]
-    .map(([artifactId, versions]) => {
-      const sorted = [...versions].sort((a, b) => a - b);
+  const { artifactVersions, artifactTitles } = foldLog(conversationId, secret, raw);
+  return [...artifactVersions]
+    .map(([artifactId, headers]) => {
+      const versions = [...headers.keys()].sort((a, b) => a - b);
       const authors: Record<number, string> = {};
-      // Where each version sits in the conversation. A reader showing a
-      // saved version as a moment in the thread needs this: without it the
-      // only honest place is the end, and the end reads as "just now".
       const afterSeq: Record<number, number> = {};
-      for (const v of sorted) {
-        const one = readArtifactVersion(raw, artifactId, v, artifactIndex);
-        if (one !== null) authors[v] = one.author;
-        const at = artifactAfterSeq.get(artifactKey(artifactId, v));
-        if (at !== undefined) afterSeq[v] = at;
+      for (const [version, header] of headers) {
+        authors[version] = header.author;
+        afterSeq[version] = header.afterSeq;
       }
       const title = artifactTitles.get(artifactId);
       return {
         artifactId,
-        // Only when one was written. Absent and empty are the same thing to
-        // a reader, and absent is the one the wire should carry.
-        ...(title === undefined ? {} : { title }),
-        versions: sorted,
-        latest: sorted[sorted.length - 1] as number,
+        versions,
+        latest: versions[versions.length - 1] as number,
         authors,
         afterSeq,
+        ...(title === undefined ? {} : { title }),
       };
     })
     .sort((a, b) => a.artifactId.localeCompare(b.artifactId));
@@ -504,3 +813,21 @@ export const viewArtifactVersion = (
   const { artifactIndex } = foldLog(conversationId, secret, raw);
   return readArtifactVersion(raw, artifactId, version, artifactIndex);
 };
+
+/** A writer appends durable facts but never holds the executor lease or dispatches effects. */
+export const openWriter = (
+  dir: string,
+  deps: {
+    now?: () => number;
+    presence?: () => boolean | undefined;
+    expectedConversationId?: string;
+  } = {},
+): ConversationHost =>
+  createConversationHost(dir, {
+    expectedConversationId: deps.expectedConversationId,
+    now: deps.now ?? Date.now,
+    presence: deps.presence ?? (() => undefined),
+    executorLease: () => false,
+    onEffect: () => {},
+    onRecord: () => {},
+  });

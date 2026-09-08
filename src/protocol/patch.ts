@@ -17,8 +17,8 @@
  * document is what is there.
  */
 
-import { ARTIFACT_BYTES_MAX } from "../store/log.js";
 import { quoteForRefusal } from "./artifacts.js";
+import { ARTIFACT_BYTES_MAX } from "./frames.js";
 
 /* RFC-08 R7. Security requires each of these, and an unnamed bound is not a
  * bound. Lengths are counted the way the rest of the store counts them, in

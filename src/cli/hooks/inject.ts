@@ -17,16 +17,8 @@
  * and it does not depend on the Stop hook.
  */
 
-import { deliverFirstQueued, exitHook, guardHookEntry, readStdin } from "./delivery.js";
-
-// Re-export the deep seam so existing importers keep their path. The
-// single metric/cap lives in delivery.ts.
-export {
-  CHUNK_CAP_BYTES,
-  chunkHookInput as chunkInput,
-  encodedByteLength,
-  HOOK_CHUNK_CAP_BYTES,
-} from "./delivery.js";
+import { deliverFirstQueued, guardHookEntry } from "../../modes/interactive-host.js";
+import { exitHook, readStdin } from "./delivery.js";
 
 export interface InjectResult {
   readonly ok: boolean;
@@ -39,6 +31,7 @@ export interface InjectResult {
 export const inject = async (stdin: string): Promise<InjectResult> => {
   const guard = guardHookEntry(stdin);
   if (!guard.proceed) return guard.result as InjectResult;
+  delete process.env.HERDR_ENV;
   return deliverFirstQueued(guard.record.dir);
 };
 
