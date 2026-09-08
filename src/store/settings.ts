@@ -41,7 +41,14 @@ export function replaceLocation(
       throw new HubError("Working folder changed. Reload before saving.", "E-HUB-02", 409, [
         "Reload folder",
       ]);
-    const next = { ...meta, ...association, locationRevision: expected + 1 };
+    if (meta.managedWorkspace === true && association.workingDirectory === meta.workingDirectory)
+      return locationProjection(meta);
+    const next = {
+      ...meta,
+      ...association,
+      ...(meta.managedWorkspace === true ? { managedWorkspace: false } : {}),
+      locationRevision: expected + 1,
+    };
     atomicSidecar(pathsForDir(dir).metaPath, next);
     return locationProjection(next);
   });

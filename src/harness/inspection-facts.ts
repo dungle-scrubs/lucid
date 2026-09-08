@@ -1,5 +1,19 @@
 import { isAbsolute } from "node:path";
 
+/** Only the complete known declaration can select native headless handling. */
+export function nativeContextManagement(value: unknown): boolean {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    record.kind === "auto-compaction" &&
+    Array.isArray(record.modes) &&
+    record.modes.includes("headless-turn") &&
+    record.modes.every(
+      (mode) => mode === "headless-turn" || mode === "headless-session" || mode === "interactive",
+    )
+  );
+}
+
 export function inspectedExecutable(value: unknown): {
   readonly path: string | null;
   readonly version: string | null;

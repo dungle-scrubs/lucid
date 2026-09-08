@@ -37,11 +37,15 @@ export function ExecutionRecovery(props: ExecutionRecoveryProps) {
       setBusy(false);
     }
   };
-  if (entry.status === "completed") return null;
+  // Routine progress belongs to the single status above the composer.
+  if (
+    entry.status === "pending" ||
+    entry.status === "starting" ||
+    entry.status === "running" ||
+    entry.status === "completed"
+  )
+    return null;
   const title = {
-    pending: "Prompt saved",
-    starting: "Starting",
-    running: "Working",
     held: "Prompt needs attention",
     failed: "Turn failed",
     uncertain: "Turn outcome is uncertain",

@@ -2,6 +2,7 @@ import * as Popover from "@radix-ui/react-popover";
 import { useForm, useStore } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useId, useState } from "react";
+import { ARTIFACT_TITLE_MAX, isArtifactTitle } from "../../protocol/artifact-title.js";
 import { measureConversationTitle } from "../../protocol/conversation-title.js";
 import type { ListedConversation } from "../../protocol/conversations.js";
 import { PencilDuotone } from "./icons.js";
@@ -15,15 +16,21 @@ function TitleForm(props: {
 }) {
   const labelId = useId();
   const client = useQueryClient();
+  const artifactId = props.item.artifactId;
   const rename = useMutation({
     mutationFn: async (title: string) => {
       const response = await props.request(
-        `conversations/${encodeURIComponent(props.item.conversationId)}/title`,
-        JSON.stringify({ title, expectedRevision: props.item.titleRevision ?? 0 }),
+        artifactId === undefined
+          ? `conversations/${encodeURIComponent(props.item.conversationId)}/title`
+          : `conversations/${encodeURIComponent(props.item.conversationId)}/artifacts/${encodeURIComponent(artifactId)}/meta`,
+        JSON.stringify(
+          artifactId === undefined
+            ? { title, expectedRevision: props.item.titleRevision ?? 0 }
+            : { title },
+        ),
       );
       const result = await response.json();
-      if (!response.ok)
-        throw new Error(result.reason ?? result.error ?? "Cannot rename conversation");
+      if (!response.ok) throw new Error(result.reason ?? result.error ?? "Cannot save name");
     },
     onError: async () => {
       await client.invalidateQueries({ queryKey: ["conversations"] });
@@ -36,11 +43,14 @@ function TitleForm(props: {
   const form = useForm({
     defaultValues: { title: props.item.title },
     onSubmit: async ({ value }) => {
-      if (measureConversationTitle(value.title).valid)
-        await rename.mutateAsync(value.title).catch(() => {});
+      const title = value.title.trim();
+      if (artifactId === undefined ? measureConversationTitle(title).valid : isArtifactTitle(title))
+        await rename.mutateAsync(title).catch(() => {});
     },
   });
   const measured = useStore(form.store, (state) => measureConversationTitle(state.values.title));
+  const artifactTitle = useStore(form.store, (state) => state.values.title.trim());
+  const valid = artifactId === undefined ? measured.valid : isArtifactTitle(artifactTitle);
   return (
     <form
       className="settings-form title-form"
@@ -49,7 +59,9 @@ function TitleForm(props: {
         void form.handleSubmit();
       }}
     >
-      <label htmlFor={labelId}>Conversation title</label>
+      <label htmlFor={labelId}>
+        {artifactId === undefined ? "Conversation title" : "Document name"}
+      </label>
       <form.Field name="title">
         {(field) => (
           <input
@@ -57,13 +69,15 @@ function TitleForm(props: {
             value={field.state.value}
             onChange={(event) => field.handleChange(event.target.value)}
             onBlur={field.handleBlur}
-            aria-invalid={!measured.valid}
+            aria-invalid={!valid}
             aria-describedby={`${labelId}-count`}
           />
         )}
       </form.Field>
-      <p id={`${labelId}-count`} className={measured.valid ? "title-count" : "settings-error"}>
-        {measured.wordCount} / 7 words · {measured.characters} / 128 characters
+      <p id={`${labelId}-count`} className={valid ? "title-count" : "settings-error"}>
+        {artifactId === undefined
+          ? `${measured.wordCount} / 7 words · ${measured.characters} / 128 characters`
+          : `${artifactTitle.length} / ${ARTIFACT_TITLE_MAX} characters`}
       </p>
       {rename.error ? (
         <p role="alert" className="settings-error">
@@ -74,8 +88,8 @@ function TitleForm(props: {
         <Popover.Close asChild>
           <Button variant="ghost">Cancel</Button>
         </Popover.Close>
-        <Button type="submit" disabled={!measured.valid || rename.isPending}>
-          {rename.isPending ? "Saving…" : "Save title"}
+        <Button type="submit" disabled={!valid || rename.isPending}>
+          {rename.isPending ? "Saving…" : artifactId === undefined ? "Save title" : "Save name"}
         </Button>
       </div>
     </form>

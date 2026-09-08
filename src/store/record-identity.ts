@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 import { pathsForDir, type RecordPaths, StoreError, validConversationId } from "./errors.js";
 import { Flock, type LockEvent } from "./flock.js";
 
@@ -7,7 +8,7 @@ export interface RecordMetadata extends Record<string, unknown> {
   readonly conversationId: string;
 }
 
-export const decodeRecordMetadata = (text: string): RecordMetadata => {
+export const decodeRecordMetadata = (text: string, dir?: string): RecordMetadata => {
   try {
     const meta: unknown = JSON.parse(text);
     if (
@@ -18,8 +19,16 @@ export const decodeRecordMetadata = (text: string): RecordMetadata => {
       "conversationId" in meta &&
       typeof meta.conversationId === "string" &&
       validConversationId(meta.conversationId)
-    )
+    ) {
+      if ("managedWorkspace" in meta && meta.managedWorkspace === true && dir) {
+        return {
+          ...meta,
+          projectDirectory: undefined,
+          workingDirectory: join(realpathSync(dir), "workspace"),
+        } as RecordMetadata;
+      }
       return meta as RecordMetadata;
+    }
   } catch {
     /* A missing or invalid identity never falls back to the directory name. */
   }
@@ -28,7 +37,7 @@ export const decodeRecordMetadata = (text: string): RecordMetadata => {
 
 export const readRecordMetadata = (dir: string): RecordMetadata => {
   try {
-    return decodeRecordMetadata(readFileSync(pathsForDir(dir).metaPath, "utf8"));
+    return decodeRecordMetadata(readFileSync(pathsForDir(dir).metaPath, "utf8"), dir);
   } catch {
     throw new StoreError("corrupt-log", "Record identity is unavailable");
   }

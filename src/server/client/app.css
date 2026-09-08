@@ -553,6 +553,10 @@ body {
   color: var(--color-text);
 }
 
+.doc-head button.width-trigger {
+  border-radius: 4px;
+}
+
 /* The lock chips (G4, 6b): a version that refuses everything, and the
    compare view. Neutral ink - going back on purpose refused nothing, and
    comparing is a reading act. Same family as the conversation's status
@@ -1509,6 +1513,10 @@ body {
 }
 
 .empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  text-align: center;
   color: color-mix(in srgb, var(--color-text) 45%, transparent);
   font-size: 13.5px;
   padding: 24px 0;
@@ -1562,15 +1570,38 @@ body {
   color: color-mix(in srgb, var(--color-text) 45%, transparent);
 }
 
-.msg.tool .body {
+.tool-activity {
+  min-width: 0;
+  width: 100%;
+}
+
+.tool-activity summary {
+  cursor: pointer;
+  width: fit-content;
+}
+
+.tool-activity summary:hover {
+  color: var(--color-text);
+}
+
+.tool-activity summary:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
+
+.tool-activity ol {
+  max-height: 240px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.tool-activity li {
+  margin-block: 6px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
-}
-
-.msg.tool .tool-mark {
-  flex: 0 0 auto;
 }
 
 /* Something that happened, not something anyone said: a version saved, a
@@ -1928,13 +1959,15 @@ body {
 /* 6e Wait: the working state where the work is watched from. Accent is
    the family of things happening; the count arrives at the dock's own
    threshold (activity.ts), not here. */
-/* The wait, said as the transcript's own last row: the dots count up and
+/* Status stays above the composer, outside the scrolling transcript.
+   The dots count up and
    start over - ".", "..", "...", again - on a 1.2s cadence. Discrete
    content steps, not a fade, because the request was a count, not a pulse.
    The width is reserved so the elapsed count never shifts under it, and a
    reduced-motion reader gets a still ellipsis. */
 .working-row {
-  padding: 2px 2px 0;
+  flex: 0 0 auto;
+  padding: 8px 2px 12px;
   font: 400 12.5px / 1.4 var(--font-body);
   color: var(--color-accent-700);
 }
@@ -2321,7 +2354,8 @@ body {
   cursor: pointer;
 }
 
-.composer-attach:hover {
+.composer-attach:hover,
+.composer-toolbar > .settings-trigger:hover {
   background: var(--color-accent-100);
   color: var(--color-accent-800);
 }

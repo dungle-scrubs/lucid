@@ -165,6 +165,11 @@ describe("a save reaches the agent on the next thing it is told", () => {
       // be the cost this flag exists to avoid.
       expect(sent[0]).toContain("[lucid artifact protocol]");
       expect(sent[1]).not.toContain("[lucid artifact protocol]");
+      for (const prompt of sent) {
+        expect(prompt).toContain("only create or modify the Lucid artifact");
+        expect(prompt).toContain("Do not change project files or implement code changes.");
+        expect(prompt).toContain("not to work requested separately in the terminal");
+      }
       // The state is not instructions, and goes with both.
       expect(sent[1]).toContain("[lucid artifact state]");
     } finally {
@@ -200,7 +205,7 @@ describe("a save reaches the agent on the next thing it is told", () => {
     }
   });
 
-  test("with no artifacts in the record nothing is added", async () => {
+  test("with no artifacts, later inputs still carry request guidance without artifact state", async () => {
     const r = rig();
     try {
       r.say("hello");
@@ -210,7 +215,9 @@ describe("a save reaches the agent on the next thing it is told", () => {
 
       const sent = r.sent();
       expect(sent[0]).not.toContain("[lucid artifact state]");
-      expect(sent[1]).toBe("again");
+      expect(sent[1]).not.toContain("[lucid artifact state]");
+      expect(sent[1]).toContain("only create or modify the Lucid artifact");
+      expect(sent[1]?.endsWith("\n\nagain")).toBe(true);
     } finally {
       r.done();
     }

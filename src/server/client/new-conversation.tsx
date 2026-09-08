@@ -22,6 +22,7 @@ export function NewConversation(props: {
         choices: DriverChoices;
         restartRequired: boolean;
         error: string | null;
+        folderPickerAvailable: boolean;
       };
     },
   });
@@ -97,6 +98,20 @@ export function NewConversation(props: {
           initial={defaults.data.selected ?? { harness: "", model: "", effort: "", profile: "" }}
           choices={defaults.data.choices}
           workingDirectory=""
+          onChooseFolder={
+            defaults.data.folderPickerAvailable
+              ? async () => {
+                  const response = await props.request("folder-picker", "{}");
+                  const result = await response.json();
+                  if (!response.ok)
+                    throw new Error(result.reason ?? "Cannot open the folder picker.");
+                  if (result.status === "cancelled") return null;
+                  if (result.status !== "selected" || typeof result.workingDirectory !== "string")
+                    throw new Error("The folder selection was not confirmed. Try again.");
+                  return result.workingDirectory;
+                }
+              : undefined
+          }
           submitLabel="Create conversation"
           onSave={(settings, workingDirectory) =>
             send(JSON.stringify({ creationId: crypto.randomUUID(), workingDirectory, settings }))

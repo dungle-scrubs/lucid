@@ -1,19 +1,22 @@
 import { stat } from "node:fs/promises";
+import { artifactDisplayName } from "../protocol/artifact-title.js";
 import { titleState } from "../protocol/conversation-title.js";
 import type {
   ConversationPage,
   DiscoveryIssue,
   ListedConversation,
 } from "../protocol/conversations.js";
+import { viewArtifactCatalog } from "../store/conversation-host.js";
 import { readConversationTitle } from "../store/conversation-label.js";
 import type { DiscoveredRecord, Discovery } from "../store/discovery.js";
 import { pathsForDir } from "../store/errors.js";
 
 type Entry = { readonly key: string; readonly record: DiscoveredRecord };
+type Label = Pick<ListedConversation, "artifactId" | "title">;
 
 export const createConversationListing = () => {
-  const labels = new Map<string, { fingerprint: string; title: Promise<string> }>();
-  const label = async (dir: string, saved?: string): Promise<string> => {
+  const labels = new Map<string, { fingerprint: string; title: Promise<Label> }>();
+  const label = async (dir: string, saved?: string): Promise<Label> => {
     const file = await stat(pathsForDir(dir).logPath);
     const fingerprint = JSON.stringify([
       file.dev,
@@ -25,7 +28,12 @@ export const createConversationListing = () => {
     ]);
     const cached = labels.get(dir);
     if (cached?.fingerprint === fingerprint) return cached.title;
-    const title = readConversationTitle(dir, saved);
+    const title = (async (): Promise<Label> => {
+      const artifact = viewArtifactCatalog(dir)[0];
+      return artifact
+        ? { artifactId: artifact.artifactId, title: artifactDisplayName(artifact) }
+        : { title: await readConversationTitle(dir, saved) };
+    })();
     labels.set(dir, { fingerprint, title });
     try {
       return await title;
@@ -84,7 +92,7 @@ export const createConversationListing = () => {
             try {
               return {
                 ...summary,
-                title: await label(dir, savedTitle),
+                ...(await label(dir, savedTitle)),
                 ...titleState({ ...summary, conversationTitle: savedTitle }),
               };
             } catch {

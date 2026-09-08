@@ -214,12 +214,14 @@ export function createHubSettings(
           throw new HubError(`Unknown settings field: ${key}`, "E-HUB-03");
       if (!isDriverField(request.creationId))
         throw new HubError("A creation ID is required.", "E-HUB-02");
-      if (typeof request.workingDirectory !== "string" || !isAbsolute(request.workingDirectory))
+      const folder = request.workingDirectory;
+      const managed = folder == null || (typeof folder === "string" && folder.trim() === "");
+      if (!managed && (typeof folder !== "string" || !isAbsolute(folder)))
         throw new HubError("Choose an absolute working folder.", "E-HUB-04", 400, [
           "Choose a working folder",
         ]);
       const normalized = {
-        workingDirectory: resolve(request.workingDirectory),
+        workingDirectory: managed ? null : resolve(folder as string),
         ...(Object.keys(explicit).length
           ? {
               settings: Object.fromEntries(

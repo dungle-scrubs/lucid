@@ -16,6 +16,8 @@ export interface DiscoveryIssue {
 }
 
 export interface ListedConversation extends Omit<ConversationSummary, "conversationTitle"> {
+  /** When present, the displayed title and rename action refer to this artifact. */
+  readonly artifactId?: string;
   readonly title: string;
 }
 

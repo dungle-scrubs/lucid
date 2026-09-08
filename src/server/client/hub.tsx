@@ -84,7 +84,7 @@ function Project({
               <span className="hub-context">
                 {item.workingDirectoryStatus === "missing"
                   ? "Working folder missing"
-                  : item.workingDirectory && item.workingDirectory !== path
+                  : path !== null && item.workingDirectory && item.workingDirectory !== path
                     ? item.workingDirectory
                     : item.conversationId}
               </span>
@@ -140,7 +140,7 @@ function Hub() {
         <a href="/" aria-label="Lucid hub" className="hub-logo">
           <span aria-hidden="true">.</span>lucid
         </a>
-        <h1>Conversations</h1>
+        <h1>Documents</h1>
         <Button variant="outline" onClick={() => setCreating(!creating)}>
           {creating ? "Close" : "+ New"}
         </Button>

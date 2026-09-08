@@ -13,7 +13,11 @@
 
 import { countContext } from "./context-accounting.js";
 import { decodeHarnessLine, type HarnessEvent } from "./events.js";
-import { inspectedExecutable, verifiedExecutable } from "./inspection-facts.js";
+import {
+  inspectedExecutable,
+  nativeContextManagement,
+  verifiedExecutable,
+} from "./inspection-facts.js";
 import type { HarnessDeps } from "./process.js";
 import { flag, settlesWithin, terminateHcn } from "./process.js";
 import { AsyncQueue } from "./queue.js";
@@ -243,6 +247,9 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
     const vocabulary = vocabularyOf(parsed);
     return {
       name: String(parsed.name ?? harness),
+      ...(nativeContextManagement(parsed.nativeContextManagement)
+        ? { nativeContextManagement: true as const }
+        : {}),
       ...(parsed.contextInspection !== null &&
       typeof parsed.contextInspection === "object" &&
       !Array.isArray(parsed.contextInspection)

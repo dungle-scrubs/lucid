@@ -90,7 +90,7 @@ export class DiscoveryIndex {
           const value =
             cached?.fingerprint === fingerprint
               ? cached.value
-              : decodeRecordMetadata(await readFile(pathsForDir(dir).metaPath, "utf8"));
+              : decodeRecordMetadata(await readFile(pathsForDir(dir).metaPath, "utf8"), dir);
           this.metadata.set(dir, { fingerprint, value });
           const receipt = value.creation;
           if (receipt && typeof receipt === "object" && "id" in receipt && receipt.id === id) {

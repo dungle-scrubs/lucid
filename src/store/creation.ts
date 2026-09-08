@@ -19,7 +19,7 @@ export class CreationError extends Error {
 }
 export interface CreationRequest {
   readonly settings?: Partial<Settings>;
-  readonly workingDirectory: string;
+  readonly workingDirectory: string | null;
 }
 /** One root lock serializes cold receipt lookup and atomic publication across processes. */
 export async function createWithReceipt(

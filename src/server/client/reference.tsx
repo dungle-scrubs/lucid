@@ -728,17 +728,9 @@ const Dock = (): React.ReactElement => (
               <button type="button" className="composer-attach" aria-label="Attach a file">
                 +
               </button>
-              <div className="driver-line">
-                <button type="button" className="driver-seg pick">
-                  codex ⌄
-                </button>
-                <button type="button" className="driver-seg pick">
-                  gpt-6-astra ⌄
-                </button>
-                <button type="button" className="driver-seg pick">
-                  medium ⌄
-                </button>
-              </div>
+              <button type="button" className="settings-trigger">
+                Settings
+              </button>
             </div>
           </form>
         </div>
@@ -835,17 +827,9 @@ const Attaching = (): React.ReactElement => (
               <button type="button" className="composer-attach" aria-label="Attach a file">
                 +
               </button>
-              <div className="driver-line">
-                <button type="button" className="driver-seg pick">
-                  codex ⌄
-                </button>
-                <button type="button" className="driver-seg pick">
-                  gpt-6-astra ⌄
-                </button>
-                <button type="button" className="driver-seg pick">
-                  medium ⌄
-                </button>
-              </div>
+              <button type="button" className="settings-trigger">
+                Settings
+              </button>
             </div>
           </form>
         </div>

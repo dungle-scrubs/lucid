@@ -81,6 +81,7 @@ import hub from "./client/hub.html";
 import index from "./client/index.html";
 import { SERVER_PORT, TOKEN_HEADER } from "./constants.js";
 import { createConversationListing } from "./conversation-list.js";
+import { createFolderPicker } from "./folder-picker.js";
 import { createHubSettings } from "./hub-settings.js";
 import type { ManagedLaunch } from "./managed-launch.js";
 import { createManagedLaunchReconciler } from "./managed-launch.js";
@@ -88,6 +89,7 @@ import { recoveryStamp } from "./recovery-availability.js";
 import { mintToken } from "./token.js";
 
 export interface ServerOpts {
+  readonly chooseFolder?: (signal: AbortSignal) => Promise<string | null>;
   readonly managedLaunch?: ManagedLaunch;
   readonly reconcileMs?: number;
   readonly configLocation?: import("../config/user-config.js").ConfigLocation;
@@ -204,6 +206,7 @@ const hubFailure = (error: unknown): Response => {
 export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer> => {
   assertServerProcess();
   const port = opts.port ?? SERVER_PORT;
+  const folderPicker = createFolderPicker(opts.chooseFolder, opts.chooseFolder ? true : undefined);
   const token = opts.token ?? mintToken();
   const records = conversations(opts.rootDir, opts.configLocation);
   const conversationPage = createConversationListing();
@@ -313,7 +316,18 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
 
         if (path === "/api/defaults" && req.method === "GET") {
           try {
-            return json(await settings.defaults());
+            return json({
+              ...(await settings.defaults()),
+              folderPickerAvailable: folderPicker.available,
+            });
+          } catch (error) {
+            return hubFailure(error);
+          }
+        }
+        if (path === "/api/folder-picker" && req.method === "POST") {
+          server.timeout(req, 0);
+          try {
+            return json(await folderPicker.select(req.signal));
           } catch (error) {
             return hubFailure(error);
           }
@@ -1121,6 +1135,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
     token,
     url: `http://127.0.0.1:${bound}`,
     close: async () => {
+      folderPicker.close();
       clearInterval(managedTimer);
       discovery.close();
       await server.stop(true);

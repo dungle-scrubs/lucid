@@ -328,6 +328,34 @@ describe("openSession over hcn session --json", () => {
 });
 
 describe("inspection, which never spawns a harness", () => {
+  test.each([
+    [{ kind: "auto-compaction", modes: ["headless-turn"] }, true],
+    [{ kind: "auto-compaction", modes: ["headless-turn", "headless-session"] }, true],
+    [null, false],
+    [undefined, false],
+    [{ kind: "unknown", modes: ["headless-turn"] }, false],
+    [{ kind: "auto-compaction", modes: ["headless-turn", "unknown"] }, false],
+    [{ kind: "auto-compaction", modes: ["headless-session"] }, false],
+    [{ kind: "auto-compaction", modes: "headless-turn" }, false],
+    [[], false],
+  ])(
+    "native context management requires a known complete declaration %j",
+    async (declaration, supported) => {
+      const r = rig();
+      const pending = r.runner.inspect("codex");
+      // Synthetic descriptor variations, not recorded harness events.
+      r.proc.emitRaw(
+        JSON.stringify({
+          name: "codex",
+          verifiedAgainst: "0.153.4",
+          nativeContextManagement: declaration,
+        }),
+      );
+      r.proc.exit(0);
+      expect((await pending).nativeContextManagement).toBe(supported ? true : undefined);
+    },
+  );
+
   test("capabilities parses the recorded record", async () => {
     const r = rig();
     const pending = r.runner.capabilities("claude", "", "headless-turn");

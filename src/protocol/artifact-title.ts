@@ -21,6 +21,12 @@
  * the fold, and in the field with no conversion. */
 export const ARTIFACT_TITLE_MAX = 200;
 
+/** The same document name in the reader and the hub. Identity stays unchanged. */
+export const artifactDisplayName = (artifact: {
+  readonly artifactId: string;
+  readonly title?: string;
+}): string => artifact.title || artifact.artifactId;
+
 /** A title lucid will store: text, non-empty, bounded, no control
  * characters.
  *

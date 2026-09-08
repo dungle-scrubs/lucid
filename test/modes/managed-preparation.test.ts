@@ -18,7 +18,7 @@ const driver = {
   effort: "high",
   profile: "headless-turn",
 } as const;
-function setup() {
+function setup(profile: "headless-turn" | "headless-session" = "headless-turn") {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "lucid-managed-preparation-")));
   const record = createConversationRecord(root, "managed", { workingDirectory: root });
   let lease = true;
@@ -29,7 +29,7 @@ function setup() {
     onEffect: () => {},
     onRecord: () => {},
   });
-  replaceSettings(record.paths.dir, "managed", 0, driver);
+  replaceSettings(record.paths.dir, "managed", 0, { ...driver, profile });
   host.acceptInput(
     { id: "request", text: "Update the document", mode: "queue" },
     { managed: true },
@@ -41,7 +41,7 @@ function setup() {
       secret: record.secret,
       version: 1,
       harness: "claude",
-      profile: "headless-turn",
+      profile,
       capabilities: ["managed-input-v1"],
       attachmentOrigin: "automatic",
     }),
@@ -130,7 +130,7 @@ test("managed preparation records the counted context before task dispatch and o
     if (result.kind !== "ready") throw new Error("held");
     expect(f.counts[0]?.prompt).toBe(result.prompt);
     expect(result.summary).toBeNull();
-    expect(result.accounting.model).toBe("selected");
+    expect(result.accounting?.model).toBe("selected");
     expect(result.prompt).toContain("Complete current document");
     expect(result.prompt).toContain("Update the document");
     expect(result.prompt).toContain("lucid-artifact");
@@ -357,6 +357,8 @@ test("a verified native session is retained, and explicit fresh recovery can rep
       expect(ready.native).toEqual(
         fresh ? { kind: "fresh" } : { kind: "resume", sessionId: "native-a" },
       );
+      expect(ready.prompt).toContain("only create or modify the Lucid artifact");
+      expect(f.counts.at(-1)?.prompt).toBe(ready.prompt);
       expect(f.counts.at(-1)?.resume).toBe(fresh ? undefined : "native-a");
       expect(f.host.transcript().inputs.filter((entry) => entry.id === "request")).toHaveLength(1);
     } finally {
@@ -794,3 +796,103 @@ test("managed comparison suppression survives automatic attachment and releases 
     rmSync(f.root, { recursive: true, force: true });
   }
 });
+
+test.each(["headless-turn", "headless-session"] as const)(
+  "native management skips accounting only in the declared mode: %s",
+  async (profile) => {
+    const f = setup(profile);
+    const selected = { ...driver, profile };
+    const runner: HarnessRunner = {
+      ...f.runner,
+      inspect: async () => ({
+        ...(await f.runner.inspect("claude")),
+        nativeContextManagement: true,
+      }),
+      countContext: async (request) => {
+        if (profile === "headless-turn") throw new Error("Native management must not probe");
+        return f.runner.countContext(request);
+      },
+    };
+    const preparation = createManagedPreparation({
+      host: f.host,
+      offerContext: f.offerContext,
+      runner,
+      driver: selected,
+      cwd: f.root,
+    });
+    try {
+      const result = await preparation.prepare({
+        ...input,
+        profile,
+        signal: new AbortController().signal,
+      });
+      expect(result.kind).toBe("ready");
+      if (result.kind !== "ready") throw new Error("held");
+      expect(result.accounting === null).toBe(profile === "headless-turn");
+      expect(f.counts).toHaveLength(profile === "headless-turn" ? 0 : 1);
+      expect(result.summary).toBeNull();
+      expect(result.prompt).toContain("Complete current document");
+      expect(result.prompt).toContain("Update the document");
+      expect(result.prompt).toContain("lucid-artifact");
+      expect(result.prompt).toContain("Do not change project files or implement code changes.");
+      expect(f.host.state().executions.request).toMatchObject({
+        kind: "attempt-started",
+        attempt: 1,
+      });
+      const path = preparation.offeredPath(input.turnId);
+      if (!path) throw new Error("Missing full context offer");
+      expect(existsSync(path)).toBe(true);
+      preparation.release(input.turnId);
+      expect(existsSync(path)).toBe(false);
+    } finally {
+      preparation.close();
+      f.close();
+    }
+  },
+);
+
+test.each(["unverified", "settings-changed", "cancelled"] as const)(
+  "native management retains the dispatch fence: %s",
+  async (condition) => {
+    const f = setup();
+    const abort = new AbortController();
+    const runner: HarnessRunner = {
+      ...f.runner,
+      inspect: async () => {
+        const facts = await f.runner.inspect("claude");
+        if (condition === "settings-changed")
+          replaceSettings(f.host.dir, "managed", 1, { ...driver, model: "changed" });
+        if (condition === "cancelled") abort.abort();
+        return {
+          ...facts,
+          nativeContextManagement: true,
+          verifiedAgainst: condition === "unverified" ? "different" : facts.verifiedAgainst,
+        };
+      },
+      countContext: async () => {
+        throw new Error("Unexpected accounting");
+      },
+    };
+    const preparation = createManagedPreparation({
+      host: f.host,
+      offerContext: f.offerContext,
+      runner,
+      driver,
+      cwd: f.root,
+    });
+    try {
+      expect((await preparation.prepare({ ...input, signal: abort.signal })).kind).toBe("held");
+      expect(f.host.state().executions.request?.attempt).toBe(0);
+      expect(f.host.transcript().inputs).toHaveLength(1);
+      if (condition !== "cancelled")
+        expect(f.host.state().executions.request).toMatchObject({
+          kind: "held",
+          hold: { code: condition === "unverified" ? "E-HUB-03" : "E-HUB-06" },
+        });
+      for (const path of f.offeredPaths) expect(existsSync(path)).toBe(false);
+    } finally {
+      preparation.close();
+      f.close();
+    }
+  },
+);

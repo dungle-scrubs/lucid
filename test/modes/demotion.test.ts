@@ -167,7 +167,8 @@ describe("demotion (RFC-05 Error Handling)", () => {
     await flush();
     await flush();
     expect(calls).toEqual(["answer:ans-1", "send:ans-1"]);
-    expect(texts["ans-1"]).toBe("same words");
+    expect(texts["ans-1"]).toContain("only create or modify the Lucid artifact");
+    expect(texts["ans-1"]?.endsWith("\n\nsame words")).toBe(true);
     const dispositions = (
       records as Array<{ kind?: string; inputId?: string; outcome?: string }>
     ).filter((r) => r.kind === "disposition" && r.inputId === "ans-1");

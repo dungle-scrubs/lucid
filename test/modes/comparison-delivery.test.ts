@@ -534,9 +534,25 @@ test("hooks: durable holds survive hook processes, newer content releases full c
       text: "A later ordinary message with all its words",
       mode: "queue",
     });
+    // The raw input fits here, but its guidance and wrapper do not. Keep the
+    // original queued until the complete delivery can fit.
+    expect(deliverFirstQueued(dir, { promptLimit: 80 })).toMatchObject({
+      ok: false,
+      code: "injection-refused",
+    });
+    expect(output).toHaveLength(0);
+    expect(
+      viewConversation(dir).transcript.inputs.find((i) => i.id === "later-ordinary"),
+    ).toMatchObject({
+      text: "A later ordinary message with all its words",
+      status: "outstanding",
+    });
     expect(deliverFirstQueued(dir, { promptLimit: 100_000 })).toMatchObject({ delivered: 1 });
     expect(JSON.parse(output.at(-1) ?? "{}").reason).toContain(
       "A later ordinary message with all its words",
+    );
+    expect(JSON.parse(output.at(-1) ?? "{}").reason).toContain(
+      "only create or modify the Lucid artifact",
     );
     expect(
       viewConversation(dir).transcript.inputs.find((i) => i.id === "later-ordinary")?.status,
@@ -565,6 +581,7 @@ test("hooks: durable holds survive hook processes, newer content releases full c
     const sent = JSON.parse(output.at(-1) ?? "{}").reason as string;
     expect(sent).toContain("[lucid artifact protocol]");
     expect(sent).toContain("Dispatch version: 3");
+    expect(sent).toContain("Do not change project files or implement code changes.");
     expect(sent).toContain(JSON.stringify(artifact(3).bytes));
     expect(viewConversation(dir).transcript.inputs.find((i) => i.id === "historical")?.status).toBe(
       "applied",

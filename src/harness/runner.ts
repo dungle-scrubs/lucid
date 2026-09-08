@@ -40,6 +40,9 @@ export interface HarnessFacts {
   /** hcn declares an accounting mechanism. A count still verifies the
    * selected model, executable and profile before it is usable. */
   readonly contextAccounting?: true;
+  /** Declared native compaction for headless-turn only. Dispatch must still
+   * verify the selected executable and native resume compatibility. */
+  readonly nativeContextManagement?: true;
   readonly runtime?: {
     readonly executable: { readonly path: string | null; readonly version: string | null };
     readonly resume: { readonly status: "supported" | "unknown"; readonly reason: string | null };

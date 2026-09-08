@@ -1,6 +1,12 @@
 # Active RFCs
 
-No active RFCs. RFCs 14 and 15 are implemented. Their final proposals, reviews,
+RFC 19 implements [Codex native context management](19_codex-native-context-management.rfc.md)
+in the local build. Published dependency integration remains separate.
+
+RFC 18 is implemented. Its proposal, review, and resolved ticket are preserved
+in commit `61393f5`. Current projectless workspace contracts live in
+[architecture](../architecture.md) and [drivers](../drivers.md).
+RFCs 14 and 15 are implemented. Their final proposals, reviews,
 and resolved local tickets are preserved in commit `743a48c`. Current contracts
 live in the [documentation index](../README.md).
 
@@ -10,7 +16,7 @@ commit `000381b`; its current contract is in [the design reference](../design.md
 Current reading-view design is listed in the
 [documentation index](../README.md#browser-design).
 
-The highest allocated RFC number is **17**. The next RFC is **18**.
+The highest allocated RFC number is **19**. The next RFC is **20**.
 Never reset numbering because completed files have been removed. Before
 allocating, check this high-water mark, active filenames, and Git history;
 use one greater than the highest number allocated and update this mark.

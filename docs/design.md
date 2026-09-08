@@ -11,9 +11,9 @@ instrumentation stylesheet as the app.
 
 The document has the primary column. The conversation has a narrower reading
 column with a resizable divider and no header above its transcript. Driver
-selectors sit inside the composer; the profile and its explanation stay
-below it. Activity appears at the end of the
-transcript only when there is something to report. Save and discard belong
+controls live under Settings in the composer. Connection, waiting, and working
+feedback stays just above the composer, outside the scrolling transcript,
+and appears only when there is something to report. Save and discard belong
 in the document header; guidance stays beneath the document. Center
 the sheet within its column. The artifact can request its maximum width with
 `lucid-width` metadata; without it, the sheet fills the available pane. The
@@ -61,8 +61,18 @@ retains the exact request across reload and offers retry or explicit discard.
 Queued input says "Waiting for the agent…"; live work says "The agent is
 working…". With saved input and no agent, say "No agent is connected. Your
 message is saved." That state has no progress animation or elapsed timer.
-Activity in the conversation distinguishes waiting from working. A failed
+Routine progress appears only above the composer. Pending, starting, running,
+and completed executions do not add transcript cards. Held, failed, and uncertain
+executions retain their recovery cards. A failed
 operation keeps its reason at the place where the person attempted it.
+
+Consecutive tool calls form one collapsed activity row with a count. Expanding
+it shows the recorded commands in a bounded scrolling list. Replies, errors,
+user input, notes, and saved versions break activity groups and keep their
+timeline positions. Tool command strings remain available in the details.
+
+Dragging the pane divider updates the document allocation, divider, and chat
+size together without size animation. Panel open/close animation remains.
 
 Composer and note sends retain one exact request in this tab until admission
 is known. A lost response or expired token keeps a visible saved-send card in
@@ -148,13 +158,18 @@ document state from an old handoff into this single-user product.
 
 ## Conversation panel visibility
 
-Each browser view starts closed unless its URL contains exactly one
-`conversation-panel=open` parameter. Missing, invalid, or duplicate values
-start closed. `lucid2 serve [conversation] --conversation-panel open|closed`
+An empty conversation displays "Start a conversation" and starts with its
+conversation panel open. A conversation with documents starts closed.
+An explicit URL initializer overrides this default: exactly one
+`conversation-panel=open` opens it; invalid or duplicate values close it.
+The default is set from the first catalog response, so a new document does not
+close an already open panel. `lucid2 serve [conversation] --conversation-panel open|closed`
 prints a link with that initializer; the command does not launch a browser.
 History replacements preserve the query and fragment. Existing saved-version
-links open independent views with the closed default. Reloading reapplies the
-initializer. Manual toggles do not change URLs, storage, or conversation records.
+links open independent views with the closed default. Manual toggles save the
+current visibility per conversation in the tab's `sessionStorage`. Reloading restores that choice,
+which takes precedence over the URL initializer. Invalid or unavailable storage
+falls back to the initializer. Toggles do not change URLs or conversation records.
 
 The header's Show conversation / Hide conversation button is available in all
 five header branches, including empty, unsaved, historical, comparison, and
