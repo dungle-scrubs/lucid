@@ -26,7 +26,6 @@ import {
   ThreadPrimitive,
   useExternalStoreRuntime,
   useMessage,
-  useThreadComposer,
 } from "@assistant-ui/react";
 import * as Popover from "@radix-ui/react-popover";
 import * as React from "react";
@@ -36,12 +35,15 @@ import {
   type AnnotationSpot,
   type AttachedFile,
   clampSnippet,
+  detectAnnotationBatch,
   encodeAnnotationBatch,
   NOTE_QUEUE_MAX,
   queueAdmits,
 } from "../../protocol/annotations.js";
 import { ARTIFACT_TITLE_MAX } from "../../protocol/artifact-title.js";
 import { ATTACHMENT_BYTES_MAX } from "../../protocol/attachment.js";
+import { comparisonMetadata } from "../../protocol/comparison-note.js";
+import type { ExecutionView } from "../../protocol/execution-view.js";
 import { type Activity as ActivitySnapshot, describeActivity, type Report } from "./activity.js";
 import {
   type Confidence,
@@ -51,17 +53,21 @@ import {
   selectorsForQuote,
   sha256Hex,
 } from "./anchor.js";
+import { useArtifactWidth } from "./artifact-width-control.js";
+import type { ComparisonDraft } from "./comparison-draft.js";
+import { comparisonDraftText, restoreComparisonDraft } from "./comparison-draft.js";
+import type { ComparisonPair } from "./content-comparison.js";
+import { ContentComparisonView } from "./content-comparison.js";
+import type { DriverChoiceBody, DriverChoices, DriverPreference } from "./driver-menus.js";
 import {
   chooseEffort,
   chooseHarness,
   chooseModel,
-  type DriverChoiceBody,
-  type DriverChoices,
-  type DriverPreference,
   driverLineState,
   effortGloss,
   type MenuKey,
 } from "./driver-menus.js";
+import { ExecutionRecovery } from "./execution-recovery.js";
 import { isModeToggle, isQueueSend } from "./hotkeys.js";
 import {
   ArchiveDuotone,
@@ -69,40 +75,50 @@ import {
   ArrowRightDuotone,
   ArrowUpDuotone,
   CaretDownDuotone,
-  CheckDuotone,
   FileDuotone,
   FileTextDuotone,
   ImageDuotone,
   LockDuotone,
   PaperclipDuotone,
-  PaperPlaneTiltDuotone,
   PencilDuotone,
   ProhibitDuotone,
   TableDuotone,
   XDuotone,
 } from "./icons.js";
+import type { PendingInput } from "./input-recovery.js";
+import { createInputRecovery, pendingInputText } from "./input-recovery.js";
+import { InputRecoveryPanel } from "./input-recovery-panel.js";
+import type { InputSubmissionResult } from "./input-submission.js";
+import { createInputSubmission } from "./input-submission.js";
+import { InputRecovery } from "./input-submission-recovery.js";
 import { ELEMENT_ID, FRAME_MESSAGE_SOURCE, instrumentArtifact } from "./instrument.js";
 import {
   CONVERSATION_MAX,
   CONVERSATION_MIN,
   clampConversationWidth,
+  clampDocumentShare,
+  DEFAULT_DOCUMENT_SHARE,
+  DOCUMENT_SHARE_MAX,
+  DOCUMENT_SHARE_MIN,
   readConversationWidth,
   writeConversationWidth,
 } from "./layout.js";
+import { LocationControl, type LocationState } from "./location-control.js";
 import { formatRoute, parseRoute, type Route, sameRoute } from "./route.js";
 import { seamsForLost } from "./seams.js";
-import { type Msg, type PendingNote, type SentBatch, weaveNotes } from "./timeline.js";
-import { diffVersions, type VersionDiff } from "./version-diff.js";
+import { SettingsForm } from "./settings-form.js";
+import { SettingsPopover } from "./settings-popover.js";
+import {
+  type Msg,
+  type PendingNote,
+  runtimeMessage,
+  type SentBatch,
+  weaveNotes,
+} from "./timeline.js";
+import { diffVersions } from "./version-diff.js";
 import { isReadOnly, versionState } from "./version-state.js";
 
 /** Kept in step with the server's own poll interval. */
-/** How wide a column must be for two of them to beat one.
- *
- * Policy, not measured: RFC-07 R9 names the number and says so. A line of
- * markup in a column narrower than this wraps so often that the comparison
- * is harder to read than the two versions separately. */
-const COMPARE_COLUMN_MIN = 360;
-
 const POLL_MS = 500;
 const TOKEN_HEADER = "x-lucid-token";
 
@@ -239,17 +255,6 @@ interface Driver {
   readonly harnessVersion?: string;
 }
 
-/** The driver as the conversation header names it: harness, then model.
- * Derived from the same Driver the line under the composer renders (7a-7d),
- * so the header above and the line below can never disagree about who is
- * driving. Null when the record carries no identity at all; an interactive
- * attachment names no harness (RFC-03), so a model alone still names what
- * is known. */
-const driverHeadline = (driver: Driver): string | null => {
-  const known = [driver.harness, driver.model].filter((p): p is string => p !== undefined);
-  return known.length === 0 ? null : known.join(" · ");
-};
-
 /** The conversation, and now the artifact and the version, are named by the
  * URL and never by the bundle. `route.ts` owns the shape. */
 const routeFromPath = (): Route | null => parseRoute(window.location.pathname);
@@ -263,6 +268,7 @@ const linesToMessages = (lines: readonly Line[]): Msg[] =>
       role: l.kind === "agent" ? ("assistant" as const) : ("user" as const),
       text: l.text,
       ...(l.event === "tool" ? { tool: true } : {}),
+      ...(l.event === "comparison-held" ? { note: true } : {}),
       ...(l.event === "error" || l.event === "limit"
         ? { refusal: true }
         : l.event === "failure"
@@ -413,6 +419,51 @@ const Message = (): React.ReactElement => {
 
   if (one?.sentBatch !== undefined) {
     const b = one.sentBatch;
+    if (
+      b.comparison !== undefined ||
+      b.notes.some((note) =>
+        note.spots.some(
+          (spot) => spot.sourceVersion !== undefined || spot.sourceHash !== undefined,
+        ),
+      )
+    )
+      return (
+        <MessagePrimitive.Root>
+          <div className="batch comparison-transcript-note" id={`comparison-note-${b.inputId}`}>
+            <div className="note-card-head">
+              Your note on saved v{b.version} · {b.status === "applied" ? "delivered" : "queued"}
+            </div>
+            {b.notes.map((note) => (
+              <div key={note.note}>
+                <blockquote>{note.spots.map((spot) => spot.snippet).join("\n")}</blockquote>
+                <p>{note.note}</p>
+              </div>
+            ))}
+            <p className="comparison-coverage">
+              Historical content
+              {b.comparisonUsable
+                ? `; reviewed against v${b.comparison?.reviewedVersion}`
+                : "; saved comparison navigation is unavailable"}
+              .
+            </p>
+            {b.hold ? <p role="status">{b.hold}</p> : null}
+            {b.comparisonUsable ? (
+              <a
+                className="comparison-marker"
+                href={formatRoute({
+                  conversationId: routeFromPath()?.conversationId ?? "",
+                  artifactId: b.artifactId,
+                  version: b.version,
+                })}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Inspect saved v{b.version}
+              </a>
+            ) : null}
+          </div>
+        </MessagePrimitive.Root>
+      );
     return (
       <MessagePrimitive.Root>
         <div className="batch">
@@ -797,18 +848,14 @@ const RefusalChip = ({
  * the surface and the docs cannot drift. */
 const MODE_GLOSS: Readonly<Record<string, string>> = {
   interactive:
-    "A terminal session you own. lucid attaches, records everything, and can interject — it does not drive.",
+    "A terminal session you own. lucid attaches, records everything, and can interject - it does not drive.",
   "headless-session":
     "lucid spawns the harness and drives it. The harness recalls its own session across restarts.",
   "headless-turn":
     "No session recall. Each send starts the harness fresh; lucid's record is what carries continuity.",
 };
 
-/** One row of a driver menu (7a): a 12px gutter carries the check when the
- * row is the selected one, so every label aligns whether or not it is
- * chosen. Effort rows carry a gloss under the label - the words alone do
- * not say what is being traded, and only effort rows get one: harness and
- * model name things that name themselves. */
+/** Selection uses background color; effort rows retain their explanatory gloss. */
 const DriverMenuRow = ({
   label,
   gloss,
@@ -837,13 +884,6 @@ const DriverMenuRow = ({
       }
       onClick={onPick}
     >
-      {selected ? (
-        <span aria-hidden="true" className="driver-check">
-          <CheckDuotone size={12} />
-        </span>
-      ) : (
-        <span aria-hidden="true" className="driver-gutter" />
-      )}
       <span className="driver-row-text">
         <span className="driver-row-label">{label}</span>
         {hasGloss ? <span className="driver-gloss">{gloss}</span> : null}
@@ -866,20 +906,18 @@ const DRIVER_MENU_W = 226;
  *
  * Harness, model and effort are controls now (RFC-12): hover takes the
  * accent pill, opening takes the segment solid, and a pick POSTs the whole
- * preference - the line and the header settle from the next poll, because
+ * preference - the line settles from the next poll, because
  * nothing renders because the browser believes it happened. Mode stays a
- * report with its hover gloss: it is not settable from the browser, and a
+ * report below the composer: it is not settable from the browser, and a
  * control that cannot act is not drawn as one. Interactive offers no
  * menus at all - the human's session chose the driver and lucid cannot
  * change it mid-run - and its harness and model sit at 55% report ink.
- * The conversation header names the same driver through `driverHeadline`,
- * from the same Driver. */
+ */
 const DriverLine = ({
   driver,
   preference,
   choices,
   onChoose,
-  onMenuToggle,
 }: {
   driver: Driver;
   /** What the person chose (RFC-12), beside what is driving. The menus'
@@ -893,17 +931,14 @@ const DriverLine = ({
   /** POST a whole preference. Answers null on success, or why it refused,
    * drawn beside the line that made the choice. */
   onChoose: (body: DriverChoiceBody) => Promise<string | null>;
-  /** The line tells the dock when a menu is open, so the composer can dim
-   * to 40% and stay in place, per the design. */
-  onMenuToggle: (open: boolean) => void;
 }): React.ReactElement | null => {
-  const mode = driver.profile;
+  const mode = preference?.profile ?? driver.profile;
+  const [editor, setEditor] = React.useState<string | null>(null);
   const wrapper = React.useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = React.useState<{ key: MenuKey; left: number } | null>(null);
   const [choiceError, setChoiceError] = React.useState<string | null>(null);
   const [freeModel, setFreeModel] = React.useState("");
   React.useEffect(() => {
-    onMenuToggle(open !== null);
     if (open === null) return;
     // One menu at a time closes on Escape and on a click anywhere outside
     // itself - including on another segment, which opens that one instead.
@@ -919,35 +954,30 @@ const DriverLine = ({
       document.removeEventListener("keydown", close);
       document.removeEventListener("pointerdown", away);
     };
-  }, [open, onMenuToggle]);
-  // A line that unmounts with a menu open must not leave the composer
-  // dimmed behind it.
-  React.useEffect(() => {
-    return () => onMenuToggle(false);
-  }, [onMenuToggle]);
+  }, [open]);
   const pick = React.useCallback(
     async (body: DriverChoiceBody | null): Promise<void> => {
       setOpen(null);
       if (body === null) return;
+      if (!preference?.model || !preference.effort || !preference.profile) {
+        setEditor(body.harness);
+        setChoiceError("Complete the settings before saving this choice.");
+        return;
+      }
       setChoiceError(null);
       const why = await onChoose(body);
       if (why !== null) setChoiceError(why);
     },
-    [onChoose],
+    [onChoose, preference],
   );
   const state = driverLineState({
-    profile: mode,
+    profile: undefined,
     driverHarness: driver.harness,
     driverModel: driver.model,
     preference,
     choices,
   });
   const interactive = mode === "interactive";
-  const gloss = mode === undefined ? undefined : MODE_GLOSS[mode];
-  // headless-turn is the one mode whose consequence the line itself
-  // states: no session recall has no visual, so it gets words, permanent,
-  // and a 4px neutral dot marks the segment that owns them.
-  const noRecall = mode === "headless-turn";
   /** Open a segment's menu, its left edge on the segment - clamped so a
    * long label near the column's right edge cannot push the menu into the
    * document pane. Effort never comes here: it opens right-aligned. */
@@ -958,20 +988,7 @@ const DriverLine = ({
     setFreeModel("");
     setOpen((was) => (was !== null && was.key === key ? null : { key, left }));
   };
-  const seg = (key: MenuKey | "mode", label: string): React.ReactElement => {
-    if (key === "mode") {
-      return (
-        <span className="driver-seg mode" key={key}>
-          {label}
-          {gloss === undefined ? null : (
-            <span className="driver-tip" role="tooltip">
-              <span className="driver-tip-title">{label}</span>
-              <span className="driver-tip-body">{gloss}</span>
-            </span>
-          )}
-        </span>
-      );
-    }
+  const seg = (key: MenuKey, label: string): React.ReactElement => {
     const live = state.menus.has(key);
     if (!live) {
       return (
@@ -986,6 +1003,7 @@ const DriverLine = ({
         type="button"
         className="driver-seg pick"
         key={key}
+        aria-label={`${key}: ${label}`}
         aria-expanded={isOpen}
         aria-haspopup="menu"
         onClick={(e) => openAt(key, e.currentTarget)}
@@ -1005,22 +1023,18 @@ const DriverLine = ({
     // segment: a line with nothing to say is not drawn.
     ...(state.harness === null && !state.menus.has("harness")
       ? []
-      : [{ key: "harness", el: seg("harness", state.harness ?? "no driver") }]),
+      : [{ key: "harness", el: seg("harness", state.harness ?? "Choose harness") }]),
     // The model segment renders wherever a choice exists, even before one
     // is made: until then the harness's own default runs, and "default
     // model" names that honestly instead of hiding the dimension. Kevin's
     // order (2026-08-29, over the handoff's): provider · model · effort ·
-    // mode - the things you can change first, the state that governs them
-    // last.
+    // the mode is reported separately below the composer.
     ...(state.menus.has("model")
       ? [{ key: "model", el: seg("model", state.model ?? "default model") }]
       : state.model === null
         ? []
         : [{ key: "model", el: seg("model", state.model) }]),
-    ...(state.effort === null
-      ? []
-      : [{ key: "effort", el: seg("effort", `${state.effort} effort`) }]),
-    ...(mode === undefined ? [] : [{ key: "mode", el: seg("mode", mode) }]),
+    ...(state.effort === null ? [] : [{ key: "effort", el: seg("effort", state.effort) }]),
   ];
   const rowsFor = (key: MenuKey): React.ReactElement[] => {
     if (key === "harness") {
@@ -1029,7 +1043,10 @@ const DriverLine = ({
           key={h}
           label={h}
           selected={h === state.harness}
-          onPick={() => void pick(chooseHarness(h, state))}
+          onPick={() => {
+            setOpen(null);
+            if (chooseHarness(h, state)) setEditor(h);
+          }}
         />
       ));
     }
@@ -1047,7 +1064,7 @@ const DriverLine = ({
       // The open entry (extensible harnesses, RFC-12): pi registers models
       // at runtime, so the listed ids are examples of a kind rather than
       // the kind's whole population.
-      // The check sits on the committed choice only: while a new id is
+      // The highlight marks the committed choice only: while a new id is
       // being typed, the row is a field, not the selected answer.
       const freeSelected =
         freeModel === "" && state.model !== null && !vocabulary.models.includes(state.model);
@@ -1055,13 +1072,6 @@ const DriverLine = ({
         ? [
             ...listed,
             <div className={freeSelected ? "driver-free selected" : "driver-free"} key="free">
-              {freeSelected ? (
-                <span aria-hidden="true" className="driver-check">
-                  <CheckDuotone size={12} />
-                </span>
-              ) : (
-                <span aria-hidden="true" className="driver-gutter" />
-              )}
               <input
                 aria-label="Another model id"
                 onChange={(e) => setFreeModel(e.currentTarget.value)}
@@ -1094,27 +1104,48 @@ const DriverLine = ({
   if (segments.length === 0) return null;
   return (
     <div className={interactive ? "driver-line interactive" : "driver-line"} ref={wrapper}>
-      {segments.map((s, i) =>
-        // Each middot is bound into one flex item with the label that
-        // follows it, so a wrap can only break BEFORE a separator - a
-        // middot stranded at the end of a row reads as a dropped segment.
-        // Labels are never shortened to force one row.
-        i === 0 ? (
-          <React.Fragment key={s.key}>{s.el}</React.Fragment>
-        ) : (
-          <span className="driver-pair" key={s.key}>
-            <span aria-hidden="true" className="driver-sep">
-              ·
-            </span>
-            {s.el}
-          </span>
-        ),
-      )}
-      {noRecall ? (
-        <span className="driver-note">
-          Each send starts the harness fresh. This record is what carries continuity.
-        </span>
+      {segments.map((s) => (
+        <React.Fragment key={s.key}>{s.el}</React.Fragment>
+      ))}
+      {state.harness === null && state.menus.has("harness") ? (
+        <>
+          <button type="button" className="driver-seg pick" disabled title="Choose a harness first">
+            Model
+          </button>
+          <button type="button" className="driver-seg pick" disabled title="Choose a harness first">
+            Reasoning
+          </button>
+        </>
       ) : null}
+      <SettingsPopover
+        label="Settings"
+        open={editor !== null}
+        onOpenChange={(value) => setEditor(value ? (state.harness ?? "") : null)}
+      >
+        <SettingsForm
+          key={`${preference?.revision ?? 0}:${editor}`}
+          initial={{
+            harness: editor ?? "",
+            model: editor === state.harness ? (state.model ?? "") : "",
+            effort: editor === state.harness ? (state.effort ?? "") : "",
+            profile: mode ?? "headless-turn",
+            ...(editor === state.harness && preference?.provider
+              ? { provider: preference.provider }
+              : {}),
+          }}
+          choices={choices}
+          submitLabel="Save settings"
+          onSave={async (settings) => {
+            const error = await onChoose({
+              v: 1,
+              ...settings,
+              expectedRevision: preference?.revision ?? 0,
+            });
+            if (!error) setEditor(null);
+            return error;
+          }}
+        />
+      </SettingsPopover>
       {choiceError === null ? null : (
         <span className="driver-choice-error">Choice not saved: {choiceError}</span>
       )}
@@ -1161,6 +1192,13 @@ const Thread = ({
   driverPreference,
   driverChoices,
   onDriverChoice,
+  location,
+  settingsIssue,
+  onLocation,
+  recovery,
+  executionRecovery,
+  comparisonRecovery,
+  comparisonBlocked,
 }: {
   pending: readonly PendingNote[];
   onSendNotes: () => void;
@@ -1201,24 +1239,22 @@ const Thread = ({
   driverChoices: DriverChoices | null;
   /** POST a whole driver preference; answers null or why it refused. */
   onDriverChoice: (body: DriverChoiceBody) => Promise<string | null>;
+  location: LocationState | null;
+  settingsIssue: string | null;
+  onLocation: (folder: string, revision: number) => Promise<string | null>;
+  recovery: React.ComponentProps<typeof InputRecovery>;
+  executionRecovery?: React.ReactNode;
+  comparisonRecovery?: React.ReactNode;
+  comparisonBlocked?: boolean;
 }): React.ReactElement => {
   const composerBox = React.useRef<HTMLTextAreaElement | null>(null);
-  // 4a: send is ghost at rest and solid the moment there is something to
-  // send. assistant-ui does not disable its own Send on an empty composer,
-  // so the emptiness is read here and the button is disabled by lucid -
-  // with attachments counted, because a file alone is something to say.
-  const composerText = useThreadComposer((c) => c.text);
-  const hasToSay = composerText.trim() !== "" || attachments.length > 0;
+  const attachmentPicker = React.useRef<HTMLInputElement | null>(null);
+  const [modeIssue, setModeIssue] = React.useState<string | null>(null);
   // 4a state 2: a file held over the composer is a drop target. The whole
   // composer takes the dashed accent edge and the field says what will
   // happen. Nothing lands on the document: a file is attached to the
   // conversation or it goes back where it came from - never a version.
   const [dragOver, setDragOver] = React.useState(false);
-  /** Whether one of the driver line's menus is open: the composer dims to
-   * 40% and stays in place while it is, per 7a. Lifted here because the
-   * composer and the line are siblings. */
-  const [driverMenuOpen, setDriverMenuOpen] = React.useState(false);
-  const onDriverMenu = React.useCallback((open: boolean): void => setDriverMenuOpen(open), []);
   const stalled = report.stalled;
   // 7c: the mode governs the composer too. interactive means a human owns
   // the session - lucid attaches, records, and can interject, it does not
@@ -1226,6 +1262,7 @@ const Thread = ({
   // file dropped on the composer still attaches: storing one is a lucid
   // act, not a driving act.
   const interactive = driver.profile === "interactive";
+  const inputBlocked = comparisonBlocked || recovery.busy || recovery.state.status !== "idle";
   return (
     <ThreadPrimitive.Root className={dead ? "thread-root dead" : "thread-root"}>
       {/* The half that scrolls. Only messages and note cards are in here, so
@@ -1240,8 +1277,7 @@ const Thread = ({
           {/* 6e Wait: progress in accent ink, as the transcript's own last
               row - the scroll absorbs it, so the composer never moves when
               work starts and stops (the dock version reflowed the input).
-              The header pill says it too; this row sits where the eyes
-              already are. The count joins at the dock's 8-second
+              This row sits where the eyes already are. The count joins at the 8-second
               threshold; before that the state alone is the message. */}
           {report.busy && !stalled ? (
             <div className="working-row">
@@ -1322,6 +1358,9 @@ const Thread = ({
               </div>
             </div>
           )}
+          <InputRecovery {...recovery} />
+          {comparisonRecovery}
+          {executionRecovery}
         </ThreadPrimitive.Viewport>
         <ThreadPrimitive.ScrollToBottom asChild>
           <button type="button" className="to-bottom">
@@ -1331,8 +1370,8 @@ const Thread = ({
       </div>
 
       {/* The half that does not. One solid block at the bottom: what is
-          queued, what is attached, and the box you type in. What is
-          happening lives in the conversation's status pill now, not here. */}
+          queued, what is attached, and the box you type in. Activity
+          appears at the end of the transcript. */}
       <div className={dead ? "dock dead" : "dock"}>
         {pending.length === 0 ? null : (
           <div className="queue-bar">
@@ -1346,12 +1385,18 @@ const Thread = ({
               type="button"
               className="primary"
               onClick={onSendNotes}
-              disabled={sending}
+              disabled={sending || inputBlocked}
               title="Send the queued notes (⌘⏎)"
             >
               {sending ? "Sending…" : "Send ⌘⏎"}
             </button>
-            <button type="button" className="discard" onClick={onDiscardNotes} title="Discard them">
+            <button
+              type="button"
+              className="discard"
+              onClick={onDiscardNotes}
+              title="Discard them"
+              disabled={inputBlocked}
+            >
               ×
             </button>
           </div>
@@ -1392,15 +1437,7 @@ const Thread = ({
         )}
 
         <ComposerPrimitive.Root
-          className={
-            dragOver
-              ? "composer dragover"
-              : invite
-                ? "composer inviting"
-                : driverMenuOpen
-                  ? "composer driver-open"
-                  : "composer"
-          }
+          className={dragOver ? "composer dragover" : invite ? "composer inviting" : "composer"}
           onDragOver={(e) => {
             // Without the preventDefault the drop never fires and the
             // browser navigates to the file instead.
@@ -1419,66 +1456,123 @@ const Thread = ({
             if (files !== undefined && files.length > 0) onAttach(files);
           }}
         >
-          {/* Attaching and sending are separate: the file is stored the
-            moment it is chosen, so closing the page does not lose it and
-            sending is the ordinary act it already was. 38px, matching send,
-            as the design's one new piece of composer chrome. Interactive
-            has none of it (7c): interjecting carries words into a session
-            a human owns. */}
-          {interactive ? null : (
-            <label className="attach" title="Attach a file">
-              <PaperclipDuotone size={16} />
-              <input
-                type="file"
-                multiple
-                onChange={(e) => {
-                  if (e.currentTarget.files !== null) onAttach(e.currentTarget.files);
-                  e.currentTarget.value = "";
-                }}
-              />
-            </label>
-          )}
           <ComposerPrimitive.Input
             autoFocus
             ref={composerBox}
             className={dragOver ? "drop" : undefined}
-            disabled={dead}
+            disabled={dead || inputBlocked}
             placeholder={
               dead
                 ? "Reload to write…"
-                : dragOver
-                  ? "Drop to attach — the original is kept"
-                  : interactive
-                    ? "Interject…"
-                    : "Send to the conversation…"
+                : inputBlocked
+                  ? "Resolve the saved send to continue…"
+                  : dragOver
+                    ? "Drop to attach — the original is kept"
+                    : interactive
+                      ? "Interject…"
+                      : "Send to the conversation…"
             }
-            rows={1}
+            rows={2}
+            aria-label={interactive ? "Interject" : "Message"}
+            title="Enter to send; Shift+Enter for a new line"
           />
-          <ComposerPrimitive.Send asChild>
-            <button
-              type="submit"
-              className="send"
-              title="Send"
-              aria-label="Send"
-              disabled={dead || !hasToSay}
-            >
-              <PaperPlaneTiltDuotone size={16} />
-            </button>
-          </ComposerPrimitive.Send>
+          <div className="composer-toolbar">
+            {interactive ? null : (
+              <>
+                <button
+                  type="button"
+                  className="composer-attach"
+                  aria-label="Attach a file"
+                  title="Attach a file"
+                  disabled={dead}
+                  onClick={() => attachmentPicker.current?.click()}
+                >
+                  <span aria-hidden="true">+</span>
+                </button>
+                <input
+                  ref={attachmentPicker}
+                  type="file"
+                  multiple
+                  hidden
+                  onChange={(e) => {
+                    if (e.currentTarget.files !== null) onAttach(e.currentTarget.files);
+                    e.currentTarget.value = "";
+                  }}
+                />
+              </>
+            )}
+            {dead ? null : (
+              <DriverLine
+                driver={driver}
+                preference={driverPreference}
+                choices={driverChoices}
+                onChoose={onDriverChoice}
+              />
+            )}
+          </div>
         </ComposerPrimitive.Root>
-
-        {/* 7a-7d: the driver line, docked under the prompt and named from
-            the same projection the header names. Dead hides it: 3d's
-            composer says Reload and names no driver, and a stale one
-            would. */}
+        {modeIssue ? (
+          <p role="alert" className="settings-error">
+            {modeIssue}
+          </p>
+        ) : null}
+        {settingsIssue ? (
+          <p role="alert" className="settings-error">
+            {settingsIssue}
+          </p>
+        ) : null}
+        {!dead && location ? (
+          <LocationControl key={location.revision} location={location} onSave={onLocation} />
+        ) : null}
         {dead ? null : (
-          <DriverLine
-            driver={driver}
-            preference={driverPreference}
-            choices={driverChoices}
-            onChoose={onDriverChoice}
-            onMenuToggle={onDriverMenu}
-          />
+          <div className="composer-mode">
+            {driverPreference?.model && driverPreference.effort && driverPreference.profile ? (
+              <select
+                className="composer-mode-name"
+                aria-label="Mode"
+                value={driverPreference.profile}
+                onChange={async (event) => {
+                  const profile = event.currentTarget.value;
+                  if (
+                    profile !== "headless-turn" &&
+                    profile !== "headless-session" &&
+                    profile !== "interactive"
+                  )
+                    return;
+                  try {
+                    setModeIssue(
+                      await onDriverChoice({
+                        v: 1,
+                        harness: driverPreference.harness,
+                        ...(driverPreference.provider
+                          ? { provider: driverPreference.provider }
+                          : {}),
+                        model: driverPreference.model ?? "",
+                        effort: driverPreference.effort ?? "",
+                        profile,
+                        expectedRevision: driverPreference.revision,
+                      }),
+                    );
+                  } catch {
+                    setModeIssue("Mode change was not confirmed. Refresh before trying again.");
+                  }
+                }}
+              >
+                <option value="headless-turn">headless-turn</option>
+                <option value="headless-session">headless-session</option>
+                <option value="interactive">interactive</option>
+              </select>
+            ) : (
+              <span className="composer-mode-name">{driver.profile ?? "No mode recorded"}</span>
+            )}
+            <span>
+              {driver.profile === undefined
+                ? driverPreference === null
+                  ? "Choose a harness to configure the model and reasoning."
+                  : "The mode is reported when an agent attaches."
+                : MODE_GLOSS[driverPreference?.profile ?? driver.profile]}
+            </span>
+          </div>
         )}
       </div>
     </ThreadPrimitive.Root>
@@ -1499,6 +1593,7 @@ interface CatalogEntry {
 }
 
 interface Doc {
+  readonly hash: string;
   readonly artifactId: string;
   readonly version: number;
   readonly contentType: string;
@@ -1934,237 +2029,6 @@ const DocumentFrame = ({
   );
 };
 
-/** One side of a comparison: a whole document in its own sandboxed frame,
- * with the diff marks for its side. The same frame machinery as the reading
- * view - the document is agent-written and never rendered outside a
- * sandbox, comparing included - sent its marks on a timer like the mode
- * message, because a fresh frame has to hear them whenever it is ready. */
-const CompareSheet = ({
-  artifactId,
-  bytes,
-  version,
-  side,
-  marks,
-  seams,
-}: {
-  artifactId: string;
-  bytes: string;
-  version: number;
-  side: "old" | "new";
-  marks: readonly number[];
-  seams: readonly { before: number; label: string }[];
-}): React.ReactElement => {
-  const ref = React.useRef<HTMLIFrameElement | null>(null);
-  // Read-only from the first message: a comparison is for reading, and no
-  // write exists behind either side. The marks ride their own timer.
-  React.useEffect(() => {
-    const send = (): void => {
-      ref.current?.contentWindow?.postMessage(
-        { source: FRAME_MESSAGE_SOURCE, kind: "mode", mode: "annotate", readOnly: true },
-        "*",
-      );
-      ref.current?.contentWindow?.postMessage(
-        {
-          source: FRAME_MESSAGE_SOURCE,
-          kind: "compare",
-          side,
-          marks: [...marks],
-          seams: seams.map((s) => ({ before: s.before, label: s.label, mid: true })),
-        },
-        "*",
-      );
-    };
-    send();
-    const id = window.setInterval(send, 1000);
-    return () => window.clearInterval(id);
-  }, [side, marks, seams]);
-  return (
-    <iframe
-      ref={ref}
-      key={`${artifactId}@${version}`}
-      className="doc-frame"
-      title={`${artifactId} v${version} (comparison)`}
-      sandbox="allow-scripts"
-      srcDoc={instrumentArtifact(bytes, artifactId, version)}
-    />
-  );
-};
-
-/** Where a removed block sits in the newer document: before the first
- * surviving block that followed it, or at the end when nothing did. The
- * same walk the place-keeping rule uses, read for where things went. */
-const seamBefore = (d: VersionDiff, wasAt: number): number => {
-  let best: number | undefined;
-  for (const oldIndex of d.carried.keys()) {
-    if (oldIndex > wasAt && (best === undefined || oldIndex < best)) best = oldIndex;
-  }
-  return best === undefined ? Number.MAX_SAFE_INTEGER : (d.carried.get(best) as number);
-};
-
-/** Where each removed run shows on the newer side: one seam per gap, however
- * many blocks the run took with it. */
-const removedSeams = (d: VersionDiff): { before: number; label: string }[] => {
-  const byBefore = new Map<number, number>();
-  for (const c of d.changes) {
-    if (c.kind !== "removed" || c.wasAt === undefined) continue;
-    const before = seamBefore(d, c.wasAt);
-    byBefore.set(before, (byBefore.get(before) ?? 0) + 1);
-  }
-  return [...byBefore.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([before, count]) => ({
-      before,
-      label: count === 1 ? "one block removed" : `${count} blocks removed`,
-    }));
-};
-
-/**
- * Two versions, side by side (RFC-07 R9, designed 6b).
- *
- * A comparison is a view and nothing else. It never reaches the agent, never
- * appends to the record, and offers no editing of either side - restoring
- * means leaving it first, which is deliberate: this is for reading, and
- * there is no write behind it.
- *
- * Two whole sheets rather than one split sheet, because each side is a whole
- * document; below 360px a side it becomes one column. The newer side wears
- * the accent border and the accent marks; the older side wears edge ink. A
- * diff is not a refusal, so neither side ever takes magenta.
- */
-const Comparison = ({
-  artifactId,
-  left,
-  right,
-  leftVersion,
-  rightVersion,
-}: {
-  artifactId: string;
-  left: string | null;
-  right: string | null;
-  leftVersion: number;
-  rightVersion: number;
-}): React.ReactElement => {
-  const box = React.useRef<HTMLDivElement | null>(null);
-  const [wide, setWide] = React.useState(true);
-
-  // Measured, not assumed. `COMPARE_COLUMN_MIN` is policy: below it a column
-  // is too narrow to read a line of markup in, and two unreadable columns are
-  // worse than one readable one.
-  React.useEffect(() => {
-    const el = box.current;
-    if (el === null) return;
-    const measure = (): void => setWide(el.clientWidth >= COMPARE_COLUMN_MIN * 2);
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  // A version that could not be read is reported for its own side. Rendering
-  // it as an empty column would say it was empty, which is a different and
-  // untrue thing.
-  const missing = left === null || right === null;
-  const diff = React.useMemo(() => {
-    if (missing) return null;
-    const parse = (html: string): Document => new DOMParser().parseFromString(html, "text/html");
-    return diffVersions(parse(left as string), parse(right as string));
-  }, [left, right, missing]);
-
-  const oldMarks = React.useMemo(
-    () =>
-      diff === null
-        ? []
-        : diff.changes.map((c) => c.wasAt).filter((v): v is number => v !== undefined),
-    [diff],
-  );
-  const newMarks = React.useMemo(
-    () =>
-      diff === null
-        ? []
-        : diff.changes.map((c) => c.at).filter((v): v is number => v !== undefined),
-    [diff],
-  );
-  const seams = React.useMemo(() => (diff === null ? [] : removedSeams(diff)), [diff]);
-  const changedCount = diff === null ? 0 : diff.changes.length;
-
-  return (
-    <div className={wide ? "doc-ground compare wide" : "doc-ground compare"} ref={box}>
-      <div className="compare-cols">
-        <div className="compare-col">
-          <div className="compare-col-head">
-            <span className="v">v{leftVersion}</span>
-            <span className="who">the earlier one</span>
-          </div>
-          {left === null ? (
-            <div className="compare-unreadable">v{leftVersion} could not be read.</div>
-          ) : (
-            <div className="compare-frame-wrap">
-              <CompareSheet
-                artifactId={artifactId}
-                bytes={left}
-                version={leftVersion}
-                side="old"
-                marks={oldMarks}
-                seams={[]}
-              />
-            </div>
-          )}
-        </div>
-        <div className="compare-col">
-          <div className="compare-col-head">
-            <span className="v">v{rightVersion}</span>
-            <span className="who">the newer one</span>
-            {diff === null || changedCount === 0 ? null : (
-              <span className="count">
-                {changedCount} change{changedCount === 1 ? "" : "s"}
-              </span>
-            )}
-          </div>
-          {right === null ? (
-            <div className="compare-unreadable">v{rightVersion} could not be read.</div>
-          ) : (
-            <div className="compare-frame-wrap new">
-              <CompareSheet
-                artifactId={artifactId}
-                bytes={right}
-                version={rightVersion}
-                side="new"
-                marks={newMarks}
-                seams={seams}
-              />
-            </div>
-          )}
-        </div>
-      </div>
-      <div className="compare-foot">
-        <div className="compare-note">
-          Comparing never reaches the agent and appends nothing.
-          {diff === null || diff.controls.length === 0
-            ? ""
-            : ` Also changed: ${diff.controls
-                .map(
-                  (c) =>
-                    `“${c.label}” ${c.before === "on" || c.before === "off" ? c.before : `“${c.before}”`} → ${
-                      c.after === "on" || c.after === "off" ? c.after : `“${c.after}”`
-                    }`,
-                )
-                .join(" · ")}.`}
-        </div>
-        <div className="compare-legend">
-          <span className="key new">
-            <span className="swatch" aria-hidden="true" />
-            changed in v{rightVersion}
-          </span>
-          <span className="key old">
-            <span className="swatch" aria-hidden="true" />
-            was in v{leftVersion}
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-};
-
 /** The 6c shell: the one dialog, because discard is the one control that
  * destroys work. 392px of paper on a blurred paper wash over the window;
  * no shadow - the edge and the wash carry it. The destructive action is
@@ -2221,6 +2085,7 @@ const App = (): React.ReactElement => {
   // Read once. Where in the record the page starts is an opening question;
   // after that the page moves the address bar, not the other way round.
   const opened = React.useMemo(routeFromPath, []);
+  const navigationBlocked = React.useRef(false);
   const conversationId = opened?.conversationId ?? "";
   /** The artifact the URL asked for, until a person picks another. */
   const [wantArtifact, setWantArtifact] = React.useState<string | null>(opened?.artifactId ?? null);
@@ -2228,6 +2093,15 @@ const App = (): React.ReactElement => {
    * to the artifact it came from, and carrying v7 across would ask for a
    * version of a different document. */
   const openArtifact = React.useCallback((artifactId: string): void => {
+    if (navigationBlocked.current) {
+      setComparisonRefusal(
+        "Send or cancel your comparison note before leaving. An unresolved send must be reconciled first.",
+      );
+      return;
+    }
+    setComparing(null);
+    comparingRef.current = null;
+    comparisonRequest.current++;
     setWantArtifact(artifactId);
     setPinned(null);
     setUnknownArtifact(null);
@@ -2236,12 +2110,40 @@ const App = (): React.ReactElement => {
   /** An artifact the URL named that the record does not hold. */
   const [unknownArtifact, setUnknownArtifact] = React.useState<string | null>(null);
   const [token, setToken] = React.useState<string | null>(null);
+  const composerRestore = React.useRef<{ setText(text: string): void } | null>(null);
+  const [submissionBusy, setSubmissionBusy] = React.useState(false);
+  const submissionActive = React.useRef(false);
+  const [submissionReason, setSubmissionReason] = React.useState<string | null>(null);
+  const [, refreshSubmission] = React.useReducer((revision: number) => revision + 1, 0);
+  const submission = React.useMemo(
+    () =>
+      createInputSubmission({
+        conversationId,
+        mintId: () => `browser-${crypto.randomUUID()}`,
+        // Access inside the guarded operation: even the sessionStorage getter
+        // can throw when this tab cannot use browser storage.
+        storage: {
+          getItem: (key) => window.sessionStorage.getItem(key),
+          setItem: (key, value) => window.sessionStorage.setItem(key, value),
+          removeItem: (key) => window.sessionStorage.removeItem(key),
+        },
+        send: (body) =>
+          fetch(`/api/conversations/${encodeURIComponent(conversationId)}/input`, {
+            method: "POST",
+            headers: { [TOKEN_HEADER]: token ?? "", "content-type": "application/json" },
+            body,
+          }),
+      }),
+    [conversationId, token],
+  );
   const [messages, setMessages] = React.useState<Msg[]>([]);
   const [status, setStatus] = React.useState<string>("");
   /** What is driving: harness, model when known, and profile. */
   const [driver, setDriver] = React.useState<Driver>({});
   /** What the person chose (RFC-12), beside what is driving, and the lists
    * to choose from. Both ride on the poll the page already makes. */
+  const [location, setLocation] = React.useState<LocationState | null>(null);
+  const [settingsIssue, setSettingsIssue] = React.useState<string | null>(null);
   const [driverPreference, setDriverPreference] = React.useState<DriverPreference | null>(null);
   const [driverChoices, setDriverChoices] = React.useState<DriverChoices | null>(null);
   const [activity, setActivity] = React.useState<Activity>({
@@ -2249,6 +2151,7 @@ const App = (): React.ReactElement => {
     inFlight: 0,
     waiting: 0,
   });
+  const [executions, setExecutions] = React.useState<readonly ExecutionView[]>([]);
   /** When the transcript last changed. A conversation that is waiting and a
    * conversation that has stopped look identical without it — which is how
    * a wedged harness sat silent for ninety minutes with eight inputs
@@ -2269,6 +2172,7 @@ const App = (): React.ReactElement => {
    * exists to prevent. */
   const [dead, setDead] = React.useState(false);
   const [doc, setDoc] = React.useState<Doc | null>(null);
+  const artifactWidth = useArtifactWidth(conversationId, doc?.artifactId ?? "", doc?.bytes ?? "");
   /** Which version is on screen. Compared against the catalog so a fetch
    * happens on a new version and not on every tick. */
   const shown = React.useRef<string>("");
@@ -2426,11 +2330,42 @@ const App = (): React.ReactElement => {
   /** A comparison being read: which version the one on screen is held against,
    * and that version's bytes once they arrive. `null` bytes mean it could not
    * be read, which is reported rather than shown as an empty side. */
-  const [comparing, setComparing] = React.useState<{
-    version: number;
-    bytes: string | null;
-    loading: boolean;
-  } | null>(null);
+  const [comparing, setComparing] = React.useState<(ComparisonPair & { loading: boolean }) | null>(
+    null,
+  );
+  const comparingRef = React.useRef(comparing);
+  comparingRef.current = comparing;
+  const comparisonRequest = React.useRef(0);
+  const [comparisonDraft, setComparisonDraft] = React.useState<ComparisonDraft | null>(null);
+  const [comparisonRefusal, setComparisonRefusal] = React.useState<string | null>(null);
+  const liveToken = React.useRef(token);
+  liveToken.current = token;
+  const recovery = React.useMemo(
+    () =>
+      createInputRecovery({
+        conversationId,
+        fetch: (url, init) => fetch(url, init),
+        isActive: () => parseRoute(window.location.pathname)?.conversationId === conversationId,
+        newId: () => `browser-${crypto.randomUUID()}`,
+        storage: () => sessionStorage,
+        token: () => liveToken.current,
+      }),
+    [conversationId],
+  );
+  const recoveryState = React.useSyncExternalStore(
+    recovery.subscribe,
+    recovery.getSnapshot,
+    recovery.getSnapshot,
+  );
+  const recoveryLocked = recoveryState.kind !== "idle" && recoveryState.kind !== "settled";
+  navigationBlocked.current = comparisonDraft !== null || recoveryLocked;
+  React.useEffect(() => {
+    if (
+      (recoveryState.kind === "settled" && recoveryState.outcome.kind === "accepted") ||
+      (recoveryState.kind === "storage-error" && recoveryState.outcome?.kind === "accepted")
+    )
+      setComparisonDraft(null);
+  }, [recoveryState]);
   const docRef = React.useRef<Doc | null>(null);
   /** Blocks this version added or changed, waiting for its frame. Sent once:
    * the pulse marks a version arriving, not a block existing. */
@@ -2468,6 +2403,10 @@ const App = (): React.ReactElement => {
     readConversationWidth(typeof localStorage === "undefined" ? null : localStorage),
   );
   const [dragging, setDragging] = React.useState(false);
+  const [stacked, setStacked] = React.useState(
+    () => window.matchMedia("(max-width: 900px)").matches,
+  );
+  const [documentShare, setDocumentShare] = React.useState(DEFAULT_DOCUMENT_SHARE);
 
   // A pointer capture, not a window listener: the pointer crosses the frame
   // on the way, and the frame is another document that would swallow every
@@ -2476,11 +2415,26 @@ const App = (): React.ReactElement => {
     e.preventDefault();
     const grip = e.currentTarget;
     grip.setPointerCapture(e.pointerId);
+    const vertical = window.matchMedia("(max-width: 900px)").matches;
+    const startY = e.clientY;
+    const startHeight = grip.previousElementSibling?.getBoundingClientRect().height ?? 0;
+    const panes = grip.parentElement;
+    const paneStyle = panes === null ? null : getComputedStyle(panes);
+    const available = Math.max(
+      1,
+      (panes?.clientHeight ?? window.innerHeight) -
+        Number.parseFloat(paneStyle?.paddingTop ?? "0") -
+        Number.parseFloat(paneStyle?.paddingBottom ?? "0"),
+    );
     const startX = e.clientX;
     const startWidth = grip.nextElementSibling?.getBoundingClientRect().width ?? 0;
     setDragging(true);
 
     const move = (ev: PointerEvent): void => {
+      if (vertical) {
+        setDocumentShare(clampDocumentShare((startHeight + ev.clientY - startY) / available));
+        return;
+      }
       // Dragging left widens the conversation: it is the right-hand pane.
       setConvWidth(clampConversationWidth(startWidth - (ev.clientX - startX), window.innerWidth));
     };
@@ -2488,7 +2442,7 @@ const App = (): React.ReactElement => {
       grip.removeEventListener("pointermove", move);
       grip.removeEventListener("pointerup", done);
       grip.removeEventListener("pointercancel", done);
-      grip.releasePointerCapture(e.pointerId);
+      if (grip.hasPointerCapture(e.pointerId)) grip.releasePointerCapture(e.pointerId);
       setDragging(false);
       setConvWidth((w) => {
         if (w !== null) writeConversationWidth(localStorage, w);
@@ -2520,6 +2474,23 @@ const App = (): React.ReactElement => {
   // cannot operate is a control in name only.
   const nudgeDrag = React.useCallback((e: React.KeyboardEvent<HTMLHRElement>): void => {
     const step = e.shiftKey ? 64 : 16;
+    if (window.matchMedia("(max-width: 900px)").matches) {
+      const by = e.key === "ArrowDown" ? step : e.key === "ArrowUp" ? -step : 0;
+      if (by === 0) return;
+      e.preventDefault();
+      const grip = e.currentTarget;
+      const current = grip.previousElementSibling?.getBoundingClientRect().height ?? 0;
+      const panes = grip.parentElement;
+      const style = panes === null ? null : getComputedStyle(panes);
+      const available = Math.max(
+        1,
+        (panes?.clientHeight ?? window.innerHeight) -
+          Number.parseFloat(style?.paddingTop ?? "0") -
+          Number.parseFloat(style?.paddingBottom ?? "0"),
+      );
+      setDocumentShare(clampDocumentShare((current + by) / available));
+      return;
+    }
     const by = e.key === "ArrowLeft" ? step : e.key === "ArrowRight" ? -step : 0;
     if (by === 0) return;
     e.preventDefault();
@@ -2533,6 +2504,7 @@ const App = (): React.ReactElement => {
   // room for. What was dragged is kept; what is shown is what fits.
   React.useEffect(() => {
     const onResize = (): void => {
+      setStacked(window.matchMedia("(max-width: 900px)").matches);
       setConvWidth((w) => (w === null ? null : clampConversationWidth(w, window.innerWidth)));
     };
     window.addEventListener("resize", onResize);
@@ -2548,13 +2520,13 @@ const App = (): React.ReactElement => {
    * The browser shows its own wording and ignores ours, so there is no
    * message here. `preventDefault` is what asks. */
   React.useEffect(() => {
-    if (!edited) return;
+    if (!edited && comparisonDraft === null && !recoveryLocked) return;
     const ask = (e: BeforeUnloadEvent): void => {
       e.preventDefault();
     };
     window.addEventListener("beforeunload", ask);
     return () => window.removeEventListener("beforeunload", ask);
-  }, [edited]);
+  }, [edited, comparisonDraft, recoveryLocked]);
 
   const toggleMode = React.useCallback((): void => {
     // Nothing to switch between on a version that permits neither, and
@@ -2637,6 +2609,70 @@ const App = (): React.ReactElement => {
     [docKey],
   );
 
+  const performSubmission = React.useCallback(
+    async (text?: string, artifactId?: string): Promise<InputSubmissionResult> => {
+      if (submissionActive.current || (text !== undefined && recoveryLocked))
+        return { status: "blocked", reason: "Wait for the current send to finish." };
+      submissionActive.current = true;
+      const previous = submission.current();
+      const originalText = text ?? (previous.status === "unresolved" ? previous.text : "");
+      const originalArtifact =
+        artifactId ?? (previous.status === "unresolved" ? previous.request.artifactId : null);
+      setSubmissionBusy(true);
+      try {
+        const result =
+          text === undefined ? await submission.retry() : await submission.submit(text, artifactId);
+        setSubmissionReason(result.status === "accepted" ? null : result.reason);
+        if (result.status === "uncertain" && result.reload) setDead(true);
+        if (result.status === "accepted" || result.status === "refused") {
+          const batch = originalArtifact === null ? null : detectAnnotationBatch(originalText);
+          if (batch && !("malformed" in batch)) {
+            const key = `${batch.artifactId}@${batch.version}`;
+            setNotesByVersion((prior) => {
+              const queued = prior[key] ?? [];
+              const submitted = encodeAnnotationBatch(batch);
+              const prefix = encodeAnnotationBatch({
+                ...batch,
+                notes: queued.slice(0, batch.notes.length).map(({ note, spots, files }) => ({
+                  note,
+                  spots,
+                  ...(files === undefined || files.length === 0 ? {} : { files }),
+                })),
+              });
+              if (result.status === "refused")
+                return prefix === submitted
+                  ? prior
+                  : {
+                      ...prior,
+                      [key]: [
+                        ...batch.notes.map((note) => ({ ...note, at: messages.length })),
+                        ...queued,
+                      ],
+                    };
+              return prefix === submitted
+                ? { ...prior, [key]: queued.slice(batch.notes.length) }
+                : prior;
+            });
+          } else if (result.status === "refused") composerRestore.current?.setText(originalText);
+          if (result.status === "refused") {
+            if (originalArtifact === null) addRefusal(null, `Not sent: ${result.reason}`);
+            else setRefusal(result.reason);
+          }
+        } else if (result.status === "blocked" && submission.current().status === "idle") {
+          if (originalArtifact === null) composerRestore.current?.setText(originalText);
+          if (originalArtifact === null) addRefusal(null, result.reason);
+          else setRefusal(result.reason);
+        }
+        return result;
+      } finally {
+        submissionActive.current = false;
+        setSubmissionBusy(false);
+        refreshSubmission();
+      }
+    },
+    [submission, messages.length, addRefusal, recoveryLocked],
+  );
+
   React.useEffect(() => {
     let alive = true;
     fetch("/api/session")
@@ -2666,7 +2702,13 @@ const App = (): React.ReactElement => {
           return;
         }
         if (!res.ok) {
-          setProblem(`Could not read the conversation (${res.status}).`);
+          const failure = (await res.json()) as { reason?: unknown };
+          if (!alive) return;
+          setProblem(
+            typeof failure.reason === "string"
+              ? failure.reason
+              : `Could not read the conversation (${res.status}).`,
+          );
           return;
         }
         const data = (await res.json()) as {
@@ -2675,8 +2717,15 @@ const App = (): React.ReactElement => {
           damaged?: boolean;
           driver?: Driver;
           driverPreference?: DriverPreference | null;
+          location?: LocationState;
+          conversationSettings?: {
+            selected: DriverPreference | null;
+            revision: number;
+            error: string | null;
+          };
           driverChoices?: DriverChoices | null;
           activity?: Activity;
+          executions?: readonly ExecutionView[];
         };
         if (!alive) return;
         const next = linesToMessages(data.lines);
@@ -2689,9 +2738,24 @@ const App = (): React.ReactElement => {
         });
         setStatus(data.status);
         setDriver(data.driver ?? {});
-        setDriverPreference(data.driverPreference ?? null);
+        setLocation(data.location ?? null);
+        setSettingsIssue(data.conversationSettings?.error ?? null);
+        setDriverPreference(
+          data.conversationSettings?.selected
+            ? {
+                ...data.conversationSettings.selected,
+                v: 1,
+                revision: data.conversationSettings.revision,
+              }
+            : (data.driverPreference ?? null),
+        );
         setDriverChoices(data.driverChoices ?? null);
         setActivity(data.activity ?? { turn: false, inFlight: 0, waiting: 0 });
+        setExecutions((previous) =>
+          JSON.stringify(previous) === JSON.stringify(data.executions ?? [])
+            ? previous
+            : (data.executions ?? []),
+        );
         setDamaged(data.damaged === true);
         if (data.damaged !== true) setProblem(null);
       } catch (e: unknown) {
@@ -2751,6 +2815,7 @@ const App = (): React.ReactElement => {
         // The version asked for, else the newest. A pin is what makes an
         // older version reachable, and marks live on the version they were
         // made against, so that version has to be reachable.
+        if (comparingRef.current !== null) return;
         const target = pinned ?? entry.latest;
         const want = `${entry.artifactId}@${target}`;
         if (want === shown.current) {
@@ -2928,34 +2993,37 @@ const App = (): React.ReactElement => {
     });
     // Where in the timeline this happened, so it stays there when the
     // conversation carries on above and below it.
-    setNotes([
-      ...notes,
-      {
-        note: text,
-        spots: withSelectors,
-        at: messages.length,
-        // The reference travels with the note, never the bytes. `path` is
-        // filled in when the turn is built, because where a file is offered
-        // from is a per-turn copy outside the record.
-        ...(noteFiles.length === 0
-          ? {}
-          : {
-              files: noteFiles.map((f) => ({
-                hash: f.hash,
-                bytes: f.bytes,
-                contentType: f.contentType,
-                name: f.name,
-              })),
-            }),
-      },
-    ]);
+    setNotesByVersion((prior) => ({
+      ...prior,
+      [docKey]: [
+        ...(prior[docKey] ?? []),
+        {
+          note: text,
+          spots: withSelectors,
+          at: messages.length,
+          // The reference travels with the note, never the bytes. `path` is
+          // filled in when the turn is built, because where a file is offered
+          // from is a per-turn copy outside the record.
+          ...(noteFiles.length === 0
+            ? {}
+            : {
+                files: noteFiles.map((f) => ({
+                  hash: f.hash,
+                  bytes: f.bytes,
+                  contentType: f.contentType,
+                  name: f.name,
+                })),
+              }),
+        },
+      ],
+    }));
     setNoteFiles([]);
     setDraft("");
     setSelection([]);
     setSelRect(null);
     setRefusal(null);
     deselect.current?.();
-  }, [draft, selection, notes, setNotes, doc, messages.length, pinnedOld, noteFiles]);
+  }, [draft, selection, notes, docKey, doc, messages.length, pinnedOld, noteFiles]);
 
   const sendNotes = React.useCallback(async (): Promise<void> => {
     if (notes.length === 0 || doc === null || token === null || dead) return;
@@ -2964,7 +3032,8 @@ const App = (): React.ReactElement => {
     // sharing one piece of state, so saving a document disabled sending
     // notes and sending notes showed nothing. A key that sends makes a
     // double press easy, which is what turned this up.
-    if (sendingNotes.current) return;
+    if (sendingNotes.current || submissionActive.current || submission.current().status !== "idle")
+      return;
     sendingNotes.current = true;
     setSending(true);
     try {
@@ -2979,24 +3048,13 @@ const App = (): React.ReactElement => {
           ...(n.files === undefined || n.files.length === 0 ? {} : { files: n.files }),
         })),
       });
-      const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/input`, {
-        method: "POST",
-        headers: { [TOKEN_HEADER]: token, "content-type": "application/json" },
-        body: JSON.stringify({ text: body }),
-      });
-      if (!res.ok) {
-        const said = (await res.json().catch(() => ({}))) as { error?: string };
-        // Nothing is cleared: what was written is still there to send again.
-        setRefusal(said.error === undefined ? `refused (${res.status})` : String(said.error));
-        return;
-      }
-      setNotes([]);
-      setRefusal(null);
+      const result = await performSubmission(body, doc.artifactId);
+      setRefusal(result.status === "accepted" ? null : result.reason);
     } finally {
       sendingNotes.current = false;
       setSending(false);
     }
-  }, [notes, doc, token, dead, conversationId, setNotes]);
+  }, [notes, doc, token, dead, performSubmission, submission]);
 
   // What command-Enter means right now, or null when it means nothing. A
   // ref, so the window listener and the frame's callback both read the
@@ -3006,7 +3064,11 @@ const App = (): React.ReactElement => {
   // nothing at all - which is what it did, leaving a full queue, an open note
   // box, and no way out of either without reaching for the mouse.
   queueSendRef.current =
-    notes.length > 0 && !sending && (selection.length === 0 || notes.length >= NOTE_QUEUE_MAX)
+    notes.length > 0 &&
+    !sending &&
+    !submissionBusy &&
+    submission.current().status === "idle" &&
+    (selection.length === 0 || notes.length >= NOTE_QUEUE_MAX)
       ? sendNotes
       : null;
 
@@ -3015,6 +3077,24 @@ const App = (): React.ReactElement => {
    * so nothing here changes the line - it settles from the next poll, the
    * same discipline as sending. Answers null on success, or why it was
    * refused, so the line can say so beside itself. */
+  const chooseLocation = React.useCallback(
+    async (folder: string, revision: number): Promise<string | null> => {
+      if (!token) return "Not connected";
+      const response = await fetch(
+        `/api/conversations/${encodeURIComponent(conversationId)}/location`,
+        {
+          method: "POST",
+          headers: { [TOKEN_HEADER]: token, "content-type": "application/json" },
+          body: JSON.stringify({ workingDirectory: folder, expectedRevision: revision }),
+        },
+      );
+      const result = await response.json();
+      if (!response.ok) return result.reason ?? "Cannot save folder";
+      setLocation(result);
+      return null;
+    },
+    [token, conversationId],
+  );
   const chooseDriver = React.useCallback(
     async (body: DriverChoiceBody): Promise<string | null> => {
       if (token === null) return "not connected";
@@ -3023,9 +3103,12 @@ const App = (): React.ReactElement => {
         headers: { [TOKEN_HEADER]: token, "content-type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (res.ok) return null;
-      const said = (await res.json().catch(() => ({}))) as { error?: string };
-      return said.error === undefined ? `refused (${res.status})` : said.error;
+      if (res.ok) {
+        setDriverPreference(await res.json());
+        return null;
+      }
+      const said = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+      return said.reason ?? said.error ?? `refused (${res.status})`;
     },
     [token, conversationId],
   );
@@ -3091,33 +3174,155 @@ const App = (): React.ReactElement => {
     }
   }, [confirmRestore, doc, token, dead, restoring, conversationId]);
 
-  /** Read another version, to hold this one against it.
-   *
-   * Read-only in every sense: it fetches bytes and puts them on screen. No
-   * frame is made for it, so neither side can be edited, and nothing about a
-   * comparison reaches the record or the agent. */
   const compareWith = React.useCallback(
     async (version: number): Promise<void> => {
-      if (doc === null || token === null) return;
-      setComparing({ version, bytes: null, loading: true });
-      try {
-        const res = await fetch(
-          `/api/conversations/${encodeURIComponent(conversationId)}/artifacts/${encodeURIComponent(doc.artifactId)}/${version}`,
-          { headers: { [TOKEN_HEADER]: token } },
+      if (doc === null || token === null || catalog === null || version >= catalog.latest) return;
+      if (pending) {
+        setRefusal(
+          "Before comparing, save or discard edits and send or discard the notes on this version. Your work is still here.",
         );
-        if (!res.ok) {
-          setComparing({ version, bytes: null, loading: false });
-          return;
-        }
-        const other = (await res.json()) as Doc;
-        setComparing({ version, bytes: other.bytes, loading: false });
-      } catch {
-        // Reported on its own side of the comparison, not as a page failure.
-        setComparing({ version, bytes: null, loading: false });
+        return;
       }
+      const request = ++comparisonRequest.current;
+      const latest = catalog.latest;
+      const pair: ComparisonPair = {
+        earlier: null,
+        earlierVersion: version,
+        reviewed: null,
+        reviewedVersion: latest,
+      };
+      setComparing({ ...pair, loading: true });
+      comparingRef.current = { ...pair, loading: true };
+      const read = async (v: number): Promise<Doc | null> => {
+        try {
+          const response = await fetch(
+            `/api/conversations/${encodeURIComponent(conversationId)}/artifacts/${encodeURIComponent(doc.artifactId)}/${v}`,
+            { headers: { [TOKEN_HEADER]: token } },
+          );
+          return response.ok ? ((await response.json()) as Doc) : null;
+        } catch {
+          return null;
+        }
+      };
+      const [earlier, reviewed] = await Promise.all([read(version), read(latest)]);
+      if (request === comparisonRequest.current)
+        setComparing({ ...pair, earlier, reviewed, loading: false });
     },
-    [doc, token, conversationId],
+    [doc, token, catalog, pending, conversationId],
   );
+
+  const reviewLatestComparison = React.useCallback(async (): Promise<void> => {
+    if (!comparing || !catalog || !doc || !token) return;
+    const version = catalog.latest;
+    const request = ++comparisonRequest.current;
+    setComparing({ ...comparing, loading: true });
+    try {
+      const response = await fetch(
+        `/api/conversations/${encodeURIComponent(conversationId)}/artifacts/${encodeURIComponent(doc.artifactId)}/${version}`,
+        { headers: { [TOKEN_HEADER]: token } },
+      );
+      const reviewed = response.ok ? ((await response.json()) as Doc) : null;
+      if (request === comparisonRequest.current)
+        setComparing({ ...comparing, reviewed, reviewedVersion: version, loading: false });
+    } catch {
+      if (request === comparisonRequest.current)
+        setComparing({ ...comparing, reviewed: null, reviewedVersion: version, loading: false });
+    }
+  }, [comparing, catalog, doc, token, conversationId]);
+
+  const closeComparison = React.useCallback((): void => {
+    if (navigationBlocked.current) {
+      setComparisonRefusal(
+        "Send or cancel your note before closing the comparison. Reconcile an unresolved send first.",
+      );
+      return;
+    }
+    comparisonRequest.current++;
+    const reviewed = comparing?.reviewed;
+    if (reviewed) {
+      setDoc(reviewed);
+      shown.current = `${reviewed.artifactId}@${reviewed.version}`;
+      if (place.current?.version === reviewed.version) pendingRestore.current = place.current;
+    }
+    setComparing(null);
+    comparingRef.current = null;
+    setPinned(null);
+  }, [comparing]);
+
+  const sendComparisonNote = async (): Promise<void> => {
+    if (
+      !doc ||
+      !comparing ||
+      !comparisonDraft ||
+      recoveryLocked ||
+      submissionActive.current ||
+      submission.current().status !== "idle"
+    )
+      return;
+    const queued = notesByVersion[`${doc.artifactId}@${comparisonDraft.spot.sourceVersion}`] ?? [];
+    if (queued.length) {
+      setComparisonRefusal(
+        `You have unsent ordinary notes on v${comparisonDraft.spot.sourceVersion}. Resolve that queue on its original version before sending this note. Neither draft has been sent.`,
+      );
+      return;
+    }
+    if (
+      !comparisonDraft.text.trim() ||
+      !comparing.reviewed ||
+      (catalog?.latest ?? 0) > comparing.reviewedVersion
+    ) {
+      setComparisonRefusal("Review the latest saved version before sending this note.");
+      return;
+    }
+    const text = comparisonDraftText(doc.artifactId, comparing, comparisonDraft);
+    if (!text) return;
+    setComparisonRefusal(null);
+    await recovery.begin(doc.artifactId, text);
+  };
+  const restoreComparisonRequest = (request: PendingInput, error: string): void => {
+    const text = pendingInputText(request),
+      metadata = comparisonMetadata(text);
+    const draft = restoreComparisonDraft(text);
+    if (!draft || metadata.kind !== "comparison") {
+      setComparisonRefusal(
+        "This saved note cannot be restored to comparison. Its text remains in recovery.",
+      );
+      return;
+    }
+    setComparisonDraft(draft);
+    setComparisonRefusal(error);
+    const batch = metadata.batch;
+    const pair = {
+      earlier: null,
+      earlierVersion: batch.comparison.earlierVersion,
+      reviewed: null,
+      reviewedVersion: batch.comparison.reviewedVersion,
+      loading: true,
+    };
+    setWantArtifact(batch.artifactId);
+    setComparing(pair);
+    comparingRef.current = pair;
+    const requestNumber = ++comparisonRequest.current;
+    const read = async (version: number): Promise<Doc | null> => {
+      try {
+        const response = await fetch(
+          `/api/conversations/${encodeURIComponent(conversationId)}/artifacts/${encodeURIComponent(batch.artifactId)}/${version}`,
+          { headers: { [TOKEN_HEADER]: liveToken.current ?? "" } },
+        );
+        return response.ok ? ((await response.json()) as Doc) : null;
+      } catch {
+        return null;
+      }
+    };
+    void Promise.all([read(pair.earlierVersion), read(pair.reviewedVersion)]).then(
+      ([earlier, reviewed]) => {
+        if (requestNumber === comparisonRequest.current) {
+          setComparing({ ...pair, earlier, reviewed, loading: false });
+          if (reviewed) setDoc(reviewed);
+        }
+      },
+    );
+  };
 
   /** Store a chosen file and describe it back. Shared by the composer and
    * the note box, because storing is the same act either way - only what the
@@ -3327,6 +3532,11 @@ const App = (): React.ReactElement => {
         if (from === doc.version) {
           for (const n of list) {
             for (const sp of n.spots) {
+              if (
+                sp.sourceVersion !== undefined &&
+                (sp.sourceVersion !== doc.version || sp.sourceHash !== doc.hash)
+              )
+                continue;
               out.push({
                 note: n.note,
                 fromVersion: from,
@@ -3369,6 +3579,7 @@ const App = (): React.ReactElement => {
         for (const n of list) {
           // Each spot resolves on its own, and whichever survive are kept.
           for (const sp of n.spots) {
+            if (sp.sourceVersion !== undefined || sp.sourceHash !== undefined) continue;
             const sel = sp.selectors as SpotSelectors | undefined;
             if (sel === undefined) {
               out.push({
@@ -3453,25 +3664,13 @@ const App = (): React.ReactElement => {
         .filter((p) => p.type === "text")
         .map((p) => p.text ?? "")
         .join("");
-      if (text.trim() === "" || token === null || dead) return;
-      const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/input`, {
-        method: "POST",
-        headers: { [TOKEN_HEADER]: token, "content-type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
-      if (res.status === 401) {
-        setDead(true);
+      if (text.trim() === "" || token === null || dead) {
+        composerRestore.current?.setText(text);
         return;
       }
-      if (!res.ok) {
-        // G2: the substrate refused the send, drawn where the refused act
-        // happened - a magenta chip at the composer, not a toast and not a
-        // page-level banner.
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        addRefusal(null, `not sent — ${body.error ?? res.status}`);
-      }
+      await performSubmission(text);
     },
-    [conversationId, token, dead, addRefusal],
+    [token, dead, performSubmission],
   );
 
   // A save is an artifact version entry, not an input, so it is not in the
@@ -3507,34 +3706,21 @@ const App = (): React.ReactElement => {
         },
       }));
 
-    if (placed.length === 0) return dead ? weaveNotes(messages, []) : weaveNotes(messages, notes);
-
-    const woven: Msg[] = [];
-    let next = 0;
-    for (const m of messages) {
-      // Every save whose place is at or before this line goes in first.
-      while (next < placed.length && (placed[next]?.after ?? 0) < (m.seq ?? 0)) {
-        woven.push(placed[next++]?.line as Msg);
-      }
-      woven.push(m);
-    }
-    while (next < placed.length) woven.push(placed[next++]?.line as Msg);
     // Dead (3d): queued notes leave the timeline and become one held card
     // under it - "N notes, nothing sent" - because nothing can be sent and
     // a queue that looks live would say otherwise.
-    return dead ? weaveNotes(woven, []) : weaveNotes(woven, notes);
+    return weaveNotes(messages, dead ? [] : notes, placed);
   }, [messages, catalog, notes, dead]);
 
   const runtime = useExternalStoreRuntime<Msg>({
     messages: withSaves,
     setMessages: (next) => setMessages([...next]),
     onNew,
-    convertMessage: (m: Msg) => ({
-      id: m.id,
-      role: m.role,
-      content: [{ type: "text" as const, text: m.text }],
-    }),
+    // A new converter invalidates assistant-ui's object cache when a save or
+    // pending note shifts an existing message's position.
+    convertMessage: (m: Msg, index: number) => runtimeMessage(m, index),
   });
+  composerRestore.current = runtime.thread.composer;
 
   /** What to do next, in one line.
    *
@@ -3722,10 +3908,8 @@ const App = (): React.ReactElement => {
     [token, conversationId],
   );
 
-  /** The conversation's status pill, counted and clocked (3c, 6e Wait).
-   * Working is progress in the accent family; stalled is the one warning,
-   * in neutral ink, because a stall is not a refusal; idle says nothing
-   * more than that nobody is working. */
+  /** Activity at the end of the transcript, counted and clocked (3c, 6e Wait).
+   * No activity produces no status message. */
   const busy = activity.turn || activity.inFlight > 0 || activity.waiting > 0;
   // When this stretch of work began. Held across renders because nothing in
   // the record says it: a turn writes no line between its input and its
@@ -3746,14 +3930,6 @@ const App = (): React.ReactElement => {
     (now - since) / 1000,
     status !== "agent-gone" && status !== "no record",
   );
-  const pillLabel = report.disconnected
-    ? "no agent"
-    : report.stalled
-      ? `stopped · ${report.elapsed ?? "a while"} ago`
-      : busy
-        ? `${activity.turn || activity.inFlight > 0 ? "working" : "waiting"}${report.elapsed === null ? "" : ` · ${report.elapsed}`}`
-        : "idle";
-
   /** The header over the document column, in its three states (README \u00a71):
    * reading on the ground, ink while changes are unsaved, and the one
    * magenta state when there is no driver. Everything it shows is decided by
@@ -3799,17 +3975,21 @@ const App = (): React.ReactElement => {
               <div className="panes">
                 {/* The document is the thing being worked on, so it gets the room
                 and the left side. The conversation is the margin note. */}
-                <div className="pane document">
+                <div
+                  className="pane document"
+                  style={{ "--document-height": `${documentShare * 100}%` } as React.CSSProperties}
+                >
+                  {comparisonRefusal && !comparing ? <p role="alert">{comparisonRefusal}</p> : null}
                   {unknownArtifact !== null ? (
                     <>
                       {/* 6d: the address named an artifact this record does not
                           hold. Not an error and not styled as one - the way
                           on is the artifact it does hold, named plainly. */}
                       <div className="doc-head">
-                        <span className="doc-mark" aria-hidden="true">
+                        <a className="doc-mark" href="/" aria-label="Lucid hub">
                           <span className="dot" />
                           <span className="word">lucid</span>
-                        </span>
+                        </a>
                         <span className="doc-head-sep" aria-hidden="true" />
                         {allArtifacts.length === 0 ? (
                           <span className="none-name">No document</span>
@@ -3873,17 +4053,17 @@ const App = (): React.ReactElement => {
                           - the header says so rather than showing dead
                           controls. The way in is the conversation. */}
                       <div className="doc-head">
-                        <span className="doc-mark" aria-hidden="true">
+                        <a className="doc-mark" href="/" aria-label="Lucid hub">
                           <span className="dot" />
                           <span className="word">lucid</span>
-                        </span>
+                        </a>
                         <span className="doc-head-sep" aria-hidden="true" />
                         <span className="none-name">No document</span>
                       </div>
                       <div className="doc-ground">
                         <div className="empty-panel">
                           <div className="empty-line">
-                            Nothing here yet. Ask on the right, or attach a file — either way lucid
+                            Nothing here yet. Send a prompt, or attach a file. Either way lucid
                             writes v1 and keeps it.
                           </div>
                           {/* Attaching here is the composer's own act: the file
@@ -3894,6 +4074,7 @@ const App = (): React.ReactElement => {
                           <label className="v choose">
                             Choose a file
                             <input
+                              className="sr-only"
                               type="file"
                               multiple
                               onChange={(e) => {
@@ -3911,24 +4092,22 @@ const App = (): React.ReactElement => {
                     </>
                   ) : (
                     <>
-                      {/* App Bridge, as #171 settled it: with an unsaved edit the
-                    header stops describing the document and becomes the
-                    question, and nothing else. The name stays; the version
-                    pill and the modes are not merely disabled but gone - the
-                    only two things there are to do are the two that are here.
+                      {/* Unsaved edits retain the name and local width control.
+                    Version and mode controls give way to Save and Discard.
 
                     3f is the same bar: a version arriving underneath changes
                     only the clause it states and the number it offers, and
                     the conversation card below carries the same two answers. */}
                       {dead || damaged ? (
                         <div className="doc-head dead">
-                          <span className="doc-mark" aria-hidden="true">
+                          <a className="doc-mark" href="/" aria-label="Lucid hub">
                             <span className="dot" />
                             <span className="word">lucid</span>
-                          </span>
+                          </a>
                           <span className="doc-head-sep" aria-hidden="true" />
                           {headerTitle(doc)}
-                          {/* 3d: Reload is the only action. The token cannot
+                          {/* Reload restores the connection. Local width adjustment
+                              remains available without a valid token. The token cannot
                               come back any other way, and the work is already
                               on disk. */}
                           <button
@@ -3938,15 +4117,17 @@ const App = (): React.ReactElement => {
                           >
                             Reload
                           </button>
+                          {comparing === null ? artifactWidth.control : null}
                         </div>
                       ) : edited ? (
                         <div className="doc-head saving-bar">
-                          <span className="doc-mark" aria-hidden="true">
+                          <a className="doc-mark" href="/" aria-label="Lucid hub">
                             <span className="dot" />
                             <span className="word">lucid</span>
-                          </span>
+                          </a>
                           <span className="doc-head-sep" aria-hidden="true" />
                           {headerTitle(doc)}
+                          {comparing === null ? artifactWidth.control : null}
                           <span className="saving-clause">
                             {waiting !== null && waiting > doc.version
                               ? `unsaved · v${waiting} arrived while you typed`
@@ -3973,10 +4154,10 @@ const App = (): React.ReactElement => {
                         <div className="doc-head">
                           {/* lucid, over the document: the mark, a hairline, then
                       the name. Nothing else above the sheet. */}
-                          <span className="doc-mark" aria-hidden="true">
+                          <a className="doc-mark" href="/" aria-label="Lucid hub">
                             <span className="dot" />
                             <span className="word">lucid</span>
-                          </span>
+                          </a>
                           <span className="doc-head-sep" aria-hidden="true" />
                           {headerTitle(doc)}
                           {/* One version is a badge with nothing to open. More than
@@ -3986,11 +4167,11 @@ const App = (): React.ReactElement => {
                     long conversation produces a hundred versions. */}
                           {comparing !== null ? (
                             <span className="doc-version-pill compare-pill">
-                              <span className="v">v{comparing.version}</span>
+                              <span className="v">v{comparing.earlierVersion}</span>
                               <span className="arrow" aria-hidden="true">
                                 <ArrowRightDuotone />
                               </span>
-                              <span className="v">v{doc.version}</span>
+                              <span className="v">v{comparing.reviewedVersion}</span>
                             </span>
                           ) : catalog === null || catalog.versions.length < 2 ? (
                             <span className="doc-version">v{doc.version}</span>
@@ -4058,7 +4239,7 @@ const App = (): React.ReactElement => {
                               <option value="">Compare with…</option>
                               {[...catalog.versions]
                                 .reverse()
-                                .filter((v) => v !== doc.version)
+                                .filter((v) => v < catalog.latest)
                                 .map((v) => (
                                   <option key={v} value={String(v)}>
                                     v{v}
@@ -4066,6 +4247,7 @@ const App = (): React.ReactElement => {
                                 ))}
                             </select>
                           )}
+                          {comparing === null ? artifactWidth.control : null}
                           {comparing === null && pinned !== null ? (
                             <button
                               type="button"
@@ -4092,13 +4274,9 @@ const App = (): React.ReactElement => {
                             <>
                               <span className="lock-chip">
                                 <LockDuotone size={11} />
-                                read-only · comparing
+                                Comparing
                               </span>
-                              <button
-                                type="button"
-                                className="v"
-                                onClick={() => setComparing(null)}
-                              >
+                              <button type="button" className="v" onClick={closeComparison}>
                                 Close
                               </button>
                             </>
@@ -4187,6 +4365,8 @@ const App = (): React.ReactElement => {
                   this page and the anchor needs no arithmetic. The box is
                   the sheet: --paper, the mode's 1px border, radius 12px. */}
                           <div
+                            ref={artifactWidth.stage}
+                            style={artifactWidth.style}
                             className={[
                               "doc-stage",
                               pinnedOld ? "ro" : "",
@@ -4422,12 +4602,29 @@ const App = (): React.ReactElement => {
                           </div>
                         </div>
                       ) : (
-                        <Comparison
+                        <ContentComparisonView
                           artifactId={doc.artifactId}
-                          left={comparing.bytes}
-                          right={doc.bytes}
-                          leftVersion={comparing.version}
-                          rightVersion={doc.version}
+                          pair={comparing}
+                          latest={catalog?.latest ?? comparing.reviewedVersion}
+                          loading={comparing.loading}
+                          onReview={() => void reviewLatestComparison()}
+                          draft={comparisonDraft}
+                          onDraft={(next) => {
+                            setComparisonDraft(next);
+                            setComparisonRefusal(null);
+                          }}
+                          onSend={() => void sendComparisonNote()}
+                          locked={
+                            recoveryLocked ||
+                            submissionBusy ||
+                            submission.current().status !== "idle"
+                          }
+                          refusal={comparisonRefusal}
+                          sent={messages.flatMap((message) =>
+                            message.sentBatch?.comparison && message.sentBatch.comparisonUsable
+                              ? [message.sentBatch]
+                              : [],
+                          )}
                         />
                       )}
                     </>
@@ -4442,11 +4639,20 @@ const App = (): React.ReactElement => {
                   onPointerDown={startDrag}
                   onKeyDown={nudgeDrag}
                   tabIndex={0}
-                  aria-orientation="vertical"
-                  aria-label="Resize the conversation"
-                  aria-valuemin={CONVERSATION_MIN}
-                  aria-valuemax={CONVERSATION_MAX}
-                  aria-valuenow={convWidth ?? undefined}
+                  aria-orientation={stacked ? "horizontal" : "vertical"}
+                  aria-label={stacked ? "Resize document height" : "Resize the conversation"}
+                  aria-valuemin={stacked ? DOCUMENT_SHARE_MIN * 100 : CONVERSATION_MIN}
+                  aria-valuemax={stacked ? DOCUMENT_SHARE_MAX * 100 : CONVERSATION_MAX}
+                  aria-valuenow={
+                    stacked ? Math.round(documentShare * 100) : (convWidth ?? undefined)
+                  }
+                  aria-valuetext={
+                    stacked
+                      ? "Document uses " +
+                        Math.round(documentShare * 100) +
+                        "% of the available height"
+                      : undefined
+                  }
                 />
 
                 <div
@@ -4457,40 +4663,6 @@ const App = (): React.ReactElement => {
                       : ({ "--conversation-width": `${convWidth}px` } as React.CSSProperties)
                   }
                 >
-                  {/* The conversation's own 34px row, aligned with the document
-              header so both columns top out together: its name, what is
-              driving it, and how it stands - counted and clocked. */}
-                  <div className="conv-head">
-                    <span className="conv-name">
-                      {conversationId === "" ? "no conversation" : conversationId}
-                    </span>
-                    {/* What is driving, named from the same Driver the
-                driver line under the composer renders (7a-7d), so the two
-                surfaces cannot disagree. Identity, not status. */}
-                    {driverHeadline(driver) === null ? null : (
-                      <span
-                        className="conv-driver"
-                        title={
-                          driver.harnessVersion === undefined ? undefined : driver.harnessVersion
-                        }
-                      >
-                        {driverHeadline(driver)}
-                      </span>
-                    )}
-                    <span
-                      className={
-                        report.stalled
-                          ? "conv-pill stopped"
-                          : report.busy
-                            ? "conv-pill busy"
-                            : "conv-pill"
-                      }
-                      title={status === "" ? undefined : status}
-                    >
-                      <span className="dot" aria-hidden="true" />
-                      <span className="label">{pillLabel}</span>
-                    </span>
-                  </div>
                   <Thread
                     pending={notes}
                     onSendNotes={() => void sendNotes()}
@@ -4519,6 +4691,67 @@ const App = (): React.ReactElement => {
                     driverPreference={driverPreference}
                     driverChoices={driverChoices}
                     onDriverChoice={chooseDriver}
+                    location={location}
+                    settingsIssue={settingsIssue}
+                    onLocation={chooseLocation}
+                    comparisonBlocked={recoveryLocked}
+                    comparisonRecovery={
+                      <InputRecoveryPanel
+                        recovery={recovery}
+                        onReload={() => window.location.reload()}
+                        onRestore={restoreComparisonRequest}
+                      />
+                    }
+                    executionRecovery={executions.map((entry) => (
+                      <ExecutionRecovery
+                        key={`${entry.inputId}:${entry.attempt}`}
+                        entry={entry}
+                        disabled={dead || token === null}
+                        send={async (inputId, body) => {
+                          if (token === null || dead) return "Reload to reconnect before recovery.";
+                          const response = await fetch(
+                            `/api/conversations/${encodeURIComponent(conversationId)}/inputs/${encodeURIComponent(inputId)}/recovery`,
+                            {
+                              method: "POST",
+                              headers: {
+                                [TOKEN_HEADER]: token,
+                                "content-type": "application/json",
+                              },
+                              body,
+                            },
+                          );
+                          if (response.status === 401) {
+                            setDead(true);
+                            return "Lucid restarted. Reload to reconnect.";
+                          }
+                          if (response.ok) return null;
+                          const failure = (await response.json()) as { reason?: string };
+                          return (
+                            failure.reason ??
+                            "Recovery could not be confirmed. Refresh the conversation."
+                          );
+                        }}
+                      />
+                    ))}
+                    recovery={{
+                      state: submission.current(),
+                      busy: submissionBusy,
+                      dead: dead || token === null,
+                      reason:
+                        token === null
+                          ? "Connecting before this send can be checked…"
+                          : submissionReason,
+                      onRetry: () => {
+                        if (!dead && token !== null) void performSubmission();
+                      },
+                      onDiscard: () => {
+                        if (!submission.discardInvalid())
+                          setSubmissionReason(
+                            "Cannot remove local recovery data. Browser storage is still unavailable.",
+                          );
+                        refreshSubmission();
+                      },
+                    }}
                   />
                 </div>
               </div>

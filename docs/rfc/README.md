@@ -1,9 +1,13 @@
 # Active RFCs
 
-There are no active RFCs after RFC 13. Current reading-view design is
-listed in the [documentation index](../README.md#browser-design).
+No active RFCs. RFCs 14 and 15 are implemented. Their final proposals, reviews,
+and resolved local tickets are preserved in commit `743a48c`. Current contracts
+live in the [documentation index](../README.md).
 
-The highest allocated RFC number is **13**. The next RFC is **14**.
+Current reading-view design is listed in the
+[documentation index](../README.md#browser-design).
+
+The highest allocated RFC number is **15**. The next RFC is **16**.
 Never reset numbering because completed files have been removed. Before
 allocating, check this high-water mark, active filenames, and Git history;
 use one greater than the highest number allocated and update this mark.

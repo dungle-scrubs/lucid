@@ -42,14 +42,22 @@ import { createHcnRunner } from "../harness/hcn-runner.js";
 import { nodeHarnessDeps } from "../harness/node-deps.js";
 import type { HarnessName, HarnessRunner } from "../harness/runner.js";
 import { decideAction } from "../modes/controller.js";
+import type { DriverSpawn, HeadlessProfile } from "../modes/honor.js";
 import { openHonoringDriver } from "../modes/honor.js";
 import { createHeadlessHost, hostSeamFor } from "../modes/host.js";
+import { createManagedSource } from "../modes/managed-source.js";
+import { ownerPresence, readProcessOwner, terminalPresence } from "../process-owner.js";
+import { HubError } from "../protocol/hub-errors.js";
 import type { ChannelStatus, Frame } from "../protocol/index.js";
 import { inputFrame } from "../protocol/index.js";
 import { channelStatus } from "../protocol/liveness.js";
 import { createTurnIds } from "../protocol/turn-id.js";
-import { readDriverPreference } from "../store/driver-preference.js";
+import { readRecordFiles } from "../store/conversation-host.js";
+import { requireDriverPreference } from "../store/driver-preference.js";
+import { managedCandidates, managedPrerequisite } from "../store/managed-readiness.js";
 import { acquirePresence, type PresenceEvent, type PresenceHandle } from "../store/presence.js";
+import { readRecordMetadata } from "../store/record-identity.js";
+import { locationProjection } from "../store/settings.js";
 import { type HostRecord, openConversation } from "../store/store.js";
 import { followRecord } from "../store/tailer.js";
 import { resolveStartupHarness, supportsSession } from "./harness.js";
@@ -57,6 +65,9 @@ import { type Conversations, conversations } from "./record-addressing.js";
 
 /** Production deps for the runtime. All fields are injectable for tests. */
 export interface RuntimeDeps {
+  /** Internal worker path; default stays off until managed contracts are enabled. */
+  readonly managed?: boolean;
+  readonly ownerPresence?: typeof ownerPresence;
   readonly rootDir?: string;
   readonly conversationId?: string;
   /** Harness to drive headlessly. Defaults to `claudeCode` (or `LUCID_HARNESS` env). */
@@ -166,11 +177,11 @@ export const openDrivenConversation = async (
 
   const convs = convsFactory(opts.rootDir);
   const conversationId = opts.conversationId ?? `conv-${Date.now()}-${suffixFn()}`;
-  const dir = convs.dirFor(conversationId);
-
-  // Ensure the record exists (conversations.ensure handles create-vs-open
-  // and the fallback read — no duplication here).
-  const { secret } = convs.ensure(conversationId);
+  const existing = opts.managed ? convs.dirFor(conversationId) : undefined;
+  const { dir, secret } =
+    existing === undefined
+      ? convs.ensure(conversationId)
+      : { dir: existing, secret: readRecordFiles(existing).secret };
 
   let receive: ((frame: Frame) => void) | undefined;
   // The append callback and follower see the same input. Deliver it once
@@ -190,6 +201,7 @@ export const openDrivenConversation = async (
   // this process holds nothing.
   let presenceHandle: PresenceHandle | undefined;
   const host = openConversationFn(dir, {
+    ownerPresence: opts.ownerPresence,
     now: nowFn,
     presence: () => presenceProbe(),
     executorLease: () => presenceHandle?.held() === true,
@@ -204,12 +216,30 @@ export const openDrivenConversation = async (
   // second adapter of the liveness seam (watch is the first), so the
   // seam becomes real: one adapter = hypothetical, two = real.
   const presenceVal = presenceProbe();
-  const status = channelStatusFn(host.state(), nowFn(), {
-    processAlive: presenceVal === true,
+  const previous = host.state();
+  const managed = opts.managed ?? Object.keys(previous.executions).length > 0;
+  const terminal = previous.lastTerminalParticipation;
+  const probeOwner = (owner: import("../protocol/process-owner.js").ProcessOwner | undefined) =>
+    owner === undefined ? presenceProbe() : (opts.ownerPresence ?? ownerPresence)(owner);
+  const ownerState = terminalPresence(previous.terminalParticipations, probeOwner);
+  const ownerAlive = terminal !== null && ownerState === true;
+  if (terminal !== null && ownerState === undefined) {
+    host.close();
+    throw new HubError(
+      "The previous terminal owner could not be verified. Keep the prompt pending until ownership is resolved.",
+      "E-HUB-03",
+      409,
+      ["Verify terminal ownership"],
+    );
+  }
+  const status = channelStatusFn(previous, nowFn(), {
+    processAlive: presenceVal === true || ownerAlive,
   });
   const action = decideActionFn(status);
-  if (action.action === "await-reattach") {
-    const resumeInstruction = `interactive session still attached for ${conversationId} — awaiting reattach (run will retry after the human yields or the lease expires)`;
+  if (ownerAlive || action.action === "await-reattach") {
+    const resumeInstruction = ownerAlive
+      ? `The terminal owner for ${conversationId} is still alive. Wait for it to exit or reconnect.`
+      : `The interactive source for ${conversationId} is unattached. Reconnect it before continuing.`;
     try {
       host.close();
     } catch {}
@@ -226,16 +256,45 @@ export const openDrivenConversation = async (
   // death; the runtime ensures a single explicit release.
   let presence: PresenceHandle;
   try {
-    presence = acquirePresenceFn(dir, conversationId, { onEvent: opts.onPresenceEvent });
+    presence = acquirePresenceFn(dir, conversationId, {
+      onEvent: opts.onPresenceEvent,
+      ...(opts.managed ? { timeoutMs: 0 } : {}),
+    });
   } catch (cause) {
     host.close();
-    if (cause instanceof LockError && cause.code === "lock-unavailable") throw cause;
+    if (cause instanceof LockError && (cause.code === "lock-unavailable" || opts.managed))
+      throw cause;
     throw new PresenceAcquireError(conversationId, cause);
   }
   // Publish the handle to the host's R2 gate: from here on, transacts in
   // this process see themselves as the holder, and after `release()` (or
   // a takeover) they stop dispatching.
   presenceHandle = presence;
+  const holdStartup = (cause: unknown): void => {
+    if (!managed || opts.signal?.aborted) return;
+    // A busy append lock leaves the accepted intent eligible for reconciliation.
+    if (cause instanceof LockError) return;
+    const code = cause instanceof HubError && cause.code === "E-HUB-04" ? "E-HUB-04" : "E-HUB-03";
+    const reason = cause instanceof Error ? cause.message : "The selected driver could not start.";
+    const state = host.state();
+    for (const inputId of managedCandidates(dir, state, host.artifactHeads())) {
+      const execution = state.executions[inputId];
+      if (!execution || execution.kind === "attempt-started") continue;
+      const result = host.writeExecution({
+        kind: "held",
+        inputId,
+        attempt: execution.attempt,
+        hold: {
+          code,
+          reason: reason.slice(0, 4096),
+          prerequisite: managedPrerequisite(dir, state, code),
+          actions: code === "E-HUB-04" ? ["choose-folder"] : ["change-settings", "retry"],
+        },
+      });
+      if (result.verdict === "refused")
+        throw new Error(`Cannot record startup hold: ${result.issue}`);
+    }
+  };
   let released = false;
   const doRelease = (): void => {
     if (released) return;
@@ -254,46 +313,144 @@ export const openDrivenConversation = async (
   // the preference's harness beats the default; model, provider and effort
   // have no spawn-flag surface, so the preference is their only source
   // besides hcn's defaults.
-  const startup = resolveStartupHarness({ harness: opts.harness, harnessName: opts.harnessName });
-  const preference = readDriverPreference(dir);
+  const startup = managed
+    ? { harness: "claude" as const, pinned: false }
+    : resolveStartupHarness({ harness: opts.harness, harnessName: opts.harnessName });
+  let preference: ReturnType<typeof requireDriverPreference>;
+  let runner: HarnessRunner;
+  let cwd: string;
+  let modeNotice: string | undefined;
+  let modePreference: ReturnType<typeof requireDriverPreference> = null;
+  try {
+    host.collectEffects(host.cursor());
+    const abandoned = host.state().attachment;
+    if (
+      managed &&
+      abandoned &&
+      abandoned.profile !== "interactive" &&
+      abandoned.owner &&
+      probeOwner(abandoned.owner) === false
+    ) {
+      const detached = host.handleFrame(
+        JSON.stringify({ kind: "detach", epoch: host.state().epoch, reason: "shutdown" }),
+      );
+      if (detached.verdict === "refused") {
+        throw new HubError(
+          "The departed source could not be reconciled. Refresh before continuing.",
+          "E-HUB-03",
+        );
+      }
+    }
+
+    const latest = host.state().terminalParticipations.at(-1);
+    if (latest?.profile === "interactive") {
+      const alive = terminalPresence(host.state().terminalParticipations, probeOwner);
+      if (alive !== false)
+        throw new HubError(
+          "Terminal ownership changed before launch. Wait for its process to exit or verify ownership.",
+          "E-HUB-03",
+          409,
+        );
+      if (latest.epoch !== terminal?.epoch)
+        throw new HubError(
+          "The terminal participation changed before launch. Reconcile the pending input again.",
+          "E-HUB-03",
+          409,
+        );
+    }
+    preference = requireDriverPreference(dir);
+    if (terminal !== null && ownerState === false && preference?.profile === "interactive") {
+      if (
+        terminal.harness !== preference.harness ||
+        (host.state().nativeSessions[preference.harness]?.epoch ?? 0) < terminal.epoch
+      )
+        throw new HubError(
+          "The departed terminal has no verified native session to continue.",
+          "E-HUB-03",
+        );
+      modePreference = preference;
+      preference = { ...preference, profile: "headless-turn" };
+      if (host.state().lastParticipation?.epoch === terminal.epoch)
+        modeNotice =
+          "The terminal process has exited. Continuing its session in headless-turn mode.";
+    }
+    const location = locationProjection(readRecordMetadata(dir));
+    if (location.status !== "available" || location.workingDirectory === null)
+      throw new HubError(
+        "Choose an available working folder before continuing this conversation.",
+        "E-HUB-04",
+        400,
+        ["Choose a working folder"],
+      );
+    cwd = location.workingDirectory;
+    runner = opts.runner ?? createHcnRunner(nodeHarnessDeps());
+  } catch (cause) {
+    try {
+      holdStartup(cause);
+    } finally {
+      try {
+        host.close();
+      } finally {
+        doRelease();
+      }
+    }
+    throw cause;
+  }
   const harness = startup.pinned ? startup.harness : (preference?.harness ?? startup.harness);
   // Runtime-verified, not guessed: hcn reads the descriptor and answers
   // whether a harness holds a persistent session (PLAN D-008), once per
   // spawn through the honoring driver below.
-  const runner = opts.runner ?? createHcnRunner(nodeHarnessDeps());
   // Wire termination: done resolves when the source is closed or the
   // signal aborts. No polling, no monkey-patch.
   let resolveDone!: () => void;
-  const done = new Promise<void>((resolve) => {
+  let rejectDone!: (cause: unknown) => void;
+  const done = new Promise<void>((resolve, reject) => {
     resolveDone = resolve;
+    rejectDone = reject;
   });
+  void done.catch(() => {});
 
-  let doneResolved = false;
+  const sourceReady = Promise.withResolvers<
+    import("../modes/honor.js").HonoringSource | undefined
+  >();
+  let finishing = false;
   // Bind the tailer's lifetime to the runtime's abort, so abort() and
   // done stop it.
   const tailerAbort = new AbortController();
   const finish = (): void => {
-    if (doneResolved) return;
-    doneResolved = true;
+    if (finishing) return;
+    finishing = true;
     receive = undefined;
     try {
       tailerAbort.abort();
     } catch {}
-    try {
-      host.close();
-    } catch {}
-    doRelease();
-    resolveDone();
+    void sourceReady.promise
+      .then(async (opened) => {
+        try {
+          await opened?.settled;
+        } finally {
+          try {
+            host.close();
+          } catch {}
+          doRelease();
+        }
+        resolveDone();
+      })
+      .catch(rejectDone);
   };
 
   const baseDeps = {
+    ...(managed && !opts.managed ? { explicitAttachmentId: uuidFn() } : {}),
+    owner: readProcessOwner(process.pid) ?? undefined,
+    ...(modeNotice === undefined ? {} : { notes: [modeNotice] }),
+    cwd,
     conversationId,
     secret,
     runner,
     mintTurnId,
     now: nowFn,
     onEnded: (end: import("../modes/host.js").SourceEnd) => {
-      if (doneResolved) return;
+      if (finishing) return;
       try {
         if (end.kind === "store-failed")
           (
@@ -335,33 +492,89 @@ export const openDrivenConversation = async (
   let lookedAt = 0;
   let source: import("../modes/honor.js").HonoringSource;
   let profile: "headless-session" | "headless-turn";
+  const validateProcess = async (
+    spawn: DriverSpawn,
+    selectedProfile: HeadlessProfile,
+    resume: string | undefined,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    const state = host.state();
+    const native = state.nativeSessions[spawn.harness];
+    const latest = state.harnessSessions[spawn.harness];
+    if (resume === undefined && latest === undefined) return;
+    if (!native?.current || native.sessionId !== latest || native.sessionId !== resume)
+      throw new HubError(
+        "The requested native session identity is unverified or changed. Keep this input pending.",
+        "E-HUB-03",
+      );
+    const facts = await runner.inspect(spawn.harness, {
+      signal,
+      model: spawn.model,
+      effort: spawn.effort,
+      ...(spawn.provider === undefined ? {} : { provider: spawn.provider }),
+      runtime: { cwd, profile: selectedProfile, resume },
+    });
+    if (facts.runtime?.resume.status !== "supported")
+      throw new HubError(
+        facts.runtime?.resume.reason ??
+          "Native resume compatibility is unknown for the selected executable.",
+        "E-HUB-03",
+      );
+  };
   try {
     source = await openHonoringDriver({
+      signal: opts.signal,
       base: baseDeps,
-      sessionCapable: (h) => supportsSession(runner, h),
+      sessionCapable: (h, signal) => supportsSession(runner, h, signal),
       initialHarness: harness,
       harnessPinned: startup.pinned,
-      readPreference: () => readDriverPreference(dir),
+      readPreference: () => {
+        const saved = requireDriverPreference(dir);
+        return modePreference !== null &&
+          saved?.harness === modePreference.harness &&
+          saved?.profile === "interactive"
+          ? { ...saved, profile: "headless-turn" }
+          : saved;
+      },
       mintSessionId: uuidFn,
-      createHostFn: createHeadlessHostFn,
+      createHostFn: managed
+        ? (deps, profile) => createManagedSource(deps, profile, host, createHeadlessHostFn)
+        : createHeadlessHostFn,
+      validateProcess: managed ? undefined : validateProcess,
+      validateSpawn: managed
+        ? undefined
+        : async (spawn, selectedProfile, signal) => {
+            await validateProcess(
+              spawn,
+              selectedProfile,
+              host.state().harnessSessions[spawn.harness],
+              signal,
+            );
+          },
       onSpawn: () => {
         handed.clear();
         lookedAt = host.cursor();
       },
     });
+    sourceReady.resolve(source);
     profile = source.state().profile;
   } catch (e) {
+    sourceReady.resolve(undefined);
     try {
-      host.close();
-    } catch {}
-    doRelease();
+      holdStartup(e);
+    } finally {
+      try {
+        host.close();
+      } catch {}
+      doRelease();
+    }
     throw e;
   }
-  if (!doneResolved) receive = source.receive;
+  if (!finishing) receive = source.receive;
 
   // Abort helper — idempotent, releases presence exactly once.
   const abort = (): void => {
-    if (doneResolved) return;
+    if (finishing) return;
     try {
       tailerAbort.abort();
     } catch {}
@@ -418,6 +631,9 @@ export const openDrivenConversation = async (
       return;
     }
     for (const queued of inputs) {
+      // Managed work is selected from execution authorization, never from
+      // the legacy delivery cursor or its armed-input recovery path.
+      if (queued.managed) continue;
       if (queued.status !== "outstanding" || queued.redeliver !== true) continue;
       if (handed.has(queued.id)) continue;
       if (presenceHandle?.held() !== true) return;
@@ -429,7 +645,7 @@ export const openDrivenConversation = async (
 
   const observers = new Set<() => void>();
   const onTrigger = (tailer: import("../store/tailer.js").RecordTailer): void => {
-    if (doneResolved) return;
+    if (finishing) return;
     // peek() is lock-free and may see a torn tail — only for DECIDING
     // whether to bother. Anything we act on goes through the locked
     // collect.
@@ -446,6 +662,7 @@ export const openDrivenConversation = async (
     } catch {
       return;
     }
+    if (presenceHandle?.held() === true) source.recordChanged?.();
     // No effects in this range — we have looked but not dispatched, so
     // advance the process-local cursor only and do not persist. An input
     // that produced no effect because the lease had lapsed is in this

@@ -1,3 +1,6 @@
+import { type ConfigLocation, readUserConfig, resolveRecordRoot } from "../config/user-config.js";
+import { readRecordFiles } from "../store/conversation-host.js";
+import { readRecordIdentity } from "../store/record-identity.js";
 /**
  * RecordAddressing — the deep module that owns `stamp -> dir -> verified identity -> secret`.
  *
@@ -33,8 +36,14 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { type Discovery, DiscoveryIndex, RecordLookupError } from "../store/discovery.js";
 import { StoreError } from "../store/errors.js";
-import { createConversationRecord, type RecordPaths, recordPaths } from "../store/store.js";
+import {
+  type CreateRecordOptions,
+  createConversationRecord,
+  pathsForDir,
+  type RecordPaths,
+} from "../store/store.js";
 
 // ---------------------------------------------------------------------------
 // Stamp constants + helpers (from env-stamp.ts)
@@ -64,19 +73,7 @@ export const resolveRecordDir = (explicitDir?: string): string | undefined => {
   return stamp?.recordDir;
 };
 
-/**
- * Reconstruct how to re-invoke this CLI as a child process, in exec-form.
- * Uses `process.execPath` + `process.argv[1]` when running via `bun run
- * src/cli/main.ts`, otherwise just the exec path. Never a shell string.
- */
-export const selfInvocation = (extraArgs: readonly string[] = []): readonly string[] => {
-  const execPath = process.execPath;
-  const arg1 = process.argv[1];
-  if (arg1 && (arg1.endsWith(".ts") || arg1.endsWith(".js"))) {
-    return [execPath, arg1, ...extraArgs];
-  }
-  return [execPath, ...extraArgs];
-};
+export { selfInvocation } from "./invocation.js";
 
 // ---------------------------------------------------------------------------
 // Record path + verification (from resolver.ts + store/errors.ts shape)
@@ -102,17 +99,10 @@ export type ResolverResult =
  * the hook exits non-destructively and never writes the wrong record.
  */
 export const verifyRecord = (recordDir: string): { conversationId: string } | { error: string } => {
-  const metaPath = join(recordDir, "meta.json");
-  if (!existsSync(metaPath)) return { error: `no meta.json at ${metaPath}` };
   try {
-    const meta = JSON.parse(readFileSync(metaPath, "utf8")) as {
-      conversationId?: string;
-    };
-    if (typeof meta.conversationId !== "string" || meta.conversationId.length === 0)
-      return { error: "meta.json missing conversationId" };
-    return { conversationId: meta.conversationId };
-  } catch (e) {
-    return { error: `could not read meta.json: ${e}` };
+    return { conversationId: readRecordIdentity(recordDir) };
+  } catch (cause) {
+    return { error: cause instanceof Error ? cause.message : "Record identity is unavailable" };
   }
 };
 
@@ -169,13 +159,15 @@ export const resolveVerifiedRecord = (): ResolverResult => {
 
 export interface Conversations {
   readonly rootDir: string;
-  /** Resolve the record directory for `conversationId`. Pure. */
+  list(): Discovery;
+  readonly discoveryIndex: DiscoveryIndex;
+  /** Resolve the record directory for `conversationId`. Refuses missing and ambiguous identities. */
   dirFor(conversationId: string): string;
-  /** Resolve the full `RecordPaths` for `conversationId`. Pure. */
+  /** Resolve the full `RecordPaths` for `conversationId`. Refuses missing and ambiguous identities. */
   pathsFor(conversationId: string): RecordPaths;
   /** Ensure the record exists, creating it if needed. Returns the
    *  secret (minted or existing) and the dir. */
-  ensure(conversationId: string): { secret: string; dir: string };
+  ensure(conversationId: string, options?: CreateRecordOptions): { secret: string; dir: string };
 }
 
 /** Records live under `~/.lucid2/records` by default, overridden by
@@ -184,23 +176,40 @@ export interface Conversations {
  * Not `~/.lucid`: that is v1's live state directory — its hub log, its
  * registry, its roots — and v1 is still in use. Defaulting there put a
  * `records/` subdirectory inside a running program's own directory. */
-export const conversations = (rootDir?: string): Conversations => {
-  const root =
-    rootDir ?? process.env.LUCID_ROOT ?? join(process.env.HOME ?? "/tmp", ".lucid2", "records");
+export const conversations = (rootDir?: string, configLocation?: ConfigLocation): Conversations => {
+  const root = resolveRecordRoot(rootDir, () => readUserConfig(configLocation));
+  const index = new DiscoveryIndex(root);
+  const catalog = (): Discovery => index.scan();
+  const find = (id: string): string | undefined => {
+    const listing = catalog();
+    if (listing.errors.some((error) => error.conversationId === id && error.reason === "ambiguous"))
+      throw new RecordLookupError("ambiguous", id);
+    return listing.identities.get(id);
+  };
+  const resolve = (id: string): string => {
+    const dir = find(id);
+    if (dir === undefined) throw new RecordLookupError("not-found", id);
+    return dir;
+  };
   return {
     rootDir: root,
-    dirFor: (conversationId: string) => join(root, conversationId),
-    pathsFor: (conversationId: string) => recordPaths(root, conversationId),
-    ensure: (conversationId: string) => {
+    discoveryIndex: index,
+    list: catalog,
+    dirFor: resolve,
+    pathsFor: (conversationId: string) => pathsForDir(resolve(conversationId)),
+    ensure: (
+      conversationId: string,
+      options: CreateRecordOptions = { workingDirectory: process.cwd() },
+    ) => {
+      const existing = existsSync(root) ? find(conversationId) : undefined;
+      if (existing) return { dir: existing, secret: readRecordFiles(existing).secret };
       try {
-        const created = createConversationRecord(root, conversationId);
+        const created = createConversationRecord(root, conversationId, options);
         return { secret: created.secret, dir: created.paths.dir };
       } catch (e) {
         if (!(e instanceof StoreError) || e.code !== "record-exists") throw e;
-        const secretPath = join(root, conversationId, "secret");
-        if (!existsSync(secretPath)) throw e;
-        const secret = readFileSync(secretPath, "utf8").trim();
-        return { secret, dir: join(root, conversationId) };
+        const dir = resolve(conversationId);
+        return { dir, secret: readRecordFiles(dir).secret };
       }
     },
   };

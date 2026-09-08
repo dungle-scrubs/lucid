@@ -86,6 +86,9 @@ this design must prevent.
 **Annotate** — the mode a document opens in. Clicking picks a part of the
 document to write a note about. The agent's own controls do not operate: a
 click on a checkbox selects it for a note rather than ticking it.
+Links with an `href` remain ordinary links: a pointer cursor, no annotation
+hover outline, and direct activation follows the destination. This includes
+child labels and icons. Dragging to select linked text still supports notes.
 
 **Edit** — the document behaves as the agent built it. Controls work, text
 takes a caret, and changes are saved as a new version.
@@ -134,8 +137,6 @@ every colour, and whether annotations stay visible while editing.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  conversation name        what is driving      status     │
-├────────────────────────────────────┬─────────────────────┤
 │  name    version    mode           │                     │
 │ ─────────────────────────────────  │   the conversation  │
 │                                    │                     │
@@ -148,11 +149,13 @@ every colour, and whether annotations stay visible while editing.
 │                                    ├─────────────────────┤
 │                                    │  activity / queue   │
 │                                    │  composer           │
+│                                    │  mode + explanation│
 └────────────────────────────────────┴─────────────────────┘
 ```
 
-**The bar across the top** names the conversation, what is driving it (which
-agent, which model), and whether anything is currently attached.
+The conversation has no header. Driver selectors sit inside the composer;
+the mode and its explanation appear below it. Activity appears at the end
+of the transcript. There is no idle label.
 
 **The document pane** holds the artifact's name, its version, the mode
 control, the document itself, and a bar underneath carrying a line of
@@ -318,17 +321,17 @@ that appears too early teaches people to stop reading it.
 - **No artifact yet** — an invitation, naming the next action. Not an error.
 - **No artifact by that name** — the address named something this
   conversation does not hold, so it offers the one it does.
-- **The connection is dead** — everything stops, and there is exactly one
-  action: reload.
+- **The connection is dead** - reload restores the connection. Local document
+  width adjustment remains available while a document is visible.
 
 ---
 
 ## 6. Committing and discarding an edit
 
-When you change the document, the top bar **becomes the question** and
-nothing else: unsaved changes, discard, save. The name, version and mode
-controls are hidden until you answer. (This is the Shopify App Bridge
-contextual save bar, and it is deliberate.)
+When you change the document, the top bar shows unsaved changes, discard, and
+save. The name and local Document width control remain available. Version and
+mode controls are hidden until you save or discard. Width changes preserve the
+unsaved document and its frame.
 
 Consequences the design should know:
 
@@ -466,9 +469,12 @@ built now, and the design has to account for them like anything else.
 
 - **The pulse**, described in §9, and its other half in §5 — clicking a note
   to go to what it points at. Both halves of one rule.
-- **Comparing two versions** side by side, over the stored bytes. Read-only:
-  it never reaches the agent, never appends, and neither side can be edited.
-  Two columns where each would have 360 pixels, one column below that.
+- **Comparing two saved versions** inside the artifact view. Supported content
+  uses aligned columns at 820px of available artifact width and an inline
+  layout below it. One small note editor sits beneath the selected source;
+  sending adds that historical note to the separate conversation. Reading
+  creates no input or version. New-version arrival preserves the pair and
+  draft until explicit review. Full rules live in [Artifacts](artifacts.md#content-comparison).
 - **Seeing what a version changed**, which is what lets the pulse know which
   parts are new.
 - **Attaching a file**, in the composer and on a note, described above.

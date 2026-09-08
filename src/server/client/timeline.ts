@@ -38,7 +38,22 @@ export interface Msg {
   readonly sentBatch?: SentBatch;
 }
 
+/** The pinned assistant-ui repository does not recompute a node's depth
+ * after inserting a preceding save or note. Include position in its view ID
+ * so it creates the node at the correct depth. Durable input IDs stay intact
+ * in sentBatch and never depend on this presentation key. */
+export const runtimeMessage = (message: Msg, index: number) => ({
+  id: JSON.stringify([message.id, index]),
+  role: message.role,
+  content: [{ type: "text" as const, text: message.text }],
+});
+
 export interface SentBatch {
+  readonly comparison?: import("../../protocol/comparison-note.js").ComparisonContext;
+  readonly comparisonUsable?: boolean;
+  readonly inputId?: string;
+  readonly status?: string;
+  readonly hold?: string;
   readonly artifactId: string;
   readonly version: number;
   readonly notes: readonly {
@@ -66,13 +81,30 @@ export interface PendingNote {
  * A note lands before the item that was next when it was written. Notes
  * handed over out of order are placed in order; nothing is dropped and
  * nothing is repeated. */
-export const weaveNotes = (messages: readonly Msg[], notes: readonly PendingNote[]): Msg[] => {
-  if (notes.length === 0) return [...messages];
+export const weaveNotes = (
+  messages: readonly Msg[],
+  notes: readonly PendingNote[],
+  saves: readonly { readonly after: number; readonly line: Msg }[] = [],
+): Msg[] => {
+  if (notes.length === 0 && saves.length === 0) return [...messages];
   const ordered = [...notes].sort((a, b) => a.at - b.at);
+  const saved = [...saves].sort((a, b) => a.after - b.after);
   const out: Msg[] = [];
   let n = 0;
+  let nextSave = 0;
   for (let i = 0; i <= messages.length; i += 1) {
-    while (n < ordered.length && (ordered[n] as PendingNote).at <= i) {
+    // Both saved versions and local notes use the raw transcript's order.
+    // A save is not another index in the note's captured `at` value.
+    while (
+      nextSave < saved.length &&
+      (i === messages.length || (saved[nextSave]?.after ?? 0) < (messages[i]?.seq ?? 0))
+    ) {
+      const save = saved[nextSave++];
+      if (save) out.push(save.line);
+    }
+    // A canonical refresh can contain fewer items than the local timeline
+    // did at capture time. Keep those notes at the end, never out of view.
+    while (n < ordered.length && ((ordered[n] as PendingNote).at <= i || i === messages.length)) {
       const pn = ordered[n] as PendingNote;
       out.push({
         id: `pending-${n}-${pn.spots.map((sp) => sp.id).join(",")}`,

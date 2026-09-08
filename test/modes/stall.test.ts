@@ -15,7 +15,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
-import { createHeadlessHost } from "../../src/modes/host.js";
+import { HCN_MIN_VERSION } from "../../src/harness/version.js";
+import { createHeadlessHost, type HeadlessDeps } from "../../src/modes/host.js";
 import type { Frame } from "../../src/protocol/frames.js";
 import { createConversationRecord, openConversation } from "../../src/store/store.js";
 import { FakeHcnProcess, fakeArtifactHost, fakeSpawner } from "../harness/fakes.js";
@@ -24,7 +25,7 @@ const BIN = "/fake/hcn";
 const SID = "eb04301d-8756-4a8b-ae3e-aac0e71f7265";
 
 /** A source whose harness is alive but says nothing back. */
-const rig = (opts: { stallMs: number }) => {
+const rig = (opts: { stallMs: number; prepareTurn?: HeadlessDeps["prepareTurn"] }) => {
   const root = mkdtempSync(join(tmpdir(), "lucid-stall-"));
   const { secret } = createConversationRecord(root, "conv-1");
   const proc = new FakeHcnProcess();
@@ -50,6 +51,7 @@ const rig = (opts: { stallMs: number }) => {
       sessionId: SID,
       now: () => clock,
       stallMs: opts.stallMs,
+      prepareTurn: opts.prepareTurn,
       // Fast enough that a test does not wait on a real clock.
       stallTickMs: 5,
     } as unknown as Parameters<typeof createHeadlessHost>[0],
@@ -59,7 +61,7 @@ const rig = (opts: { stallMs: number }) => {
     kind: "session",
     sessionId: SID,
     harness: "claude",
-    hcn: "0.6.0",
+    hcn: HCN_MIN_VERSION,
     escalateQuestions: true,
   });
   return {
@@ -87,6 +89,19 @@ const rig = (opts: { stallMs: number }) => {
 const settle = (ms = 40): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 describe("a harness that answers nothing", () => {
+  test("held preparation is not reported as a silent harness", async () => {
+    const r = rig({ stallMs: 1_000, prepareTurn: async () => ({ kind: "held" }) });
+    try {
+      r.source.receive({ kind: "input", seq: 1, id: "held", text: "Prepare first", mode: "queue" });
+      await settle();
+      r.advance(5_000);
+      await settle();
+      expect(r.stalls()).toEqual([]);
+    } finally {
+      r.done();
+    }
+  });
+
   test("the silence is written into the record", async () => {
     const r = rig({ stallMs: 1_000 });
     try {

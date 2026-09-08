@@ -48,3 +48,13 @@ export const writeConversationWidth = (
     // Nothing depends on it having been written.
   }
 };
+
+/** Stacked pane limits keep both panes reachable. */
+export const DEFAULT_DOCUMENT_SHARE = 2 / 3;
+export const DOCUMENT_SHARE_MIN = 0.15;
+export const DOCUMENT_SHARE_MAX = 0.7;
+
+export const clampDocumentShare = (want: number): number => {
+  if (!Number.isFinite(want)) return DEFAULT_DOCUMENT_SHARE;
+  return Math.min(DOCUMENT_SHARE_MAX, Math.max(DOCUMENT_SHARE_MIN, want));
+};

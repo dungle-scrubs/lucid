@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { ANNOTATION_FENCE } from "../src/protocol/annotations.js";
 import { DECODE_ISSUES, FRAME_KINDS, REFUSAL_ISSUES } from "../src/protocol/index.js";
 
 const skill = readFileSync(
@@ -26,6 +27,7 @@ describe("milestone-1 skill doc (M6.2)", () => {
     // token that is NOT a known non-issue term MUST be a real issue. A
     // fabricated `made-up-issue` in the doc fails here.
     const NON_ISSUE_TERMS = new Set([
+      ANNOTATION_FENCE,
       "headless-session",
       "headless-turn",
       "attach-ok",

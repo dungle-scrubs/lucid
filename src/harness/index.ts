@@ -21,6 +21,8 @@ export type { HarnessDeps, HcnProcess, SpawnHcn } from "./process.js";
 export { AsyncQueue } from "./queue.js";
 export {
   type CapabilityResult,
+  type ContextCount,
+  type ContextCountOptions,
   type Disposition,
   type HarnessFacts,
   type HarnessMode,

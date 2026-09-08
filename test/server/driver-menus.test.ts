@@ -240,6 +240,8 @@ describe("what a pick POSTs", () => {
       ),
     ).toEqual({
       v: 1,
+      profile: "headless-turn",
+      expectedRevision: 0,
       harness: "pi",
       model: "qwen3.6-35b-a3b-mlx",
       effort: "high",
@@ -251,20 +253,24 @@ describe("what a pick POSTs", () => {
     const s = line({ model: "zai/glm-5.2" });
     expect(chooseEffort("high", s, pref({ harness: "pi", model: "zai/glm-5.2" }))).toEqual({
       v: 1,
+      profile: "headless-turn",
+      expectedRevision: 0,
       harness: "pi",
       model: "zai/glm-5.2",
       effort: "high",
     });
   });
 
-  test("picking the default effort writes an absent field, not the name", () => {
-    // Absent IS the default; a file that says "medium" says nothing the
-    // absence does not. The model stands.
+  test("picking medium saves the explicit effort and retains the model", () => {
+    // A later user default must not change this saved selection.
     const s = line({ effort: "high" });
     expect(chooseEffort("medium", s, pref({ harness: "pi", effort: "high" }))).toEqual({
       v: 1,
+      profile: "headless-turn",
+      expectedRevision: 0,
       harness: "pi",
       model: "zai/glm-5.2",
+      effort: "medium",
     });
   });
 

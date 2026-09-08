@@ -25,6 +25,46 @@ cannot steal from a human process whose presence is still corroborated.
 The record secret is created with mode 0600; local filesystem access is the
 attach authorization boundary. An identity stamp is not authentication.
 
+## Conversation discovery
+
+The terminal and browser use the same record-root resolver: an explicit root,
+then LUCID_ROOT, then the XDG user configuration, then ~/.lucid2/records.
+A custom root replaces the default. A running server keeps its resolved root;
+configuration changes cannot retarget it.
+
+The saved metadata identity selects a record, including after its directory
+is renamed. Unknown and duplicate identities are refused by existing-record
+operations; send, watch, and browser writes cannot create a replacement.
+Explicit terminal creation publishes metadata and its known folder association
+with the record's atomic rename. Dot-prefixed staging directories stay hidden.
+
+Hub creation holds a root allocation lock while it checks all metadata for
+the client creation ID. The stored receipt contains the normalized original
+request, before defaults. Matching retries return the same identity even if
+defaults changed. Different requests sharing an ID are refused. Metadata,
+initial settings, log, and secret publish together through the staging rename;
+files and directories are synced before success. An unreadable receipt lookup
+refuses allocation because creating another identity could duplicate a prior
+request. This does not hide healthy records from listing.
+
+The hub rebuilds discovery from records at startup, on filesystem hints,
+every five seconds while the server runs, and when the browser loads,
+returns to focus, or refreshes. Pages use opaque identity cursors. Individual
+record errors remain visible beside valid records; an unreadable root is an
+error. Listing never writes metadata or starts a harness.
+
+Projects are resolved absolute paths: the nearest repository root, or the
+starting folder when there is no repository. Nested repositories and worktrees
+have their own roots. Metadata retains the exact working directory separately.
+Legacy records appear under No project. A missing working folder does not
+change the saved project. Display titles use saved titles of seven words or
+fewer, or a bounded fallback from the first prompt. An annotation-first
+record uses its typed prompt or its first note. Isolated naming replaces the
+fallback when generation succeeds. Locked location updates repair missing folders.
+
+Every writer checks metadata identity under the append lock before mutation.
+Driver-preference replacement and attachment-file creation use that same lock.
+
 ## One fold and one append transaction
 
 The log walker owns replay, effect collection, artifact headers, and the
@@ -109,3 +149,61 @@ must not leave the child or its output tasks running.
 These contracts consolidate the substrate plan and completed RFCs 02-05 and
 13. Their historical labels remain in some oracle names; see the
 [archive policy](README.md#historical-references).
+
+## Conversation titles
+
+Conversation titles are display metadata, separate from artifact titles. The
+shared validator accepts one to seven Unicode word-like segments and at most
+128 Unicode scalar values. A manual rename compares `titleRevision` under
+the append lock. It advances the revision and wins over a late generated title.
+
+Accepted input carries a durable naming marker. After input fsync, Lucid
+writes the original prompt's fallback, its revision, and bounded naming state
+to metadata. A worker can recover a missing metadata write from that marker.
+Discovery leaves untouched legacy metadata alone. Valid legacy titles remain;
+invalid ones display a fallback until an explicit valid rename.
+
+The CLI wakes a detached, short-lived naming worker after submission and
+settings changes, and when serving starts. One root lock limits each root to
+one coordinator; it runs at most two naming jobs. A separate job lock covers
+an isolated hcn turn. Naming does not take the conversation executor lease or
+write assistant events. Embedded servers opt in with a worker wake callback;
+the CLI owns its executable entry point. The coordinator scans on wake or
+repair. A root-level fingerprint cache skips unchanged legacy logs across
+worker restarts; recovery streams its marker preflight in bounded chunks.
+
+Unresolved settings consume no attempt. hcn must accept tool-free isolation
+before launch. Unsupported isolation records an unavailable reason and keeps
+the fallback. A later wake rechecks availability without consuming an attempt
+until isolation succeeds. Each attempt is consumed durably before launch. Only an invalid
+title allows one repair; interrupted and failed attempts are not repeated.
+Naming has its own temporary working folder, a bounded prompt excerpt, and
+no native session resume. Attachment contents are never a naming source.
+
+## Hub launch reconciliation
+
+The managed launch interface lets the loopback server request an
+independent per-conversation worker. HTTP acceptance persists one managed-input
+envelope before requesting a launch. The server never acquires executor
+ownership or drives a harness in a request handler. Startup reconciliation and
+a periodic pass of at most five seconds recover a lost launch request for the
+whole server lifetime, including when no browser is connected.
+
+The worker resolves saved identity, acquires the existing executor lease, and
+uses `openDrivenConversation`. A missing identity never creates a replacement.
+Folder and settings holds retain a fingerprint of their material prerequisites;
+the hold's own sequence number cannot make it eligible again. Correcting a
+prerequisite can release existing authorization, but does not create input or
+a new authorization. Context and external failures require their recorded
+recovery actions. Automatic launch does not release comparison suppression.
+
+Execution recovery is an authenticated append to the same record, keyed by
+original input ID, expected attempt, and stable action ID. An identical repeat
+is idempotent; a changed repeat or stale action is a conflict. Failed or uncertain
+external execution requires acknowledgement of possible workspace effects and
+fresh continuation with the original prompt and partial recorded context.
+`lucid2 serve` installs this interface by default. Embedded test servers can
+supply an inert launcher. The listener binds before discovery, naming, or
+managed reconciliation starts, so a failed bind starts no background work.
+Compiled internal commands route directly to their worker entry point.
+Background workers cannot start a server or recursively launch managed work.

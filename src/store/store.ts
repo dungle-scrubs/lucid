@@ -13,7 +13,17 @@
  * What it is NOT: transport, rendering, or the flock primitive.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   pathsForDir,
@@ -23,6 +33,14 @@ import {
   validConversationId,
 } from "./errors.js";
 
+import { associateFolder } from "./project-directory.js";
+
+export interface CreateRecordOptions {
+  readonly workingDirectory?: string;
+  readonly preference?: import("./driver-preference.js").DriverPreference;
+  readonly creation?: { readonly id: string; readonly request: unknown };
+}
+
 const SECRET_BYTES = 32;
 
 export { pathsForDir, type RecordPaths, recordPaths, StoreError, validConversationId };
@@ -30,6 +48,7 @@ export { pathsForDir, type RecordPaths, recordPaths, StoreError, validConversati
 export const createConversationRecord = (
   rootDir: string,
   conversationId: string,
+  options: CreateRecordOptions = {},
 ): { readonly secret: string; readonly paths: RecordPaths } => {
   if (!validConversationId(conversationId))
     throw new StoreError(
@@ -39,6 +58,8 @@ export const createConversationRecord = (
   const paths = recordPaths(rootDir, conversationId);
   if (existsSync(paths.dir))
     throw new StoreError("record-exists", `conversation record already exists: ${paths.dir}`);
+  const association =
+    options.workingDirectory === undefined ? {} : associateFolder(options.workingDirectory);
   mkdirSync(rootDir, { recursive: true });
   const staging = mkdtempSync(join(rootDir, ".create-"));
   const secret = Buffer.from(crypto.getRandomValues(new Uint8Array(SECRET_BYTES))).toString("hex");
@@ -46,8 +67,41 @@ export const createConversationRecord = (
     const tmp = pathsForDir(staging);
     writeFileSync(tmp.secretPath, secret, { mode: 0o600 });
     writeFileSync(tmp.logPath, "", { mode: 0o600 });
-    writeFileSync(tmp.metaPath, JSON.stringify({ v: 1, conversationId }), { mode: 0o600 });
+    if (options.preference)
+      writeFileSync(tmp.driverPath, JSON.stringify(options.preference), { mode: 0o600 });
+    writeFileSync(
+      tmp.metaPath,
+      JSON.stringify({
+        v: 1,
+        conversationId,
+        ...association,
+        ...(options.creation ? { creation: options.creation } : {}),
+      }),
+      {
+        mode: 0o600,
+      },
+    );
+    for (const path of [
+      tmp.secretPath,
+      tmp.logPath,
+      tmp.metaPath,
+      ...(options.preference ? [tmp.driverPath] : []),
+      staging,
+    ]) {
+      const fd = openSync(path, "r");
+      try {
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+    }
     renameSync(staging, paths.dir);
+    const rootFd = openSync(rootDir, "r");
+    try {
+      fsyncSync(rootFd);
+    } finally {
+      closeSync(rootFd);
+    }
   } catch (cause) {
     rmSync(staging, { recursive: true, force: true });
     throw new StoreError("record-publish-failed", `could not publish record at ${paths.dir}`, {

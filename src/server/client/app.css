@@ -1,4 +1,14 @@
 @import "tailwindcss";
+@import "./content-comparison.css";
+
+.input-recovery-text {
+  max-block-size: 8rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  font-size: 0.875rem;
+}
 
 /* Source Serif 4, the chrome's serif, self-hosted: the page is served from
    this origin and never from a CDN, and a reading surface has to hold its
@@ -159,7 +169,7 @@ body {
 }
 
 #root {
-  height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -188,6 +198,7 @@ body {
 
 /* The document is the thing being worked on, so it gets the room. */
 .pane.document {
+  container-type: inline-size;
   flex: 1;
   /* So a comparison or a confirm covers this pane and only this pane. */
   position: relative;
@@ -262,21 +273,59 @@ body {
 @media (max-width: 900px) {
   .panes {
     flex-direction: column;
+    gap: 0;
   }
-  /* Stacked, so a width means nothing and the grip has no axis to work on.
-     A dragged width arrives as a custom property rather than a flex value,
-     so this rule wins on order and nothing needs !important to beat it. */
+  .pane.document {
+    flex: 0 0 var(--document-height, 66.667%);
+    padding-block-end: 12px;
+  }
   .pane.conversation {
-    flex: 1 1 45%;
-    border-top: 1px solid var(--edge-2);
+    flex: 1;
+    border: 0;
+    padding-block-start: 10px;
   }
   .pane-grip {
-    display: none;
+    display: block;
+    flex: 0 0 28px;
+    block-size: 28px;
+    margin: 0 -14px;
+    border-block: 1px solid var(--edge-2);
+    background: var(--ground);
+    cursor: row-resize;
   }
-  /* The ground bleeds to the window's side edges only; below this pane is
-     the conversation, and the pattern must not run under it. */
+  .pane-grip::before,
+  .pane-grip:hover::before,
+  .pane-grip.dragging::before {
+    inset: 50% auto auto 50%;
+    inline-size: 32px;
+    block-size: 12px;
+    margin: 0;
+    transform: translate(-50%, -50%);
+    border-radius: 0;
+    background: radial-gradient(circle, currentColor 1.5px, transparent 1.75px) 0 0 / 8px 6px;
+    color: color-mix(in srgb, var(--color-text) 45%, transparent);
+  }
+  .pane-grip::after {
+    inset: -4px 0;
+  }
+  .pane-grip:hover,
+  .pane-grip.dragging {
+    background: color-mix(in srgb, var(--ground) 96%, var(--color-text));
+  }
+  .pane-grip:hover::before,
+  .pane-grip.dragging::before {
+    color: var(--color-text);
+  }
+  .pane-grip.dragging::after {
+    inset: 0;
+    cursor: row-resize;
+  }
+  .pane-grip:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -3px;
+  }
   .doc-ground {
-    margin: 0 -14px 0;
+    margin: 0 -14px;
   }
 }
 
@@ -302,19 +351,22 @@ body {
     color 120ms ease;
 }
 
-/* lucid: a 10px accent dot and the wordmark. */
+/* A cyan period sits on the wordmark baseline. */
 .doc-mark {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: baseline;
+  gap: 1px;
   flex: none;
 }
 
 .doc-mark .dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--color-accent);
+  flex: none;
+  color: var(--color-accent);
+  font: 600 22px / 1 var(--font-heading);
+}
+
+.doc-mark .dot::before {
+  content: ".";
 }
 
 .doc-mark .word {
@@ -343,7 +395,7 @@ body {
   border: 0;
   background: transparent;
   color: inherit;
-  font: 600 16px / 1 var(--font-heading);
+  font: 600 14px / 1 var(--font-heading);
   padding: 3px 9px;
   margin-left: -3px;
   border-radius: 8px;
@@ -381,7 +433,7 @@ body {
 /* Sized to the name, not to the bar: a field spanning the header would say
    this is a form. */
 .doc-rename-input {
-  font: 600 16px / 1.2 var(--font-heading);
+  font: 600 14px / 1.2 var(--font-heading);
   color: var(--color-text);
   background: var(--paper);
   border: 1px solid var(--edge-2);
@@ -407,11 +459,12 @@ body {
   display: inline-flex;
   align-items: center;
   flex: none;
-  height: 28px;
-  padding: 0 10px;
-  border: 1px solid var(--edge-2);
-  border-radius: 20px;
-  font: 600 12px / 1 var(--font-heading);
+  height: 22px;
+  padding: 0 7px;
+  border: 0;
+  background: color-mix(in srgb, var(--color-text) 6%, transparent);
+  border-radius: 4px;
+  font: 600 10.5px / 1 var(--font-heading);
   color: var(--color-text);
 }
 
@@ -421,23 +474,24 @@ body {
   align-items: center;
   gap: 7px;
   flex: none;
-  height: 28px;
-  padding: 0 4px 0 10px;
-  border: 1px solid var(--edge-2);
-  border-radius: 20px;
+  height: 22px;
+  padding: 0 3px 0 7px;
+  border: 0;
+  background: color-mix(in srgb, var(--color-text) 6%, transparent);
+  border-radius: 4px;
 }
 
 .doc-version-pill:hover {
-  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-text) 10%, transparent);
 }
 
 .doc-version-pill .v {
-  font: 600 12px / 1 var(--font-heading);
+  font: 600 10.5px / 1 var(--font-heading);
   color: var(--color-text);
 }
 
 .doc-version-pill .of {
-  font: 400 12px / 1 var(--font-body);
+  font: 400 10.5px / 1 var(--font-body);
   color: color-mix(in srgb, var(--color-text) 55%, transparent);
   white-space: nowrap;
 }
@@ -556,14 +610,14 @@ body {
   display: flex;
   flex: none;
   padding: 2px;
-  border-radius: 20px;
+  border-radius: 6px;
   background: color-mix(in srgb, var(--color-text) 7%, transparent);
 }
 
 .doc-head button.m {
-  padding: 5px 14px;
+  padding: 5px 11px;
   border: 0;
-  border-radius: 20px;
+  border-radius: 4px;
   background: transparent;
   color: color-mix(in srgb, var(--color-text) 62%, transparent);
   font: 400 12px / 1 var(--font-body);
@@ -647,7 +701,7 @@ body {
 }
 
 .doc-head.dead .doc-mark .dot {
-  background: var(--color-accent-2);
+  color: var(--color-accent-2);
 }
 
 .doc-head.dead .doc-head-sep {
@@ -731,6 +785,9 @@ body {
    frame's own viewport is also a position on this page. */
 .doc-stage {
   position: relative;
+  align-self: center;
+  inline-size: 100%;
+  max-inline-size: 100%;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -785,6 +842,9 @@ body {
 }
 
 .doc-frame {
+  /* Let the artifact observe the system preference independently of the
+     surrounding app's light-only scheme. */
+  color-scheme: light dark;
   flex: 1;
   min-height: 0;
   width: 100%;
@@ -793,6 +853,38 @@ body {
      colour set here shows through wherever the document does not reach,
      which on macOS is every rubber-band overscroll. */
   background: transparent;
+}
+
+.width-panel {
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  inline-size: min(290px, calc(100vw - 24px));
+  padding: 16px;
+  border: 1px solid var(--edge-2);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--color-text);
+  font: 13px / 1.5 var(--font-body);
+}
+.width-panel label {
+  font-weight: 600;
+}
+.width-panel output {
+  font-variant-numeric: tabular-nums;
+}
+.width-panel p {
+  margin: 0;
+}
+:where(.width-panel) input {
+  inline-size: 100%;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+.width-panel :focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
 }
 
 /* --- 6a: the travel offer ----------------------------------------------
@@ -951,6 +1043,7 @@ body {
 }
 
 .empty-panel .v.choose {
+  position: relative;
   height: 30px;
   padding: 0 13px;
   border: 1px solid var(--edge-2);
@@ -961,6 +1054,20 @@ body {
   cursor: pointer;
   display: inline-flex;
   align-items: center;
+}
+
+:where(.empty-panel .v.choose) input {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.empty-panel .v.choose:focus-within {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
 .empty-panel .v.choose:hover {
@@ -1381,92 +1488,7 @@ body {
   color: color-mix(in srgb, var(--color-text) 62%, transparent);
 }
 
-/* --- the conversation column ---------------------------------------------
- *
- * Its own 34px row - conversation name, driver identity, status pill -
- * aligned with the document header so both top out together. The turn
- * list scrolls; the composer is pinned to the bottom. */
-
-.conv-head {
-  flex: 0 0 34px;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 0 2px;
-  min-width: 0;
-}
-
-.conv-name {
-  flex: none;
-  max-width: 55%;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font: 400 14px / 1 var(--font-body);
-  color: color-mix(in srgb, var(--color-text) 70%, transparent);
-}
-
-/* What is driving, when the record says. Identity, not status. */
-.conv-driver {
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font: 400 12px / 1 var(--font-body);
-  color: color-mix(in srgb, var(--color-text) 45%, transparent);
-}
-
-/* The status pill. Working is the accent family - it is the agent doing
-   something. Idle is neutral ink: waiting, not refusing. */
-.conv-pill {
-  margin-left: auto;
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  height: 24px;
-  padding: 0 11px;
-  border-radius: 20px;
-  background: color-mix(in srgb, var(--color-text) 7%, transparent);
-  white-space: nowrap;
-}
-
-.conv-pill .dot {
-  width: 6px;
-  height: 6px;
-  flex: none;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--color-text) 35%, transparent);
-}
-
-/* Idle is neutral ink: waiting, not refusing. */
-.conv-pill .label {
-  font: 400 12px / 1 var(--font-body);
-  color: color-mix(in srgb, var(--color-text) 55%, transparent);
-}
-
-.conv-pill.busy {
-  background: var(--color-accent-100);
-}
-
-.conv-pill.busy .dot {
-  background: var(--color-accent);
-}
-
-.conv-pill.busy .label {
-  color: var(--color-accent-800);
-}
-
-/* A stall is the one warning, and it is not a refusal: neutral ink, the
-   dot stops moving, and the label says stopped and how long ago. */
-.conv-pill.stopped .dot {
-  background: color-mix(in srgb, var(--color-text) 40%, transparent);
-}
-
-.conv-pill.stopped .label {
-  color: color-mix(in srgb, var(--color-text) 60%, transparent);
-}
+/* The conversation scrolls above its composer. */
 
 .thread-root {
   position: relative;
@@ -1611,7 +1633,7 @@ body {
 
 /* The dock owns the divider above itself; its first child must not draw a
    second one. */
-.dock > :first-child {
+.dock > :first-child:not(.composer) {
   border-top: 0;
 }
 
@@ -1892,6 +1914,7 @@ body {
    happening lives in the conversation's status pill (3c); a stall is the
    card inside the thread. */
 .dock {
+  padding-block-end: max(12px, env(safe-area-inset-bottom));
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
@@ -2241,120 +2264,109 @@ body {
 
 .composer {
   display: flex;
+  flex-direction: column;
   gap: 8px;
-  align-items: flex-end;
-  padding: 10px 14px 14px;
-  /* The dock is full-bleed and square; a rounded composer inside it
-     would draw its own box against the dock's paper. */
-  border-radius: 0;
+  margin: 10px 14px 0;
+  padding: 12px 10px 4px;
+  border: 1px solid var(--edge-2);
+  border-radius: 16px;
+  background: var(--paper);
 }
 
-/* 4a state 2: a file held over the composer. The whole composer takes the
-   dashed accent edge at 6px, and the field fills accent-100 and says what
-   will happen. */
+.composer:focus-within,
+.composer.inviting {
+  border-color: var(--color-accent);
+}
+
 .composer.dragover {
   outline: 1.5px dashed var(--color-accent);
-  outline-offset: 6px;
+  outline-offset: 3px;
+  background: var(--color-accent-100);
 }
 
 .composer textarea {
-  flex: 1;
+  inline-size: 100%;
   resize: none;
-  min-height: 32px;
-  max-height: 180px;
-  padding: 8px 10px;
-  border: 1px solid var(--edge-2);
-  border-radius: 8px;
-  background: var(--paper);
+  min-block-size: 56px;
+  max-block-size: 180px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  background: transparent;
   color: var(--color-text);
-  font: inherit;
-  /* The transcript's own size (13.5px/1.55): a composer that sets larger
-     text than the conversation it feeds reads as a different document. */
-  font-size: 13.5px;
-  line-height: 1.55;
+  font: 400 13.5px / 1.55 var(--font-body);
 }
 
 .composer textarea::placeholder {
-  color: color-mix(in srgb, var(--color-text) 42%, transparent);
+  color: var(--color-text);
+  opacity: 0.42;
 }
 
-.composer textarea:focus {
-  border-color: var(--color-accent);
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-inline-size: 0;
 }
 
-.composer textarea.drop {
-  background: var(--color-accent-100);
-  border-color: var(--color-accent);
-}
-
-.composer textarea.drop::placeholder {
-  color: var(--color-accent-800);
-}
-
-/* 3a: no document, so the conversation is the way in - the field is
-   dressed as the thing to do, accent border with the 2px accent-200 ring. */
-.composer.inviting textarea {
-  border-color: var(--color-accent);
-  outline: 2px solid var(--color-accent-200);
-}
-
-.composer button {
-  flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
-  padding: 0;
+.composer-attach {
   display: grid;
   place-items: center;
-  border: 1px solid var(--color-accent);
-  border-radius: 8px;
-  background: var(--color-accent);
-  color: #fff;
+  flex: 0 0 28px;
+  inline-size: 28px;
+  block-size: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: color-mix(in srgb, var(--color-text) 70%, transparent);
+  font: 400 24px / 1 var(--font-body);
   cursor: pointer;
 }
 
-/* Ghost at rest: nothing to send yet, so the button says so - edge, not
-   accent. It goes solid the moment there is something to send, and in the
-   empty state it stays solid, because the way in is the point. */
-.composer button:disabled {
-  border-color: var(--edge-2);
-  background: transparent;
-  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+.composer-attach:hover {
+  background: var(--color-accent-100);
+  color: var(--color-accent-800);
+}
+
+.composer-attach:disabled {
+  opacity: 0.5;
   cursor: default;
 }
 
-.composer.inviting button:disabled {
-  border-color: var(--color-accent);
-  background: var(--color-accent);
-  color: #fff;
-}
-
-/* --- the driver line (7a-7d) ---------------------------------------------
- *
- * One line of 11.5px report ink docked under the prompt, flush with the
- * composer's left edge (Kevin, 2026-08-29: padding-left 0 - the 46px
- * field-aligned inset read as a random indent). Segments harness, model,
- * effort, mode: the settable dimensions first, the mode that governs
- * them last. Separated by a middot at 50%. The line wraps to a second row
- * with a 5px row gap rather than truncating; each middot is bound into
- * one flex item with the label after it, so a wrap can only break before
- * a separator. Quieter than the composer placeholder above it: no
- * borders, no carets, and accent ink this size only on hover or open
- * (RFC-12 made the menus real - the substrate acts on a choice at the
- * next turn boundary). */
-
+/* Compact selectors share the bottom row with the attachment control.
+   Long labels wrap within the row instead of clipping or hiding a choice. */
 .driver-line {
   position: relative;
   display: flex;
+  flex: 1;
   flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
-  column-gap: 0;
-  row-gap: 5px;
-  /* The composer above carries 14px of bottom padding; -5px of it comes
-     back, so the air between field and line is the 9px the handoff draws. */
-  margin: -5px 14px 0;
-  padding: 0 0 14px 0;
-  font: 400 11.5px / 1 var(--font-body);
-  color: color-mix(in srgb, var(--color-text) 52%, transparent);
+  gap: 4px 0;
+  min-inline-size: 0;
+  font: 400 10.5px / 1.35 var(--font-body);
+  color: color-mix(in srgb, var(--color-text) 64%, transparent);
+}
+
+.composer-mode {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  margin: 7px 16px 12px;
+  font: 400 10.5px / 1.45 var(--font-body);
+  color: color-mix(in srgb, var(--color-text) 48%, transparent);
+}
+
+.composer-mode-name {
+  flex: none;
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
+}
+
+.composer-mode > span:last-child:not(:first-child) {
+  flex: 1 1 180px;
 }
 
 /* One label. Never shortened to force a single row. The 5px side padding
@@ -2363,103 +2375,13 @@ body {
 .driver-seg {
   padding: 4px 5px;
   border-radius: 6px;
-  white-space: nowrap;
-}
-
-/* The mode segment anchors its hover gloss. */
-.driver-seg.mode {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-/* A middot and the label after it: one unbreakable flex item, so a wrap
-   can only break before a separator, never strand one at a row's end. */
-.driver-pair {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  white-space: nowrap;
-}
-
-.driver-sep {
-  opacity: 0.5;
-}
-
-/* headless-turn's permanent second line (7c): no session recall has no
-   visual, so it gets words, in neutral ink, present always - a property
-   of the harness, not a fault, and it cannot be dismissed. width: 100%
-   puts it on a row of its own under the segments. */
-.driver-note {
-  width: 100%;
-  padding: 5px 7px 0;
-  font: 400 11px / 1.4 var(--font-body);
-  color: color-mix(in srgb, var(--color-text) 48%, transparent);
-}
-
-/* The mode's hover gloss (7d): ink fill, the same ink the unsaved-changes
-   bar uses, so an overlay never reads as another surface. 232px, radius
-   8px, 9px/11px padding, no shadow, no tail, opening upward with 6px of
-   air above the row. ~400ms delay in and none out, so sweeping the row
-   on the way to the field does not flash a gloss; it is hover-only
-   because touch has no hover - there the gloss belongs to the menu, which
-   this pass does not draw. */
-.driver-tip {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 46px;
-  width: 232px;
-  /* The segments never wrap; their gloss does, at its own width. */
-  white-space: normal;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 9px 11px;
-  border-radius: 8px;
-  background: var(--color-text);
-  color: var(--color-bg);
-  font: 400 11.5px / 1.45 var(--font-body);
-  visibility: hidden;
-  opacity: 0;
-  pointer-events: none;
-  z-index: 2;
-  transition:
-    opacity 80ms linear 0ms,
-    visibility 0s linear 0ms;
-}
-
-.driver-tip-title {
-  font: 600 11.5px / 1 var(--font-heading);
-}
-
-.driver-tip-body {
-  color: color-mix(in srgb, var(--color-bg) 78%, transparent);
-}
-
-@media (hover: hover) {
-  .driver-seg.mode:hover .driver-tip {
-    visibility: visible;
-    opacity: 1;
-    transition:
-      opacity 80ms linear 400ms,
-      visibility 0s linear 400ms;
-  }
-}
-
-/* interactive (7c): the human's session chose the harness and the model,
-   so both are report at 55% and there is no clip button - the row aligns
-   to the field's own left edge, and the separators dim with the ink
-   around them. */
-.driver-line.interactive {
-  padding-left: 0;
+  max-inline-size: 100%;
+  overflow-wrap: anywhere;
+  text-align: start;
 }
 
 .driver-line.interactive .driver-seg.report {
   opacity: 0.55;
-}
-
-.driver-line.interactive .driver-sep {
-  opacity: 0.35;
 }
 
 /* --- the driver menus (7a, RFC-12) ----------------------------------------
@@ -2469,8 +2391,7 @@ body {
  * with white text and flips the caret; the menu opens upward from the
  * line - the row is bottom-docked - on paper with an edge, radius 10px,
  * 5px padding and no shadow, elevation being paper-on-pattern and never
- * shade. The composer dims to 40% while a menu is open, and stays in
- * place. Harness and model menus left-align to their segment; effort
+ * shade. Opening a menu leaves the composer color unchanged. Harness and model menus left-align to their segment; effort
  * right-aligns, being the last segment in a 352px column. */
 
 .driver-seg.pick {
@@ -2487,12 +2408,17 @@ body {
   appearance: none;
 }
 
+.driver-seg.pick:disabled {
+  color: var(--color-text);
+  opacity: 0.42;
+  cursor: default;
+  background: transparent;
+}
+
 .driver-caret {
-  /* The space is reserved at rest - only the glyph is hidden - so the
-     caret's arrival on hover or open moves nothing: the separators stay
-     put and no neighbor reflows. */
+  /* Keep the selector affordance visible without changing its width. */
   display: inline-flex;
-  visibility: hidden;
+  visibility: visible;
   flex: none;
   color: currentColor;
 }
@@ -2561,20 +2487,6 @@ body {
   appearance: none;
 }
 
-/* The 12px gutter: empty on every row but the selected one, so labels
-   align whichever row carries the check. */
-.driver-gutter {
-  width: 12px;
-  flex: none;
-}
-
-.driver-check {
-  width: 12px;
-  flex: none;
-  display: inline-flex;
-  color: var(--color-accent);
-}
-
 .driver-row-text {
   display: flex;
   flex-direction: column;
@@ -2582,14 +2494,9 @@ body {
   min-width: 0;
 }
 
-/* A glossed row is two lines, so its check tops-aligns with the label
-   rather than centering against the block. */
+/* Effort glosses align beneath the label. */
 .driver-row.glossed {
   align-items: flex-start;
-}
-
-.driver-row.glossed .driver-check {
-  margin-top: 1px;
 }
 
 .driver-row:not(.selected):hover {
@@ -2632,7 +2539,8 @@ body {
 }
 
 .driver-free input::placeholder {
-  color: color-mix(in srgb, var(--color-text) 42%, transparent);
+  color: var(--color-text);
+  opacity: 0.42;
 }
 
 .driver-free.selected {
@@ -2662,11 +2570,6 @@ body {
   color: var(--color-accent-2);
 }
 
-/* While a menu is open the composer dims to 40% and stays in place (7a). */
-.composer.driver-open {
-  opacity: 0.4;
-}
-
 .driver-line.interactive .driver-tip {
   left: 0;
 }
@@ -2686,4 +2589,23 @@ body {
   background: var(--color-accent-2-100);
   color: var(--color-accent-2-800);
   font-size: 12.5px;
+}
+
+/* Let document controls wrap when their own column is narrow. */
+@container (max-width: 600px) {
+  .doc-head {
+    flex-basis: auto;
+    flex-wrap: wrap;
+    row-gap: 6px;
+    padding-block: 4px;
+  }
+  .doc-rename {
+    max-inline-size: calc(100cqi - 110px);
+  }
+}
+
+@container (max-width: 420px) {
+  .doc-version-pill .of {
+    display: none;
+  }
 }

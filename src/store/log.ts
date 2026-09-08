@@ -1,3 +1,8 @@
+import { createReadStream } from "node:fs";
+import { comparisonMetadata, validateComparisonSource } from "../protocol/comparison-note.js";
+import { refuseInputAdmission } from "../protocol/reducer.js";
+import { initializeNaming } from "./conversation-naming.js";
+import { pathsForDir } from "./errors.js";
 /**
  * The conversation log: the deep module that owns the durable file.
  *
@@ -28,6 +33,8 @@ import {
   truncateSync,
   writeSync,
 } from "node:fs";
+import { reduceContextCoverage } from "../protocol/context-coverage.js";
+import { reduceExecution } from "../protocol/execution.js";
 import { ARTIFACT_BYTES_MAX } from "../protocol/frames.js";
 import type { ChannelState, InputMode, ProtocolIssue } from "../protocol/index.js";
 import {
@@ -40,9 +47,12 @@ import {
   type ReduceResult,
   reduce,
 } from "../protocol/index.js";
+import { enqueueManagedInput } from "../protocol/reducer.js";
 import { putBlob } from "./blobs.js";
 import { type RecordPaths, StoreError } from "./errors.js";
-import { Flock, type LockEvent } from "./flock.js";
+import type { LockEvent } from "./flock.js";
+
+import { withRecordLock } from "./record-identity.js";
 
 // ---------------------------------------------------------------------------
 // Durable entry types (the log's own vocabulary)
@@ -54,14 +64,40 @@ export type LogEntry =
   | {
       readonly v: 1;
       readonly at: number;
+      readonly src: "execution";
+      readonly payloadVersion: 1;
+      readonly fact: import("../protocol/execution.js").ExecutionFact;
+    }
+  | {
+      readonly v: 1;
+      readonly at: number;
+      readonly src: "context";
+      readonly payloadVersion: 1;
+      readonly fact: import("../protocol/context-coverage.js").ContextFact;
+    }
+  | {
+      readonly v: 1;
+      readonly at: number;
+      readonly src: "managed-input";
+      readonly namingEligible: true;
+      readonly payloadVersion: 1;
+      readonly input: { readonly id: string; readonly text: string; readonly mode: "queue" };
+      readonly intent: { readonly kind: "requested"; readonly attempt: 0 };
+    }
+  | {
+      readonly v: 1;
+      readonly at: number;
       readonly src: "frame";
+      readonly ownersDeparted?: true;
       readonly frame: Record<string, unknown>;
       readonly presence?: boolean;
+      readonly owner?: import("../protocol/process-owner.js").ProcessOwner;
     }
   | {
       readonly v: 1;
       readonly at: number;
       readonly src: "input";
+      readonly namingEligible?: true;
       readonly input: {
         readonly id: string;
         readonly text: string;
@@ -139,8 +175,11 @@ export type LogEntry =
     };
 
 const ENTRY_SOURCES = [
+  "execution",
+  "context",
   "frame",
   "input",
+  "managed-input",
   "credit",
   "artifact",
   "artifact-meta",
@@ -387,6 +426,7 @@ const coerceCursorEntry = (raw: Envelope, offset: number): CursorEntry => {
 // ---------------------------------------------------------------------------
 
 export interface TranscriptEvent {
+  readonly harness?: import("../protocol/frames.js").HarnessName;
   readonly seq: number;
   readonly epoch: number;
   readonly turnId: string;
@@ -400,6 +440,12 @@ export interface TranscriptInput {
   readonly mode: InputMode;
   readonly status: "outstanding" | "queued" | "applied" | "rejected";
 }
+
+/** Repeat-safe acceptance is separate from source-protocol duplicate refusal. */
+export type InputSubmission =
+  | { readonly kind: "replay"; readonly inputId: string }
+  | { readonly kind: "conflict" }
+  | { readonly kind: "transition"; readonly result: ReduceResult };
 
 export interface Transcript {
   readonly events: readonly TranscriptEvent[];
@@ -511,22 +557,45 @@ const applyArtifactMeta = (raw: unknown, titles: Map<string, string>): void => {
 
 const applyEntry = (
   state: ChannelState,
-  entry: Extract<LogEntry, { src: "frame" | "input" | "credit" }>,
+  entry: Extract<
+    LogEntry,
+    { src: "frame" | "input" | "managed-input" | "execution" | "context" | "credit" }
+  >,
   secret: string,
 ): { result: ReduceResult; frame: import("../protocol/index.js").Frame | null } => {
   switch (entry.src) {
+    case "execution":
+      if (entry.payloadVersion !== 1)
+        throw new StoreError("corrupt-log", "Unsupported execution payload");
+      return { result: reduceExecution(state, entry.fact, entry.at, true), frame: null };
+    case "context":
+      if (entry.payloadVersion !== 1)
+        throw new StoreError("corrupt-log", "Unsupported context payload");
+      return { result: reduceContextCoverage(state, entry.fact, entry.at, true), frame: null };
     case "frame": {
       const raw = entry.frame.kind === "attach" ? { ...entry.frame, secret } : entry.frame;
       const decoded = decodeFrame(raw);
       if (decoded.verdict !== "ok")
         throw new StoreError("corrupt-log", `logged frame no longer decodes: ${decoded.issue}`);
       return {
-        result: reduce(state, decoded.frame, entry.at, ctxOf(entry.presence)),
+        result: reduce(state, decoded.frame, entry.at, {
+          ...ctxOf(entry.presence),
+          ...(entry.ownersDeparted === true ? { ownersDeparted: true } : {}),
+          ...(entry.owner === undefined ? {} : { owner: entry.owner }),
+        }),
         frame: decoded.frame,
       };
     }
     case "input":
       return { result: enqueueInput(state, entry.input, entry.at), frame: null };
+    case "managed-input":
+      if (
+        entry.payloadVersion !== 1 ||
+        entry.intent?.kind !== "requested" ||
+        entry.intent.attempt !== 0
+      )
+        throw new StoreError("corrupt-log", "Unsupported managed input payload");
+      return { result: enqueueManagedInput(state, entry.input, entry.at), frame: null };
     case "credit":
       return { result: grantCredit(state, entry.tokens, entry.at), frame: null };
   }
@@ -545,10 +614,13 @@ const collectTranscript = (
         seq: result.record.seq,
         epoch: result.record.epoch,
         turnId: frameOrNull.turnId,
+        ...(result.state.attachment?.harness === undefined
+          ? {}
+          : { harness: result.state.attachment.harness }),
         event: frameOrNull.event,
       }),
     );
-  if (entry.src === "input" && result.record.seq !== undefined)
+  if ((entry.src === "input" || entry.src === "managed-input") && result.record.seq !== undefined)
     acc.inputs.push({
       seq: result.record.seq,
       id: entry.input.id,
@@ -588,6 +660,7 @@ const walk = (
   goodBytes: number;
   entries: number;
   transcript: TranscriptAcc;
+  namingEligible: boolean;
   refusedInputs: readonly FoldRefusal[];
   artifactIndex: Map<string, number>;
   /** Per artifact version, the seq of the last frame before it. Its place in
@@ -603,6 +676,7 @@ const walk = (
   const collected: CollectedEntry[] = [];
   let entries = 0;
   const transcript: TranscriptAcc = { events: [], inputs: [], aborted: [] };
+  let namingEligible = false;
   const refusedInputs: FoldRefusal[] = [];
   const artifactIndex = new Map<string, number>();
   /** Where each artifact version sits in the conversation: the seq of the
@@ -687,7 +761,7 @@ const walk = (
             // not (RFC-05 B4), so it is carried - state advances to the
             // refusal's (unchanged) state, its bytes count as read - and
             // the refusal is reported, not thrown.
-            if (parsed.src !== "input")
+            if (parsed.src !== "input" && parsed.src !== "managed-input")
               throw new StoreError(
                 "fold-refused",
                 `log entry at byte ${offset} refused on fold (${result.issue})`,
@@ -695,6 +769,12 @@ const walk = (
             refusedInputs.push({ offset, issue: result.issue });
             state = result.state;
           } else {
+            if (
+              (parsed.src === "input" || parsed.src === "managed-input") &&
+              "namingEligible" in parsed &&
+              parsed.namingEligible === true
+            )
+              namingEligible = true;
             collectTranscript(transcript, parsed as LogEntry, frame, result);
             state = result.state;
             entries += 1;
@@ -721,6 +801,7 @@ const walk = (
     entries,
     transcript,
     refusedInputs,
+    namingEligible,
     artifactIndex,
     artifactVersions,
     artifactHeads,
@@ -836,13 +917,7 @@ const withAppendLock = <T>(
   opts: { onLockEvent?: (e: LockEvent) => void },
   fn: () => T,
 ): T => {
-  const flock = new Flock(paths.lockPath, conversationId);
-  const lock = flock.acquire({ onEvent: opts.onLockEvent });
-  try {
-    return fn();
-  } finally {
-    lock.release();
-  }
+  return withRecordLock(paths, conversationId, fn, opts.onLockEvent);
 };
 
 /** Read the log under the append lock: fold every good byte and repair a
@@ -899,17 +974,30 @@ export interface LogDeps {
   readonly onAppendEvent?: (e: AppendEvent) => void;
 }
 
+export interface LockedRecordSnapshot {
+  readonly artifacts: readonly ArtifactVersion[];
+  readonly state: ChannelState;
+  readonly transcript: Transcript;
+}
+
 export interface ConversationLog {
+  /** Catch up and read one coherent record under the append lock. */
+  inspect<TValue>(read: (snapshot: LockedRecordSnapshot) => TValue): TValue;
   readonly paths: RecordPaths;
   readonly conversationId: string;
   state(): ChannelState;
   transcript(): Transcript;
+  acceptedInput(id: string): TranscriptInput | undefined;
   goodBytes(): number;
   /** Seek index for (artifactId, version) -> offset, built during the fold
    * that already happens when the record opens. Reading a version is a seek,
    * not a fold (RFC-06 storage). */
   artifactIndex(): ReadonlyMap<string, number>;
   artifactHeads(): ReadonlyMap<string, number>;
+  comparisonSnapshot(artifactId: string): {
+    readonly head: number | null;
+    readonly artifact: ArtifactVersion | null;
+  };
   artifactVersions(): ArtifactVersions;
   /** artifactId -> its title, for every artifact one has been written for.
    * An id absent from this map has no title and displays as its id. */
@@ -985,6 +1073,8 @@ export interface ConversationLog {
       frame: import("../protocol/index.js").Frame | null;
     },
   ): ReduceResult;
+  /** Resolve accepted queue-input identity under the same lock as admission. */
+  submitInput(input: { readonly id: string; readonly text: string }, at: number): InputSubmission;
   /** Fold the log under the append lock and collect the effects produced
    * by entries at or after `fromOffset`, in log order. Each effect is
    * paired with the byte offset of the entry that produced it (RFC-04 R4:
@@ -1113,9 +1203,67 @@ export const createLog = (
     });
   const lineOf = (entry: LogEntry): Buffer => Buffer.from(`${JSON.stringify(entry)}\n`);
 
+  const transcript = (): Transcript => ({
+    events: [...acc.events],
+    inputs: [...acc.inputs],
+    aborted: [...acc.aborted],
+  });
+  const lockedSnapshot = (raw: Buffer): LockedRecordSnapshot => {
+    const artifacts: ArtifactVersion[] = [];
+    for (const [id, version] of curArtifactHeads) {
+      const artifact = readArtifactVersion(raw, id, version, curArtifactIndex);
+      if (artifact === null || artifact.artifactId !== id || artifact.version !== version)
+        throw new StoreError(
+          "corrupt-log",
+          "The current artifact could not be read during context capture",
+        );
+      artifacts.push(artifact);
+    }
+    return { artifacts, state: curState, transcript: transcript() };
+  };
+  const inspect = <TValue>(read: (snapshot: LockedRecordSnapshot) => TValue): TValue =>
+    transaction((_folded, raw) => ({ line: null, result: read(lockedSnapshot(raw)) }));
+  const comparisonAdmission = (
+    text: string,
+    mode: InputMode,
+    raw: Buffer,
+  ): "E-COMP-02" | "E-COMP-03" | null => {
+    const metadata = comparisonMetadata(text);
+    if (metadata.kind === "none") return null;
+    if (metadata.kind === "invalid" || mode !== "queue") return "E-COMP-03";
+    const batch = metadata.batch;
+    const read = (version: number): ArtifactVersion | null => {
+      const offset = curArtifactIndex.get(artifactKey(batch.artifactId, version));
+      return offset === undefined ? null : readArtifactAtOffset(raw, offset);
+    };
+    if (
+      !read(batch.comparison.earlierVersion) ||
+      !validateComparisonSource(batch, read(batch.version))
+    )
+      return "E-COMP-03";
+    const reviewed = read(batch.comparison.reviewedVersion);
+    if (
+      curArtifactHeads.get(batch.artifactId) !== batch.comparison.reviewedVersion ||
+      reviewed?.hash !== batch.comparison.reviewedHash
+    )
+      return "E-COMP-02";
+    return null;
+  };
+
   const append: ConversationLog["append"] = (produce) =>
-    transaction(() => {
+    transaction((_folded, raw) => {
       const { entry, result, frame } = produce(curState);
+      if (
+        (entry?.src === "input" || entry?.src === "managed-input") &&
+        result.verdict === "accepted"
+      ) {
+        const issue = comparisonAdmission(entry.input.text, entry.input.mode, raw);
+        if (issue)
+          return {
+            line: null,
+            result: refuseInputAdmission(curState, entry.input, issue, entry.at),
+          };
+      }
       if (entry === null || result.verdict !== "accepted") {
         curState = result.state;
         return { line: null, result };
@@ -1126,7 +1274,42 @@ export const createLog = (
         onWritten: () => {
           curState = result.state;
           collectTranscript(acc, entry, frame, result);
+          if ((entry.src === "input" || entry.src === "managed-input") && entry.namingEligible) {
+            try {
+              initializeNaming(paths.dir, acc.inputs);
+            } catch {
+              // The prompt is durable. The worker retries this derived write from the marker.
+            }
+          }
         },
+      };
+    });
+
+  const submitInput: ConversationLog["submitInput"] = (input, at) =>
+    transaction<InputSubmission>((folded, raw) => {
+      const accepted = folded.transcript.inputs.find((item) => item.id === input.id);
+      if (accepted !== undefined) {
+        return {
+          line: null,
+          result:
+            accepted.text === input.text && accepted.mode === "queue"
+              ? { inputId: accepted.id, kind: "replay" }
+              : { kind: "conflict" },
+        };
+      }
+      const queued = { ...input, mode: "queue" as const };
+      const entry: LogEntry = { at, input: queued, src: "input", v: 1 };
+      const issue = comparisonAdmission(input.text, "queue", raw);
+      const result = issue
+        ? refuseInputAdmission(folded.state, queued, issue, at)
+        : enqueueInput(folded.state, queued, at);
+      return {
+        line: result.verdict === "accepted" ? lineOf(entry) : null,
+        onWritten: () => {
+          curState = result.state;
+          collectTranscript(acc, entry, null, result);
+        },
+        result: { kind: "transition", result },
       };
     });
 
@@ -1141,23 +1324,25 @@ export const createLog = (
   const writeAttachment: ConversationLog["writeAttachment"] = (params) => {
     if (!isArtifactField(params.contentType) || !isArtifactField(params.name))
       return { verdict: "refused", issue: "attachment-invalid" };
-    let hash: string;
-    try {
-      hash = putBlob(paths.dir, params.bytes);
-    } catch {
-      return { verdict: "refused", issue: "attachment-too-large" };
-    }
-    const entry: LogEntry = {
-      v: 1,
-      at: deps.now(),
-      src: "attach",
-      hash,
-      bytes: params.bytes.byteLength,
-      contentType: params.contentType,
-      name: params.name,
-      text: params.text,
-    };
-    return transaction(() => ({ line: lineOf(entry), result: { verdict: "accepted", hash } }));
+    return transaction<ReturnType<ConversationLog["writeAttachment"]>>(() => {
+      let hash: string;
+      try {
+        hash = putBlob(paths.dir, params.bytes);
+      } catch {
+        return { line: null, result: { verdict: "refused", issue: "attachment-too-large" } };
+      }
+      const entry: LogEntry = {
+        v: 1,
+        at: deps.now(),
+        src: "attach",
+        hash,
+        bytes: params.bytes.byteLength,
+        contentType: params.contentType,
+        name: params.name,
+        text: params.text,
+      };
+      return { line: lineOf(entry), result: { verdict: "accepted", hash } };
+    });
   };
 
   const writeArtifactMeta: ConversationLog["writeArtifactMeta"] = (params) => {
@@ -1267,17 +1452,28 @@ export const createLog = (
   };
 
   return {
+    inspect,
     paths,
     conversationId,
     state: () => curState,
-    transcript: () => ({
-      events: [...acc.events],
-      inputs: [...acc.inputs],
-      aborted: [...acc.aborted],
-    }),
+    acceptedInput: (id) => acc.inputs.find((entry) => entry.id === id),
+    transcript,
     goodBytes: () => curGoodBytes,
     artifactIndex: () => new Map(curArtifactIndex),
     artifactHeads: () => new Map(curArtifactHeads),
+    comparisonSnapshot: (artifactId) =>
+      transaction((_folded, raw) => {
+        const head = curArtifactHeads.get(artifactId) ?? null;
+        const offset =
+          head === null ? undefined : curArtifactIndex.get(artifactKey(artifactId, head));
+        return {
+          line: null,
+          result: {
+            head,
+            artifact: offset === undefined ? null : readArtifactAtOffset(raw, offset),
+          },
+        };
+      }),
     artifactVersions: () => copyVersions(curArtifactVersions),
     artifactTitles: () => new Map(curArtifactTitles),
     readArtifact,
@@ -1287,6 +1483,7 @@ export const createLog = (
     cursor: () => curCursor,
     advanceCursor,
     append,
+    submitInput,
     collectEffects,
     view: () => {
       const folded = foldLog(
@@ -1304,3 +1501,26 @@ export const createLog = (
     }),
   };
 };
+
+/** Recover only submission-marked work, never migrate a record because it was discovered. */
+export async function recoverConversationNaming(dir: string, id: string): Promise<void> {
+  const paths = pathsForDir(dir);
+  // Scan bounded chunks. Legacy logs can contain large artifact histories.
+  const marker = Buffer.from('"namingEligible":true');
+  let tail = Buffer.alloc(0);
+  let marked = false;
+  for await (const chunk of createReadStream(paths.logPath, { highWaterMark: 32768 })) {
+    const bytes = Buffer.concat([tail, chunk]);
+    if (bytes.includes(marker)) {
+      marked = true;
+      break;
+    }
+    tail = bytes.subarray(Math.max(0, bytes.length - marker.length + 1));
+  }
+  if (!marked) return;
+  withRecordLock(paths, id, () => {
+    const secret = readFileSync(paths.secretPath, "utf8").trim();
+    const { folded } = readFoldRepair(paths, id, secret);
+    if (folded.namingEligible) initializeNaming(dir, folded.transcript.inputs);
+  });
+}

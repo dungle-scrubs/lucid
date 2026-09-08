@@ -45,6 +45,9 @@ Commit `4dcbb8d` contains the completed substrate plan, RFCs 02 through
 RFC 10 was withdrawn. Later contracts supersede earlier proposals, so the
 archive is evidence of decisions at the time, not the current specification.
 
+Commit `743a48c` contains completed RFCs 14 and 15, their reviews, and the
+resolved annotated-comparison and local-hub ticket sets.
+
 Historical RFC, PLAN, milestone, and decision labels in test names,
 source comments, and evidence remain provenance identifiers. Look them up
 in that revision or in the named file's Git history. They do not require

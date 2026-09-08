@@ -8,9 +8,8 @@
  * protocol - so both are checked.
  */
 
-/** The release that shipped `hcn session --json` (RFC-01) and
- * `hcn session --effort` (RFC-12's last gap). */
-export const HCN_MIN_VERSION = "0.6.0";
+/** Native resume verification and complete-request context accounting. */
+export const HCN_MIN_VERSION = "0.6.4";
 
 /** Numeric compare over major.minor.patch. A non-numeric part reads as 0,
  * so a prerelease suffix never makes a version look newer than it is. */

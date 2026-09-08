@@ -202,6 +202,7 @@ describe("delivery cursor (RFC-04 R3/R4 + step7)", () => {
       }),
       streamTurn: () => ({ [Symbol.asyncIterator]: async function* () {} }),
       inspect: async () => ({ name: "claude", session: true, verifiedAgainst: "test" }),
+      countContext: async () => ({ status: "unavailable", reason: "not-configured" }),
       capabilities: async () => ({
         vision: false,
         images: false,

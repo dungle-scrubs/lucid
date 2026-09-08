@@ -25,18 +25,14 @@
  * things, and the projection reports them in different fields.
  */
 
-import {
-  closeSync,
-  existsSync,
-  fsyncSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  writeSync,
-} from "node:fs";
+import { readFileSync } from "node:fs";
+import { isProfile, SETTINGS_FIELDS } from "../protocol/driver-settings.js";
 import { HARNESS_NAMES, type HarnessName } from "../protocol/frames.js";
+import { HubError } from "../protocol/hub-errors.js";
+import { atomicSidecar } from "./atomic-file.js";
 import { pathsForDir, StoreError } from "./errors.js";
 import { validArtifactId } from "./log.js";
+import { readRecordIdentity, withRecordLock } from "./record-identity.js";
 
 /** How long a preference field may be, in UTF-16 code units. The record's
  * existing wire-id bound, stated here so the endpoint can echo it back. */
@@ -46,6 +42,7 @@ export const DRIVER_FIELD_MAX = 128;
  * What the endpoint accepts and the driver honors; absent fields mean the
  * corresponding hcn default applies at spawn. */
 export interface DriverChoice {
+  readonly profile?: import("../protocol/driver-settings.js").SelectedProfile;
   readonly harness: HarnessName;
   readonly provider?: string;
   readonly model?: string;
@@ -56,6 +53,8 @@ export interface DriverChoice {
  * carries its `v: 1`. What the read returns and the projection reports -
  * RFC-12 says the page is told the file's content. */
 export interface DriverPreference {
+  readonly profile?: import("../harness/runner.js").HarnessMode;
+  readonly revision?: number;
   readonly v: 1;
   readonly harness: HarnessName;
   readonly provider?: string;
@@ -74,58 +73,48 @@ export const isDriverHarness = (v: unknown): v is HarnessName =>
  * control-free string that becomes a flag value, never prose. */
 export const isDriverField = (v: unknown): v is string => validArtifactId(v);
 
-/** The fields a preference body may carry (RFC-12): the version stamp, the
- * spine, and the three dimensions. Everything else is the endpoint's
- * `unknown-field` - `mode` and `profile` deliberately among them, because
- * mode is not settable from the browser. */
-export const DRIVER_BODY_FIELDS: ReadonlySet<string> = new Set([
-  "v",
-  "harness",
-  "provider",
-  "model",
-  "effort",
-]);
-
-/**
- * Read the record's driver preference, or null when there is none.
- *
- * Null is the honest answer for more than an absent file, because the file
- * is a preference and not a truth-source: a record whose `driver.json`
- * cannot be parsed still opens, still drives, and simply has no preference -
- * the same discipline that lets the fold carry an entry it does not know.
- * Unknown fields are ignored and read fields are read; a known field that
- * fails its shape is treated as unset rather than allowed to reach a spawn.
- * A file with no valid harness is no preference at all: the harness is the
- * spine the other fields are values in, and a value without its domain
- * names nothing.
- *
- * Never throws: the driver reads this at startup and at turn boundaries,
- * where a throw would cost a conversation for the sake of a sidecar.
- */
-export const readDriverPreference = (dir: string): DriverPreference | null => {
-  const path = pathsForDir(dir).driverPath;
-  if (!existsSync(path)) return null;
-  let parsed: unknown;
+/** Read saved settings without hiding malformed fields behind defaults. */
+export function preferenceState(dir: string): {
+  preference: DriverPreference | null;
+  revision: number;
+  error: string | null;
+} {
+  let file: Record<string, unknown>;
   try {
-    parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-  } catch {
-    return null;
+    file = JSON.parse(readFileSync(pathsForDir(dir).driverPath, "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return { preference: null, revision: 0, error: null };
+    return {
+      preference: null,
+      revision: 0,
+      error: "Saved settings cannot be read. Choose complete settings to repair them.",
+    };
   }
-  const file = (parsed ?? {}) as Record<string, unknown>;
-  if (!isDriverHarness(file.harness)) return null;
-  return {
-    v: 1,
-    harness: file.harness,
-    ...(isDriverField(file.provider) ? { provider: file.provider } : {}),
-    ...(isDriverField(file.model) ? { model: file.model } : {}),
-    ...(isDriverField(file.effort) ? { effort: file.effort } : {}),
-  };
-};
+  const revision =
+    Number.isSafeInteger(file?.revision) && Number(file.revision) >= 0 ? Number(file.revision) : 0;
+  if (
+    file?.v !== 1 ||
+    !isDriverHarness(file.harness) ||
+    ["model", "effort", "provider"].some((k) => file[k] !== undefined && !isDriverField(file[k])) ||
+    (file.profile !== undefined && !isProfile(file.profile)) ||
+    (file.revision !== undefined && file.revision !== revision)
+  )
+    return {
+      preference: null,
+      revision,
+      error: "Saved settings are malformed. Choose complete settings to repair them.",
+    };
+  const preference = Object.fromEntries(
+    Object.entries(file).filter(([key]) =>
+      ([...SETTINGS_FIELDS, "v", "revision"] as readonly string[]).includes(key),
+    ),
+  ) as unknown as DriverPreference;
+  return { preference, revision, error: null };
+}
 
-const writeAll = (fd: number, bytes: Buffer): void => {
-  let written = 0;
-  while (written < bytes.length) written += writeSync(fd, bytes, written);
-};
+export const readDriverPreference = (dir: string): DriverPreference | null =>
+  preferenceState(dir).preference;
 
 /**
  * Replace the record's driver preference and return what the file now
@@ -142,7 +131,21 @@ const writeAll = (fd: number, bytes: Buffer): void => {
  * choice with it. The record directory must already exist - a caller
  * creating one goes through the mint.
  */
-export const writeDriverPreference = (dir: string, choice: DriverChoice): DriverPreference => {
+export const writeDriverPreference = (
+  dir: string,
+  choice: DriverChoice,
+  expectedConversationId = readRecordIdentity(dir),
+  expectedRevision?: number,
+): DriverPreference =>
+  withRecordLock(pathsForDir(dir), expectedConversationId, () =>
+    replacePreferenceUnderLock(dir, choice, expectedRevision),
+  );
+
+function replacePreferenceUnderLock(
+  dir: string,
+  choice: DriverChoice,
+  expectedRevision?: number,
+): DriverPreference {
   if (!isDriverHarness(choice.harness)) {
     throw new StoreError(
       "corrupt-log",
@@ -158,26 +161,40 @@ export const writeDriverPreference = (dir: string, choice: DriverChoice): Driver
       throw new StoreError("corrupt-log", `malformed driver ${name} on write`);
     }
   }
+  const current = preferenceState(dir);
+  if (expectedRevision !== undefined && current.revision !== expectedRevision)
+    throw new HubError("Settings changed. Reload before saving.", "E-HUB-02", 409, [
+      "Reload settings",
+    ]);
+  if (expectedRevision === undefined && current.revision > 0)
+    throw new HubError("A revision is required to replace saved settings.", "E-HUB-02", 409, [
+      "Reload settings",
+    ]);
+  if (choice.profile !== undefined && !isProfile(choice.profile))
+    throw new StoreError("corrupt-log", "malformed driver profile on write");
   const file: DriverPreference = {
     v: 1,
     harness: choice.harness,
+    ...(choice.profile === undefined ? {} : { profile: choice.profile }),
+    ...(expectedRevision === undefined ? {} : { revision: expectedRevision + 1 }),
     ...(choice.provider === undefined ? {} : { provider: choice.provider }),
     ...(choice.model === undefined ? {} : { model: choice.model }),
     ...(choice.effort === undefined ? {} : { effort: choice.effort }),
   };
-  const path = pathsForDir(dir).driverPath;
-  // Same directory, so the rename is on one filesystem and is atomic. The
-  // pid keeps a second writer's temporary from colliding with this one;
-  // within one process the write and rename are synchronous and cannot
-  // interleave.
-  const tmp = `${path}.${process.pid}.part`;
-  const fd = openSync(tmp, "w", 0o600);
-  try {
-    writeAll(fd, Buffer.from(JSON.stringify(file)));
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-  renameSync(tmp, path);
+  atomicSidecar(pathsForDir(dir).driverPath, file);
   return file;
-};
+}
+
+/** Called only by input admission while holding the record append lock. A newer explicit choice wins. */
+export function completeLegacyPreference(dir: string, selected: DriverChoice): void {
+  const current = preferenceState(dir);
+  if (current.error || current.revision > 0) return;
+  replacePreferenceUnderLock(dir, selected, 0);
+}
+
+/** Execution cannot treat unreadable settings as permission to use defaults. */
+export function requireDriverPreference(dir: string): DriverPreference | null {
+  const state = preferenceState(dir);
+  if (state.error) throw new HubError(state.error, "E-HUB-03");
+  return state.preference;
+}

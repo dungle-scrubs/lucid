@@ -1,3 +1,4 @@
+import { supportsManagedInput } from "./frames.js";
 /**
  * The pure chat-session reducer: (state, frame, now) -> accepted | refusal.
  * Owns epoch fencing (a takeover increments the epoch; stale-epoch frames
@@ -25,7 +26,9 @@
  * the switch and into liveness — two clocks again.
  */
 
+import { recordContextContent, recordContextTurn } from "./context-coverage.js";
 import { classOfEventKind, EventKind } from "./events.js";
+import type { AttachmentIntent } from "./frames.js";
 import {
   type AttachProfile,
   type DetachReason,
@@ -44,6 +47,7 @@ import {
 import { AttachmentLedger, LEASE_RENEW_EVERY_MS, LEASE_TTL_MS } from "./ledgers/attachment.js";
 import { CreditLedger } from "./ledgers/credit.js";
 import { InputLedger } from "./ledgers/input.js";
+import type { ProcessOwner } from "./process-owner.js";
 
 export type { RefusalIssue } from "./frames.js";
 
@@ -53,17 +57,34 @@ export const PROTOCOL_VERSION = 1;
 // The single source lives in ledgers/attachment.ts.
 export { LEASE_RENEW_EVERY_MS, LEASE_TTL_MS };
 
-export interface Attachment {
+export interface Attachment extends AttachmentIntent {
+  readonly owner?: ProcessOwner;
   readonly profile: AttachProfile;
-  /** Which harness this writer drives. Present for the headless profiles,
-   * absent for interactive, where lucid does not own the process and never
-   * resumes it (RFC-03). It is what attributes this writer's identity
-   * events, so a later attach of the SAME harness can be told which session
-   * to continue. */
+  /** Attributes identity events to this participation's harness. Naming
+   * an interactive harness does not grant ownership of its process. */
   readonly harness?: HarnessName;
   /** Last accepted per-epoch source counter; next event must carry lastN+1. */
   readonly lastN: number;
   readonly lease: Lease;
+}
+
+export interface NativeSession {
+  readonly current: boolean;
+  readonly owner?: ProcessOwner;
+  readonly authority: "harness-minted" | "caller-assigned";
+  readonly epoch: number;
+  readonly profile: AttachProfile;
+  readonly seq: number;
+  readonly sessionId: string;
+  readonly turnId: string;
+}
+
+/** Last accepted participation survives detach, even before an identity arrives. */
+export interface Participation {
+  readonly epoch: number;
+  readonly harness?: HarnessName;
+  readonly owner?: ProcessOwner;
+  readonly profile: AttachProfile;
 }
 
 /** Disposition state machine: outstanding -> applied | queued; a rejected
@@ -72,6 +93,7 @@ export interface Attachment {
 export type InputStatus = "outstanding" | "queued" | "applied";
 
 export interface QueuedInput {
+  readonly managed?: true;
   /** Idempotent id: replay and boundary redelivery reuse it, so the source
    * applies an input at most once however many times it is delivered. */
   readonly id: string;
@@ -120,6 +142,16 @@ export interface ChannelState {
   /** Current fencing token; 0 = never attached. Survives detach. */
   readonly epoch: number;
   readonly attachment: Attachment | null;
+  readonly lastParticipation: Participation | null;
+  readonly terminalParticipations: readonly Participation[];
+  readonly lastTerminalParticipation: Participation | null;
+  readonly executions: Readonly<Record<string, import("./execution.js").ExecutionState>>;
+  readonly completedTurns: Readonly<Record<string, number>>;
+  readonly contextCoverage: Readonly<Record<string, number>>;
+  readonly contextContent: import("./context-coverage.js").ContextContent;
+  readonly contextTurns: Readonly<Record<string, import("./context-coverage.js").ContextTurn>>;
+  readonly contextOffers: Readonly<Record<string, import("./context-coverage.js").SessionContext>>;
+  readonly explicitAttachments: Readonly<Record<string, number>>;
   /** The newest harness session id seen per harness, attributed by the
    * attachment that was live when its identity event was accepted.
    *
@@ -131,6 +163,7 @@ export interface ChannelState {
    * RFC-03: their events carry no attribution, so they are un-resumable
    * rather than guessed at. */
   readonly harnessSessions: Readonly<Partial<Record<HarnessName, string>>>;
+  readonly nativeSessions: Readonly<Partial<Record<HarnessName, NativeSession>>>;
   /** The turnId of the last accepted event under the current writer. The
    * protocol cannot see turn completion (the event payload is opaque), so
    * this may name an already-finished turn; the host owns turn lifecycle
@@ -241,6 +274,8 @@ export interface Presence {
  * the host could not corroborate - presence never proves a channel, so
  * absence never blocks (epoch fencing is the defense - D-021). */
 export interface ReduceContext {
+  readonly ownersDeparted?: true;
+  readonly owner?: ProcessOwner;
   readonly presence?: Presence;
 }
 
@@ -270,6 +305,16 @@ export const initialChannelState = (init: {
   seq: 0,
   epoch: 0,
   attachment: null,
+  lastParticipation: null,
+  terminalParticipations: [],
+  lastTerminalParticipation: null,
+  executions: {},
+  completedTurns: {},
+  contextCoverage: {},
+  contextContent: { current: null, earlier: [] },
+  contextTurns: {},
+  contextOffers: {},
+  explicitAttachments: {},
   turn: null,
   acked: 0,
   seenTurns: {},
@@ -278,6 +323,7 @@ export const initialChannelState = (init: {
   inFlightInputs: 0,
   credits: 0,
   harnessSessions: {},
+  nativeSessions: {},
   questionOpen: null,
 });
 
@@ -390,7 +436,10 @@ const accepted = (
  * redelivers armed inputs from state (see `runtime.ts`), and a second
  * hand-built frame there would be a mirror of this one — the thing this
  * repo does not do with wire shapes. */
-export const inputFrame = (input: QueuedInput): Frame => ({
+export const inputFrame = (
+  input: Pick<QueuedInput, "managed" | "id" | "seq" | "text" | "mode" | "turnId">,
+): Frame => ({
+  ...(input.managed ? { managed: true } : {}),
   kind: "input",
   seq: input.seq,
   id: input.id,
@@ -431,8 +480,13 @@ const refusedButAlive = (
 
 const queueDepth = (inputs: readonly QueuedInput[]): number => InputLedger.queueDepth(inputs);
 
-const sendInputs = (inputs: readonly QueuedInput[]): readonly Effect[] =>
-  inputs.map((i) => ({ type: "send", frame: inputFrame(i) }));
+const sendInputs = (
+  inputs: readonly QueuedInput[],
+  capabilities?: readonly string[],
+): readonly Effect[] =>
+  inputs
+    .filter((input) => !input.managed || supportsManagedInput(capabilities))
+    .map((i) => ({ type: "send", frame: inputFrame(i) }));
 
 /** Derive the next questionOpen after an accepted event. A `question`
  * event sets/replaces it; a `done` with awaiting-input does NOT clear it;
@@ -546,9 +600,9 @@ const reduceAttach = (
   const headless = frame.profile !== "interactive";
   if (headless && frame.harness === undefined)
     return refusal(state, frame, "invalid-grant", now, undefined);
-  // R008: interactive never resumes, so a harness on it is ignored rather
-  // than stored. Storing it would put ids in the map that no source may use.
-  const attachHarness = headless ? frame.harness : undefined;
+  // Attribution does not grant ownership. Runtime owner checks and the
+  // executor lease still govern any later headless takeover (RFC 15).
+  const attachHarness = frame.harness;
 
   const epoch = state.epoch + 1;
   const lease: Lease = { expires: now + LEASE_TTL_MS, renewEvery: LEASE_RENEW_EVERY_MS };
@@ -576,7 +630,50 @@ const reduceAttach = (
       ...state,
       seq: state.seq + 1,
       epoch,
+      explicitAttachments:
+        frame.attachmentOrigin === "explicit" &&
+        frame.explicitAttachmentId !== undefined &&
+        !Object.hasOwn(state.explicitAttachments, frame.explicitAttachmentId)
+          ? { ...state.explicitAttachments, [frame.explicitAttachmentId]: epoch }
+          : state.explicitAttachments,
+      terminalParticipations:
+        frame.profile === "interactive"
+          ? [
+              ...state.terminalParticipations,
+              {
+                epoch,
+                profile: frame.profile,
+                ...(ctx?.owner === undefined ? {} : { owner: ctx.owner }),
+                ...(attachHarness === undefined ? {} : { harness: attachHarness }),
+              },
+            ]
+          : ctx?.ownersDeparted
+            ? []
+            : state.terminalParticipations,
+      lastTerminalParticipation:
+        frame.profile === "interactive"
+          ? {
+              epoch,
+              profile: frame.profile,
+              ...(ctx?.owner === undefined ? {} : { owner: ctx.owner }),
+              ...(attachHarness === undefined ? {} : { harness: attachHarness }),
+            }
+          : state.lastTerminalParticipation,
+      lastParticipation: {
+        epoch,
+        profile: frame.profile,
+        ...(ctx?.owner === undefined ? {} : { owner: ctx.owner }),
+        ...(attachHarness === undefined ? {} : { harness: attachHarness }),
+      },
       attachment: {
+        ...(frame.capabilities === undefined ? {} : { capabilities: frame.capabilities }),
+        ...(frame.attachmentOrigin === undefined
+          ? {}
+          : { attachmentOrigin: frame.attachmentOrigin }),
+        ...(frame.explicitAttachmentId === undefined
+          ? {}
+          : { explicitAttachmentId: frame.explicitAttachmentId }),
+        ...(ctx?.owner === undefined ? {} : { owner: ctx.owner }),
         profile: frame.profile,
         lastN: 0,
         lease,
@@ -619,7 +716,7 @@ const reduceAttach = (
             : {}),
         },
       },
-      ...sendInputs(replayedForSend),
+      ...sendInputs(replayedForSend, frame.capabilities),
     ],
     withPresence,
   );
@@ -690,6 +787,8 @@ const reducePostAttach = (
           ...state,
           seq,
           attachment: {
+            ...attachment,
+            ...(attachment.owner === undefined ? {} : { owner: attachment.owner }),
             profile: attachment.profile,
             lastN: frame.n,
             lease: renewLease(attachment.lease, now),
@@ -704,8 +803,35 @@ const reducePostAttach = (
                   ...state.harnessSessions,
                   [attachment.harness]: identitySessionId,
                 },
+                nativeSessions: {
+                  ...state.nativeSessions,
+                  [attachment.harness]:
+                    frame.event.authority === "harness-minted" ||
+                    frame.event.authority === "caller-assigned"
+                      ? {
+                          current: true,
+                          authority: frame.event.authority,
+                          ...(attachment.owner === undefined ? {} : { owner: attachment.owner }),
+                          epoch: frame.epoch,
+                          profile: attachment.profile,
+                          seq,
+                          sessionId: identitySessionId,
+                          turnId: frame.turnId,
+                        }
+                      : state.nativeSessions[attachment.harness] === undefined
+                        ? undefined
+                        : { ...state.nativeSessions[attachment.harness], current: false },
+                },
               }),
           turn: sameTurn ? state.turn : { turnId: frame.turnId },
+          contextContent: recordContextContent(state.contextContent, "turn", frame.turnId, seq),
+          contextTurns: recordContextTurn(
+            state.contextTurns,
+            frame.turnId,
+            frame.epoch,
+            attachment.harness,
+            frame.event,
+          ),
           seenTurns: sameTurn
             ? state.seenTurns
             : { ...state.seenTurns, [frame.turnId]: true as const },
@@ -714,12 +840,21 @@ const reducePostAttach = (
           // P2): turns finish in order, so count-down by one is exact, and
           // non-terminal kinds leave the backlog alone.
           inFlightInputs: InputLedger.turnEnded(state.inFlightInputs, frame.event.kind),
+          completedTurns:
+            frame.event.kind === EventKind.done &&
+            (frame.event.exitCode === 0 || frame.event.exitCode === null) &&
+            frame.event.failure === undefined &&
+            (frame.event.cause === "clean" || frame.event.cause === "awaiting-input")
+              ? { ...state.completedTurns, [frame.turnId]: seq }
+              : state.completedTurns,
           inputs: InputLedger.clearRedeliver(state.inputs, redelivered.length > 0),
           questionOpen,
         },
         frame,
         now,
-        redelivered.length === 0 ? [ack] : [ack, ...sendInputs(redelivered)],
+        redelivered.length === 0
+          ? [ack]
+          : [ack, ...sendInputs(redelivered, attachment.capabilities)],
         droppable ? { credits: state.credits - 1 } : undefined,
       );
     }
@@ -743,6 +878,18 @@ const reducePostAttach = (
     }
     case "disposition": {
       const target = state.inputs.find((i) => i.id === frame.inputId);
+      if (target?.managed) {
+        const execution = state.executions[target.id];
+        if (!supportsManagedInput(attachment.capabilities))
+          return refusedButAlive(state, attachment, frame, "unknown-input", now);
+        if (
+          frame.outcome === "applied" &&
+          (execution?.kind !== "attempt-started" ||
+            execution.epoch !== state.epoch ||
+            execution.driver.harness !== attachment.harness)
+        )
+          return refusedButAlive(state, attachment, frame, "execution-ineligible", now);
+      }
       if (target === undefined) {
         // applied is terminal: a late or redelivered disposition against
         // it is an idempotent no-op (which is what makes redelivery
@@ -949,7 +1096,13 @@ export const enqueueInput = (
       ? { ...state.questionOpen, answeringInputId: input.id }
       : state.questionOpen;
   return accepted(
-    { ...state, seq: queued.seq, inputs, questionOpen },
+    {
+      ...state,
+      seq: queued.seq,
+      inputs,
+      questionOpen,
+      contextContent: recordContextContent(state.contextContent, "input", input.id, queued.seq),
+    },
     frame,
     now,
     live ? [{ type: "send", frame }] : NO_EFFECTS,
@@ -960,10 +1113,36 @@ export const enqueueInput = (
   );
 };
 
-/** Host transition: grant flow credits for the droppable class only
- * (PLAN 4.5). The grant is clamped so outstanding credits never exceed
- * DROPPABLE_QUEUE_MAX - that clamp IS the bounded queue: at most MAX
- * droppable frames can be accepted between render drains. */
+export function enqueueManagedInput(
+  state: ChannelState,
+  input: Parameters<typeof enqueueInput>[1],
+  now: number,
+): ReduceResult {
+  const result = enqueueInput(state, input, now);
+  if (result.verdict !== "accepted") return result;
+  return {
+    ...result,
+    effects: supportsManagedInput(state.attachment?.capabilities)
+      ? result.effects.map((effect) =>
+          effect.type === "send" && effect.frame.kind === "input"
+            ? { type: "send", frame: { ...effect.frame, managed: true } }
+            : effect,
+        )
+      : [],
+    state: {
+      ...result.state,
+      executions: {
+        ...state.executions,
+        [input.id]: { kind: "requested", attempt: 0, actions: {} },
+      },
+      inputs: result.state.inputs.map((entry) =>
+        entry.id === input.id ? { ...entry, managed: true } : entry,
+      ),
+    },
+  };
+}
+
+/** Host transition: grant credits, clamped to the bounded droppable queue. */
 export const grantCredit = (state: ChannelState, tokens: number, now: number): ReduceResult => {
   // The host-facing API is exactly as strict as the wire it mirrors
   // (nat-bounded tokens): a negative or fractional grant would drive the
@@ -1027,3 +1206,11 @@ export const reduce = (
       return refusal(state, frame, "wrong-direction", now);
   }
 };
+
+/** Admission refusals preserve the pre-transaction state and emit the usual wire refusal. */
+export const refuseInputAdmission = (
+  state: ChannelState,
+  input: { id: string; text: string; mode: InputMode },
+  issue: ProtocolIssue,
+  now: number,
+): ReduceResult => refusal(state, { kind: "input", seq: state.seq, ...input }, issue, now);

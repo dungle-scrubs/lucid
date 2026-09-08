@@ -97,6 +97,10 @@ export class FakeHcnProcess implements HcnProcess {
   endInput(): void {
     this.inputEnded = true;
   }
+  disposeOutput(): void {
+    this.stdoutChannel.close();
+    this.stderrChannel.close();
+  }
   kill(signal: "SIGTERM" | "SIGKILL" = "SIGTERM"): void {
     this.signals.push(signal);
     this.exit(null);

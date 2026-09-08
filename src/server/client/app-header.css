@@ -1,0 +1,73 @@
+.doc-head {
+  flex: 0 0 28px;
+  min-block-size: 28px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 0 4px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--color-text, var(--ink));
+  /* The ink fill arrives over ~120ms; nothing else about the row moves. */
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+/* A cyan period sits on the wordmark baseline. */
+.doc-mark {
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  gap: 1px;
+  flex: none;
+}
+
+.doc-mark .dot {
+  flex: none;
+  color: var(--color-accent, var(--accent));
+  font: 600 22px / 1 var(--font-heading, Source, Georgia, serif);
+}
+
+.doc-mark .dot::before {
+  content: ".";
+}
+
+.doc-mark .word {
+  font: 600 18px / 1 var(--font-heading, Source, Georgia, serif);
+  letter-spacing: -0.01em;
+}
+
+.doc-head-sep {
+  width: 1px;
+  height: 16px;
+  flex: none;
+  background: var(--edge-2, var(--line));
+}
+
+.doc-mark:focus-visible {
+  outline: 1px solid var(--color-accent, var(--accent));
+  outline-offset: 3px;
+}
+.header-new {
+  margin-inline-start: auto;
+  color: var(--color-text, var(--ink));
+  font:
+    14px / 20px system-ui,
+    sans-serif;
+  text-decoration: none;
+  cursor: pointer;
+}
+.header-new:hover {
+  color: var(--color-accent, var(--accent));
+}
+#app-header {
+  padding: 8px 14px;
+}
+
+.doc-head.dead .doc-mark .dot {
+  color: var(--color-accent-2);
+}

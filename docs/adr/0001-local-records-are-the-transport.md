@@ -11,3 +11,8 @@ conversation and makes local filesystem access the authorization boundary.
 
 Revisit only if the product's users and scope change to require remote or
 multi-user coordination. That is a product decision, not a refactor.
+
+The hub may coordinate invocation-scoped worker launches from accepted managed
+input. Its reconciliation lasts for the running server's lifetime. Workers use
+the same record and executor lease; this adds neither another transport nor a
+global daemon. The server itself remains outside execution ownership.

@@ -23,8 +23,9 @@ annotated in the same view.
 One person, on one machine, working with coding agents. Not a team tool, not
 a hosted service, not multi-user. That scope is a decision, not an accident:
 it lets the filesystem carry the conversation without a coordinating daemon
-or socket. The optional browser server is a local reader and appender, not
-the conversation driver.
+or socket. The optional browser server reads and appends records and can
+request independent local workers for accepted prompts. Workers use the
+record's executor lease; the server does not drive conversations itself.
 
 ## The words
 

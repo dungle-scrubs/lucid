@@ -59,6 +59,7 @@ const makeRunner = (
     openSession: async () => handle,
     streamTurn: () => ({ [Symbol.asyncIterator]: async function* () {} }),
     inspect: async () => ({ name: "claude", session: true, verifiedAgainst: "test" }),
+    countContext: async () => ({ status: "unavailable", reason: "not-configured" }),
     capabilities: async () => ({
       vision: false,
       images: false,
