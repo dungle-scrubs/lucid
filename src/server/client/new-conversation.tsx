@@ -22,6 +22,7 @@ export function NewConversation(props: {
         choices: DriverChoices;
         restartRequired: boolean;
         error: string | null;
+        errorInCompatibility?: boolean;
         folderPickerAvailable: boolean;
       };
     },
@@ -59,7 +60,7 @@ export function NewConversation(props: {
           {defaults.error.message}
         </p>
       ) : null}
-      {defaults.data?.error ? (
+      {defaults.data?.error && !defaults.data.errorInCompatibility ? (
         <p role="alert" className="settings-error">
           {defaults.data.error} Choose a complete set of settings or correct the config.
         </p>

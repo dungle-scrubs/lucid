@@ -1,3 +1,4 @@
+import { type CompatibilityDiagnostic, parseCompatibilityDiagnostic } from "./compatibility.js";
 import type { HarnessName, ProtocolIssue } from "./frames.js";
 import { HARNESS_NAMES, isWireId } from "./frames.js";
 import type { ChannelState, ReduceResult } from "./reducer.js";
@@ -50,6 +51,7 @@ export interface ComparisonPrerequisite {
 }
 
 export interface ExecutionHold {
+  readonly compatibility?: CompatibilityDiagnostic;
   readonly comparison?: ComparisonPrerequisite;
   readonly actions: readonly string[];
   readonly code: "E-HUB-03" | "E-HUB-04" | "E-HUB-06" | "E-COMP-07";
@@ -211,6 +213,9 @@ export function parseExecutionFact(value: unknown): ExecutionFact | null {
         kind: value.kind,
         hold: {
           code: h.code as ExecutionHold["code"],
+          ...(parseCompatibilityDiagnostic(h.compatibility)
+            ? { compatibility: parseCompatibilityDiagnostic(h.compatibility) }
+            : {}),
           reason: h.reason,
           prerequisite: h.prerequisite,
           actions: [...h.actions],

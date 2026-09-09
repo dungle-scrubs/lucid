@@ -280,3 +280,26 @@ test("tool activity retains Codex string commands and accepts absent details", (
     "shell",
   ]);
 });
+
+test("historical HCN refusal prose is replaced at presentation without rewriting the transcript", () => {
+  const r = rig();
+  r.send(attach({ conversationId: "conv-1", secret: r.secret }));
+  r.send(
+    event({
+      epoch: 1,
+      n: 1,
+      turnId: "turn",
+      event: {
+        kind: "failure",
+        class: "rejected",
+        issue: "unsupported-option",
+        message: "synthetic-private-stderr\u001b[31m",
+      },
+    }),
+  );
+  const transcript = r.host.transcript();
+  const before = JSON.stringify(transcript);
+  const view = buildView({ transcript, status: r.host.status(), rung: "hooks", draft: "" });
+  expect(JSON.stringify(view)).not.toContain("synthetic-private-stderr");
+  expect(JSON.stringify(transcript)).toBe(before);
+});

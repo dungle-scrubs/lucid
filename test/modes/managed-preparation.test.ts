@@ -115,6 +115,49 @@ const input = {
   native: { kind: "fresh" },
 } as const;
 
+test("a refused attempt explains the actual gate when runtime and admission evidence disagree", async () => {
+  const f = setup();
+  const runner: HarnessRunner = {
+    ...f.runner,
+    inspect: async () => ({
+      name: "claude",
+      session: false,
+      verifiedAgainst: "1.0.0",
+      runtime: {
+        executable: { path: "/selected/claude", version: "1.2.0" },
+        verifiedAgainst: "1.1.0",
+        resume: { status: "unknown", reason: null },
+      },
+    }),
+  };
+  const preparation = createManagedPreparation({
+    host: f.host,
+    offerContext: f.offerContext,
+    runner,
+    driver,
+    cwd: f.root,
+  });
+  try {
+    expect(
+      (await preparation.prepare({ ...input, signal: new AbortController().signal })).kind,
+    ).toBe("held");
+    const execution = f.host.state().executions.request;
+    expect(JSON.stringify(execution)).toContain("admission requires 1.0.0");
+    expect(execution).toMatchObject({
+      kind: "held",
+      hold: {
+        code: "E-HUB-03",
+        reason: expect.stringContaining("runtime inspection verifies 1.1.0"),
+      },
+    });
+    expect(f.counts).toHaveLength(0);
+  } finally {
+    preparation.close();
+    f.host.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
 test("managed preparation records the counted context before task dispatch and owns its offered copy", async () => {
   const f = setup();
   const preparation = createManagedPreparation({

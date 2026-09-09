@@ -108,11 +108,12 @@ describe("the version refusal says where the binary came from", () => {
     // "run bun install" would have fixed nothing when the binary came from
     // Homebrew, which is exactly the case that found this.
     expect(e.message).toContain("/opt/homebrew/bin/hcn");
-    expect(e.message).toContain("LUCID_HCN");
+    expect(e.message).toContain("Repair");
     expect(e.message).not.toContain("bun install");
   });
 
-  test("without a binary it keeps the old wording", () => {
-    expect(new HarnessVersionError("0.5.3", "0.5.4").message).toContain("bun install");
+  test("without installation provenance it gives neutral repair advice", () => {
+    expect(new HarnessVersionError("0.5.3", "0.5.4").message).toContain("selected HCN executable");
+    expect(new HarnessVersionError("0.5.3", "0.5.4").message).not.toContain("bun install");
   });
 });

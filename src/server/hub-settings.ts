@@ -1,7 +1,17 @@
 import { isAbsolute, resolve } from "node:path";
 import { type ConfigLocation, readUserConfig } from "../config/user-config.js";
+import {
+  type CompatibilityDiagnostic,
+  diagnosticMessage,
+  failureDiagnostic,
+  hcnDiagnostic,
+  safeFact,
+  selectionDiagnostic,
+  selectionProblem,
+  unknownInstallation,
+} from "../harness/compatibility.js";
 import { createHcnRunner } from "../harness/hcn-runner.js";
-import { nodeHarnessDeps } from "../harness/node-deps.js";
+import { type HarnessStartup, prepareNodeHarness } from "../harness/node-deps.js";
 import type { HarnessRunner } from "../harness/runner.js";
 import { isProfile, SETTINGS_FIELDS, type Settings } from "../protocol/driver-settings.js";
 import { HubError } from "../protocol/hub-errors.js";
@@ -40,30 +50,50 @@ function settingsShape(value: unknown): Settings {
 }
 export async function resolveSettings(value: unknown, runner: HarnessRunner): Promise<Settings> {
   const choice = settingsShape(value);
-  const facts = await runner.inspect(choice.harness);
-  const vocabulary = facts.vocabulary;
-  if (!vocabulary)
+  const refuse = (
+    code: "inspection-unavailable" | "selection-unsupported",
+    detail?: string,
+  ): never => {
+    const diagnostic = selectionProblem(choice, runner.installation, code, detail);
     throw new HubError(
-      "Harness inspection is unavailable. Repair hcn and restart Lucid.",
+      diagnosticMessage(diagnostic),
       "E-HUB-03",
+      400,
+      ["Review settings"],
+      diagnostic,
     );
+  };
+  const inspectionFailure = (error: unknown): never => {
+    const diagnostic = failureDiagnostic(error);
+    if (!diagnostic) return refuse("inspection-unavailable");
+    throw new HubError(
+      diagnosticMessage(diagnostic),
+      "E-HUB-03",
+      400,
+      ["Review settings"],
+      diagnostic,
+    );
+  };
+  const facts = await runner.inspect(choice.harness).catch(inspectionFailure);
+  const vocabulary = facts.vocabulary;
+  if (!vocabulary) return refuse("inspection-unavailable");
   const model = vocabulary.aliases?.[choice.model] ?? choice.model;
   if (!vocabulary.extensible && !vocabulary.models.includes(model))
-    throw new HubError(
-      `Model ${model} is unavailable on ${choice.harness}. Choose a supported model.`,
-      "E-HUB-03",
+    refuse(
+      "selection-unsupported",
+      `Model ${safeFact(model)} is unavailable on ${choice.harness}. Choose a supported model`,
     );
   if (!vocabulary.efforts.includes(choice.effort))
-    throw new HubError(`Effort ${choice.effort} is unavailable on ${choice.harness}.`, "E-HUB-03");
+    refuse("selection-unsupported", `Effort ${choice.effort} is unavailable on ${choice.harness}`);
   if (choice.provider !== undefined && !vocabulary.provider)
-    throw new HubError("This harness does not support a provider choice.", "E-HUB-03");
+    refuse("selection-unsupported", "This harness does not support a provider choice");
   if (choice.profile === "headless-session" && !facts.session)
-    throw new HubError(
-      "This harness does not support headless-session. Choose another mode.",
-      "E-HUB-03",
+    refuse(
+      "selection-unsupported",
+      "This harness does not support headless-session. Choose another mode",
     );
   const selected = { ...choice, model };
-  await runner.inspect(selected.harness, selected);
+  await runner.inspect(selected.harness, selected).catch(inspectionFailure);
   return selected;
 }
 
@@ -73,21 +103,47 @@ export function createHubSettings(
   injected?: HarnessRunner,
   rootPinned = false,
   receiptIndex?: DiscoveryIndex,
+  harnessStartup?: Promise<HarnessStartup>,
 ) {
   let localRunner = injected;
   let runnerError: Error | undefined;
+  let runtimeDiagnostics: readonly CompatibilityDiagnostic[] = [];
+  let pending = injected === undefined;
+  const startup = injected
+    ? Promise.resolve()
+    : Promise.resolve()
+        .then(() => harnessStartup ?? prepareNodeHarness())
+        .catch(() => ({
+          deps: null,
+          diagnostics: [
+            hcnDiagnostic(
+              unknownInstallation,
+              "runtime-start",
+              "the selected installation could not be inspected",
+            ),
+          ].filter((diagnostic): diagnostic is CompatibilityDiagnostic => diagnostic !== null),
+        }))
+        .then((result) => {
+          pending = false;
+          runtimeDiagnostics = result.diagnostics;
+          if (result.deps) localRunner = createHcnRunner(result.deps);
+          else
+            runnerError = new HubError(
+              `Harness inspection is unavailable. ${result.diagnostics.map(diagnosticMessage).join(" ")}`,
+              "E-HUB-03",
+              400,
+              ["Review settings"],
+              result.diagnostics[0],
+            );
+        });
   const runner = (): HarnessRunner => {
     if (runnerError) throw runnerError;
-    try {
-      localRunner ??= createHcnRunner(nodeHarnessDeps());
-      return localRunner;
-    } catch {
-      runnerError = new HubError(
-        "Harness inspection is unavailable. Repair hcn and restart Lucid.",
+    if (!localRunner)
+      throw new HubError(
+        "Harness inspection is unavailable while the startup check is pending.",
         "E-HUB-03",
       );
-      throw runnerError;
-    }
+    return localRunner;
   };
   const checked = new Map<string, Promise<Settings>>();
   const validate = (choice: unknown): Promise<Settings> => {
@@ -101,7 +157,56 @@ export function createHubSettings(
     return pending;
   };
   let choiceLists: ReturnType<typeof driverChoices> | undefined;
+  interface Observation {
+    readonly owners: Set<string>;
+    diagnostics: readonly CompatibilityDiagnostic[];
+  }
+  const observations = new Map<string, Observation>();
+  const selectedObservations = new Map<string, string>();
+  const releaseObservation = (dir: string): void => {
+    const previous = selectedObservations.get(dir);
+    if (previous === undefined) return;
+    const entry = observations.get(previous);
+    entry?.owners.delete(dir);
+    if (entry?.owners.size === 0) observations.delete(previous);
+    selectedObservations.delete(dir);
+  };
+  const observe = (
+    dir: string,
+    choice: Settings,
+    cwd: string | null,
+    resume?: string,
+  ): readonly CompatibilityDiagnostic[] => {
+    if (pending || runnerError || !cwd || choice.profile === "interactive") {
+      releaseObservation(dir);
+      return [];
+    }
+    const selectedRunner = runner();
+    const key = JSON.stringify([selectedRunner.installation, choice, cwd, resume]);
+    if (selectedObservations.get(dir) !== key) releaseObservation(dir);
+    selectedObservations.set(dir, key);
+    const existing = observations.get(key);
+    if (existing) {
+      existing.owners.add(dir);
+      return existing.diagnostics;
+    }
+    const entry: Observation = { owners: new Set([dir]), diagnostics: [] };
+    observations.set(key, entry);
+    void selectedRunner
+      .inspect(choice.harness, { ...choice, runtime: { cwd, profile: choice.profile, resume } })
+      .then((facts) => {
+        const diagnostic = selectionDiagnostic(facts, choice, selectedRunner.installation);
+        entry.diagnostics = diagnostic ? [diagnostic] : [];
+      })
+      .catch((error) => {
+        const diagnostic =
+          failureDiagnostic(error) ?? selectionProblem(choice, selectedRunner.installation);
+        entry.diagnostics = [{ ...diagnostic, severity: "warning" }];
+      });
+    return entry.diagnostics;
+  };
   const choices = (): ReturnType<typeof driverChoices> => {
+    if (pending) return Promise.resolve(driverChoicesFromFacts({}));
     if (choiceLists) return choiceLists;
     try {
       choiceLists = driverChoices(runner());
@@ -112,10 +217,27 @@ export function createHubSettings(
     }
     return choiceLists;
   };
-  const project = async (dir: string, actual: Partial<Settings> = {}) => {
+  const project = async (
+    dir: string,
+    actual: Partial<Settings> = {},
+    sessions: Readonly<Partial<Record<Settings["harness"], string>>> = {},
+  ) => {
     const state = preferenceState(dir);
     const location = locationProjection(readRecordMetadata(dir));
-    const base = { location, driverPreference: state.preference };
+    const base = {
+      compatibility: runtimeDiagnostics,
+      location,
+      driverPreference: state.preference,
+    };
+    const compatibility = (selected: Settings): readonly CompatibilityDiagnostic[] => [
+      ...runtimeDiagnostics,
+      ...observe(
+        dir,
+        selected,
+        location.status === "available" ? location.workingDirectory : null,
+        sessions[selected.harness],
+      ),
+    ];
     try {
       if (state.error) throw new HubError(state.error, "E-HUB-03");
       const saved = state.preference;
@@ -123,9 +245,11 @@ export function createHubSettings(
         const selected = await validate(saved);
         return {
           ...base,
+          compatibility: compatibility(selected),
           conversationSettings: { selected, revision: state.revision, error: null },
         };
       }
+      releaseObservation(dir);
       const defaults = readUserConfig(configLocation).defaults;
       const harness = saved?.harness ?? actual.harness ?? defaults.harness;
       const compatible = actual.harness === harness ? actual : {};
@@ -152,12 +276,20 @@ export function createHubSettings(
               ? { provider: defaults.provider }
               : {}),
       });
-      return { ...base, conversationSettings: { selected, revision: state.revision, error: null } };
-    } catch (error) {
       return {
         ...base,
+        compatibility: runtimeDiagnostics,
+        conversationSettings: { selected, revision: state.revision, error: null },
+      };
+    } catch (error) {
+      releaseObservation(dir);
+      const diagnostic = failureDiagnostic(error);
+      return {
+        ...base,
+        compatibility: [...runtimeDiagnostics, ...(diagnostic ? [diagnostic] : [])],
         conversationSettings: {
           selected: null,
+          errorInCompatibility: diagnostic !== undefined,
           revision: state.revision,
           error: error instanceof Error ? error.message : "Settings unavailable",
         },
@@ -165,14 +297,17 @@ export function createHubSettings(
     }
   };
   return {
+    compatibility: () => runtimeDiagnostics,
     choices,
     project,
     recovery: createRecoveryAvailability(runner),
     async defaults() {
+      await startup;
       const lists = await choices();
       try {
         const config = readUserConfig(configLocation);
         return {
+          compatibility: runtimeDiagnostics,
           selected: await validate(config.defaults),
           choices: lists,
           configPath: config.path,
@@ -182,7 +317,9 @@ export function createHubSettings(
         };
       } catch (error) {
         return {
+          compatibility: runtimeDiagnostics,
           selected: null,
+          errorInCompatibility: failureDiagnostic(error) !== undefined,
           choices: lists,
           restartRequired: false,
           rootPinned,
@@ -191,6 +328,7 @@ export function createHubSettings(
       }
     },
     async update(dir: string, id: string, value: unknown) {
+      await startup;
       const request = objectBody(value);
       if (!Number.isSafeInteger(request.expectedRevision) || Number(request.expectedRevision) < 0)
         throw new HubError("An expected settings revision is required.", "E-HUB-03", 400, [
@@ -204,6 +342,7 @@ export function createHubSettings(
       return replaceSettings(dir, id, Number(request.expectedRevision), await validate(request));
     },
     async create(value: unknown) {
+      await startup;
       const request = objectBody(value);
       for (const key of Object.keys(request))
         if (!["creationId", "workingDirectory", "settings"].includes(key))

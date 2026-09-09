@@ -1,14 +1,13 @@
 # Active RFCs
 
-RFC 21 is implemented on `feat/shared-application-and-artifact-themes`.
+RFC 21 is implemented.
 Its completed proposal, review, and tickets are preserved in commit `b0562e3`.
 Current appearance contracts live in [artifacts](../artifacts.md#application-and-artifact-appearance)
 and [the design reference](../design.md).
 
-RFC 20 drafts [agent compatibility feedback](20_agent-compatibility-feedback.rfc.md).
-It specifies warnings and errors for the selected HCN and harness installations,
-with manual package repair and runtime restart. It is not accepted or implemented.
-
+RFC 20 is implemented. Its proposal, review, and four resolved tickets are
+preserved in commit `aacacfe`. Current contracts live in
+[agent compatibility feedback](../compatibility.md).
 
 RFC 19 implements [Codex native context management](19_codex-native-context-management.rfc.md)
 in the local build. Published dependency integration remains separate.

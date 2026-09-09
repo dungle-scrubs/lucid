@@ -1,3 +1,4 @@
+import { compatibilityMessage, compatibilityText } from "./compatibility.js";
 import { recoveryPolicy } from "./execution.js";
 import { supportsManagedInput } from "./frames.js";
 import type { ChannelState } from "./reducer.js";
@@ -52,7 +53,11 @@ export function executionViews(
           ...base,
           status: "held",
           code: execution.hold.code,
-          reason: execution.hold.reason,
+          reason: execution.hold.compatibility
+            ? compatibilityMessage(execution.hold.compatibility)
+            : execution.hold.code === "E-HUB-03"
+              ? "This attempt could not start with the selected driver. Historical inspection details are unavailable. Check the selected installation and settings, restart Lucid after repair, and try again."
+              : compatibilityText(execution.hold.reason),
         };
       case "attempt-started":
         return {
@@ -71,7 +76,10 @@ export function executionViews(
           ...base,
           status: beforeStart ? "held" : outcome.kind === "uncertain" ? "uncertain" : "failed",
           code: outcome.failure.code,
-          reason: outcome.failure.reason,
+          reason:
+            outcome.failure.evidence === "harness-refusal"
+              ? "HCN refused this historical attempt. Inspection details are unavailable. Check the selected installation and settings, restart Lucid after repair, and try again."
+              : compatibilityText(outcome.failure.reason),
         };
       }
     }

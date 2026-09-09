@@ -11,6 +11,14 @@
  * lock, or the protocol. It converts a subprocess's stdout into events.
  */
 
+import { EventKind } from "../protocol/events.js";
+import {
+  diagnosticMessage,
+  failureDiagnostic,
+  refusalDetail,
+  safeFact,
+  selectionProblem,
+} from "./compatibility.js";
 import { countContext } from "./context-accounting.js";
 import { decodeHarnessLine, type HarnessEvent } from "./events.js";
 import {
@@ -79,6 +87,30 @@ const drainStderr = (proc: { readonly stderr: AsyncIterable<string> }, _label: s
 
 export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
   const log = deps.log ?? (() => {});
+  const safeRefusal = (
+    event: HarnessEvent,
+    choice: { readonly harness: string; readonly model?: string },
+    origin: "execution-check" | "session-handshake",
+  ): HarnessEvent => {
+    const failure =
+      event.kind === EventKind.failure ? event : "failure" in event ? event.failure : null;
+    if (
+      !failure ||
+      typeof failure !== "object" ||
+      !("class" in failure) ||
+      failure.class !== "rejected"
+    )
+      return event;
+    const diagnostic = selectionProblem(
+      choice,
+      deps.installation,
+      "selection-unsupported",
+      refusalDetail("issue" in failure ? failure.issue : null),
+      origin,
+    );
+    const safe = { ...failure, message: diagnosticMessage(diagnostic), compatibility: diagnostic };
+    return event.kind === EventKind.failure ? { ...event, ...safe } : { ...event, failure: safe };
+  };
 
   /** Run hcn to completion and return its stdout lines. Used by the
    * inspection commands, which never spawn a harness. */
@@ -157,7 +189,7 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
     };
   };
 
-  const inspect: HarnessRunner["inspect"] = async (harness, choice) => {
+  const inspectUnchecked: HarnessRunner["inspect"] = async (harness, choice) => {
     let runtime: HarnessFacts["runtime"];
     if (
       choice &&
@@ -184,8 +216,24 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
         choice.runtime?.cwd,
         choice.signal,
       );
-      if (check.code !== 0)
-        throw new HarnessRefusal("invalid-settings", check.err.join("\n") || check.out.join("\n"));
+      if (check.code !== 0) {
+        const refusal = [...check.out, ...check.err]
+          .map(decodeHarnessLine)
+          .find((event) => event?.kind === EventKind.failure && event.class === "rejected");
+        const diagnostic = selectionProblem(
+          { harness, model: choice.model },
+          deps.installation,
+          refusal ? "selection-unsupported" : "inspection-unavailable",
+          refusal ? refusalDetail("issue" in refusal ? refusal.issue : null) : undefined,
+          choice.diagnosticOrigin,
+        );
+        throw new HarnessRefusal(
+          "invalid-settings",
+          diagnosticMessage(diagnostic),
+          undefined,
+          diagnostic,
+        );
+      }
       if (choice.runtime) {
         let value: unknown;
         try {
@@ -214,6 +262,8 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
         ) {
           const { path, version } = inspectedExecutable(executable);
           runtime = {
+            verifiedAgainst:
+              typeof parsed.verifiedAgainst === "string" ? parsed.verifiedAgainst : null,
             executable: { path, version },
             resume: {
               status:
@@ -232,6 +282,30 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
     const facts = factCache.get(harness) ?? (await readFacts(harness, choice?.signal));
     factCache.set(harness, facts);
     return runtime === undefined ? facts : { ...facts, runtime };
+  };
+  const inspect: HarnessRunner["inspect"] = async (harness, choice) => {
+    try {
+      return await inspectUnchecked(harness, choice);
+    } catch (error) {
+      if (failureDiagnostic(error)) throw error;
+      const issue = error instanceof HarnessRefusal ? error.issue : "inspect-failed";
+      const detail =
+        issue === "inspection-timeout"
+          ? "harness inspection timed out"
+          : issue === "inspection-limit"
+            ? "harness inspection response exceeded its limit"
+            : issue === "inspection-cancelled"
+              ? "harness inspection cancelled"
+              : "harness inspection is unavailable or returned malformed evidence";
+      const diagnostic = selectionProblem(
+        { harness, model: choice?.model },
+        deps.installation,
+        "inspection-unavailable",
+        detail,
+        choice?.diagnosticOrigin,
+      );
+      throw new HarnessRefusal(issue, diagnosticMessage(diagnostic), undefined, diagnostic);
+    }
   };
   const factCache = new Map<HarnessName, HarnessFacts>();
   const readFacts = async (harness: HarnessName, signal?: AbortSignal): Promise<HarnessFacts> => {
@@ -340,7 +414,7 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
         try {
           for await (const line of lines(proc.stdout)) {
             const event = decodeHarnessLine(line);
-            if (event !== null) yield event;
+            if (event !== null) yield safeRefusal(event, opts, "execution-check");
           }
           drained = true;
           await proc.exited;
@@ -418,7 +492,13 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
           // checked once at resolution; this is the stream saying the same
           // thing, and it is the only check a `run` path could not make.
           if (typeof e.hcn === "string" && belowFloor(e.hcn)) {
-            refusal = new HarnessVersionError(e.hcn, HCN_MIN_VERSION);
+            refusal = new HarnessVersionError(
+              e.hcn,
+              HCN_MIN_VERSION,
+              deps.bin,
+              deps.installation,
+              "session-handshake",
+            );
             settleOpen();
             continue;
           }
@@ -482,12 +562,29 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
           // A refusal before the session line: hcn writes failure + closed
           // and exits 2. Nothing was spawned; the caller must change options.
           const f = event as Extract<HarnessEvent, { kind: "failure" }>;
-          refusal = new HarnessRefusal(String(f.issue ?? "rejected"), f.message);
+          const diagnostic =
+            f.class === "rejected"
+              ? selectionProblem(
+                  opts,
+                  deps.installation,
+                  "selection-unsupported",
+                  refusalDetail(f.issue),
+                  "session-handshake",
+                )
+              : undefined;
+          refusal = new HarnessRefusal(
+            String(f.issue ?? "rejected"),
+            diagnostic
+              ? diagnosticMessage(diagnostic)
+              : `HCN could not open the session (${safeFact(f.class) ?? "unknown"} failure).`,
+            undefined,
+            diagnostic,
+          );
           settleOpen();
           continue;
         }
         if (currentTurn !== null) {
-          currentTurn.push(event);
+          currentTurn.push(safeRefusal(event, opts, "execution-check"));
           continue;
         }
         // No turn open: hold it for the next one rather than dropping it.
@@ -595,6 +692,13 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
   };
 
   return {
+    installation: deps.installation,
+    reportCompatibility: (diagnostic) => {
+      deps.log?.({ event: "compatibility", diagnostic });
+      console.error(
+        `${diagnostic.severity === "error" ? "Error" : "Warning"}: ${diagnosticMessage(diagnostic)}`,
+      );
+    },
     openSession,
     streamTurn,
     inspect,

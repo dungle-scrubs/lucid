@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "./conversation-panel.css";
 @import "./content-comparison.css";
+@import "./compatibility-notice.css";
 
 .input-recovery-text {
   max-block-size: 8rem;

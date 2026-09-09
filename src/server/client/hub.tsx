@@ -8,6 +8,7 @@ import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { ConversationPage, ListedConversation } from "../../protocol/conversations.js";
 import { TOKEN_HEADER } from "../constants.js";
+import { CompatibilityNotice, useRuntimeCompatibility } from "./compatibility-notice.js";
 import { ConversationRename } from "./conversation-rename.js";
 import { NewConversation, PENDING_CREATION } from "./new-conversation.js";
 import { ThemeControls } from "./theme-controls.js";
@@ -97,6 +98,9 @@ function Project({
 }
 
 function Hub() {
+  const compatibility = useRuntimeCompatibility((signal) =>
+    apiFetch("defaults", undefined, signal),
+  );
   const [creating, setCreating] = useState(() => sessionStorage.getItem(PENDING_CREATION) !== null);
   const [search, setSearch] = useState("");
   const query = useInfiniteQuery({
@@ -154,6 +158,7 @@ function Hub() {
         </Button>
         <ThemeControls />
       </header>
+      <CompatibilityNotice diagnostics={compatibility} />
       <main className="hub-main">
         {creating ? <NewConversation request={apiFetch} /> : null}
         <label className="hub-search">
