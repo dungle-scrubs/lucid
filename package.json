@@ -1,6 +1,6 @@
 {
   "name": "@dungle-scrubs/lucid",
-  "version": "2.0.0-beta.2",
+  "version": "2.0.0-beta.3",
   "type": "module",
   "engines": {
     "bun": ">=1.3"
