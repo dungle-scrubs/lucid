@@ -29,7 +29,7 @@ export const useConversationPanel = (search: string, defaultOpen = false, viewId
   const [choice, setOpen] = React.useState(() => restoreConversationPanel(search, key));
   const open = choice ?? defaultOpen;
   const id = React.useId();
-  const label = open ? "Hide conversation" : "Show conversation";
+  const label = open ? "Hide chat" : "Show chat";
   const control = (
     <button
       aria-controls={id}
@@ -53,7 +53,7 @@ export const useConversationPanel = (search: string, defaultOpen = false, viewId
     open,
     panelProps: {
       "aria-hidden": !open,
-      "aria-label": "Conversation",
+      "aria-label": "Chat",
       id,
       inert: open ? undefined : "",
     },

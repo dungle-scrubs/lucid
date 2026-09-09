@@ -14,7 +14,7 @@ export const readConversationTitle = async (dir: string, saved?: string): Promis
   if (title !== undefined) return title;
   const stream = createReadStream(pathsForDir(dir).logPath);
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
-  let fallback = "New conversation";
+  let fallback = conversationTitle("");
   try {
     for await (const line of lines) {
       if (!line.trim()) continue;

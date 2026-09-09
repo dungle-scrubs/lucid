@@ -52,6 +52,17 @@ for (const log of result.logs) console.warn(String(log));
  * build result reports success in both cases. */
 const verifyTailwindCompiled = async () => {
   const bytes = await Bun.file(OUTFILE).text();
+  for (const shell of ["reader", "hub"]) {
+    const script = bytes.match(
+      new RegExp(`<script id="lucid-theme-bootstrap-${shell}">([\\s\\S]*?)</script>`),
+    )?.[1];
+    if (
+      !script?.includes('localStorage.getItem("lucid.theme.v1")') ||
+      !script.includes("style.colorScheme")
+    ) {
+      throw new Error(`${OUTFILE} is missing the ${shell} prepaint appearance bootstrap.`);
+    }
+  }
   if (!bytes.includes(COMPILED_MARKER)) {
     throw new Error(
       `${OUTFILE} carries no compiled Tailwind. The plugin did not run, and the binary would serve a stylesheet with no utilities and no theme in it.`,

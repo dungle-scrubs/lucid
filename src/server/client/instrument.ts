@@ -110,6 +110,24 @@ const FRAME_TOKENS = `
   --lucid-font-heading: "Source Serif 4", ui-serif, Georgia, serif;
 }
 
+@media (prefers-color-scheme: dark) {
+  :root {
+    --lucid-color-bg: #202020;
+    --lucid-color-surface: #2a2929;
+    --lucid-color-text: #eeebeb;
+    --lucid-color-accent: #62c5ee;
+    --lucid-color-accent-2: #ff90b1;
+    --lucid-color-neutral-300: #444141;
+    --lucid-color-neutral-500: #9b9797;
+    --lucid-color-accent-100: #14303c;
+    --lucid-color-accent-200: #1c4352;
+    --lucid-color-accent-300: #276078;
+    --lucid-color-accent-400: #3986a3;
+    --lucid-color-accent-800: #cbeeff;
+    --lucid-color-accent-2-800: #ffdee6;
+  }
+}
+
 /* The five local tokens, verbatim from the handoff (v2: eggshell, not
    cream - the v1 warm-ink treatment is gone) and identical to the ones
    app.css defines (stage 1). color-mix runs in the browser as-is: this
@@ -123,6 +141,9 @@ const FRAME_TOKENS = `
   --lucid-ground-2: color-mix(in srgb, var(--lucid-color-bg) 95%, var(--lucid-color-text) 5%);
   --lucid-edge: color-mix(in srgb, var(--lucid-color-text) 13%, transparent);
   --lucid-edge-2: color-mix(in srgb, var(--lucid-color-text) 22%, transparent);
+}
+@media (prefers-color-scheme: dark) {
+  :root { --lucid-paper: #272626; }
 }
 
 /* The chip is the only text lucid draws inside the frame, and it is digits.
@@ -238,11 +259,11 @@ html.lucid-annotate a[href], html.lucid-annotate a[href] * {
  * cue in the document only has to answer "can I type here" - a question
  * asked about one block, at the moment the pointer is over it. The caret
  * is cyan wherever it lands. */
-[${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]) {
+[${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]):not(.lucid-selected) {
   outline: none !important;
   caret-color: var(--lucid-color-accent) !important;
 }
-[${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]):hover {
+[${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]):not(.lucid-selected):hover {
   outline: 1px dashed color-mix(in srgb, var(--lucid-color-text) 35%, transparent) !important;
   outline-offset: 2px !important;
 }
@@ -250,7 +271,7 @@ html.lucid-annotate a[href], html.lucid-annotate a[href] * {
    revealing on approach and showing it always are the same decision said
    for two input devices, not two different decisions. */
 @media (hover: none) {
-  [${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]) {
+  [${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]):not(.lucid-selected) {
     outline: 1px dashed color-mix(in srgb, var(--lucid-color-text) 35%, transparent) !important;
     outline-offset: 2px !important;
   }
@@ -532,11 +553,12 @@ const script = (artifactId: string, version: number, author: string): string => 
   // The two were one mode, and a single click did both: it ticked a box and
   // selected the row at the same time. Nothing said which was happening.
   //
-  // Annotate is where a document opens. The page defaults to it too, and both
-  // have to agree from the first paint: a frame starting in edit mode would
-  // render every block editable for the moment before the page's first mode
-  // message arrives.
-  var mode = "annotate";
+  // Edit from the first paint. Touch can latch annotation; the keyboard
+  // holds it only while Option/Alt is down.
+  var mode = "edit";
+  var baseMode = "edit";
+  var annotationHeld = false;
+  var annotationGesture = false;
   // A version that is not the current one is read only: it cannot be edited
   // and it cannot be marked up. RFC-07 R6 and R7. This is not a third mode -
   // the mode is still whatever it is, and it applies again the moment the
@@ -589,6 +611,41 @@ const script = (artifactId: string, version: number, author: string): string => 
       document.activeElement.blur();
     }
   };
+
+  var updateMode = function () {
+    var next = baseMode === "annotate" || annotationHeld || annotationGesture ? "annotate" : "edit";
+    if (next === mode) return;
+    mode = next;
+    applyMode();
+  };
+  var holdAnnotation = function (held) {
+    if (annotationHeld === held) return;
+    annotationHeld = held;
+    updateMode();
+    parent.postMessage({ source: SOURCE, kind: "annotation-held", held: held }, "*");
+  };
+  var syncModifiers = function (e) {
+    if (!e.isTrusted) return;
+    holdAnnotation(e.altKey && !(e.getModifierState && e.getModifierState("AltGraph")));
+  };
+  document.addEventListener("keydown", syncModifiers, true);
+  document.addEventListener("keyup", syncModifiers, true);
+  // A key may have been pressed in the parent or released outside the app.
+  // Pointer flags are authoritative before a hover or click is interpreted.
+  document.addEventListener("mousemove", syncModifiers, true);
+  document.addEventListener("mousedown", syncModifiers, true);
+  window.addEventListener("blur", function () {
+    annotationGesture = false;
+    holdAnnotation(false);
+    updateMode();
+  });
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) {
+      annotationGesture = false;
+      holdAnnotation(false);
+      updateMode();
+    }
+  });
 
   // A control the agent authored is addressed by lucid's element id, so a
   // value survives a document whose own ids are absent or repeated.
@@ -708,9 +765,7 @@ const script = (artifactId: string, version: number, author: string): string => 
     if (selected.length > 0 || picked) post();
   };
 
-  // The frame has its own keyboard, so a key pressed with the caret in the
-  // document never reaches the page. The mode toggle has to work from in
-  // here, which means asking the same question and handing the answer out.
+  // Queue sending also works with the caret inside the sandboxed document.
   document.addEventListener(
     "keydown",
     function (e) {
@@ -723,14 +778,6 @@ const script = (artifactId: string, version: number, author: string): string => 
         parent.postMessage({ source: SOURCE, kind: "hotkey", hotkey: "send-queue" }, "*");
         return;
       }
-      if (!e.altKey || e.key !== "Backspace") return;
-      if (e.ctrlKey || e.metaKey || e.shiftKey) return;
-      // The browser would delete the word behind the caret. This is the one
-      // key lucid takes from the document, and it takes it in both modes:
-      // getting back to annotating from a caret in a field is the whole
-      // point of having it.
-      e.preventDefault();
-      parent.postMessage({ source: SOURCE, kind: "hotkey", hotkey: "toggle-mode" }, "*");
     },
     true
   );
@@ -852,14 +899,15 @@ const script = (artifactId: string, version: number, author: string): string => 
 
     if (m.kind === "mode" && (m.mode === "edit" || m.mode === "annotate")) {
       var nextReadOnly = m.readOnly === true;
-      if (m.mode !== mode || nextReadOnly !== readOnly) {
-        mode = m.mode;
+      baseMode = m.mode;
+      // Focused-frame input is newer than a parent echo in flight.
+      if (!document.hasFocus()) annotationHeld = m.held === true;
+      updateMode();
+      if (nextReadOnly !== readOnly) {
         readOnly = nextReadOnly;
-        // Leaving annotate mode drops the selection: it addressed elements
-        // for a note, and there is no note being written in edit mode. A
-        // version going read only drops it for the same reason - there is
-        // nothing to write about a version that cannot be annotated.
-        if ((mode === "edit" || readOnly) && (selected.length > 0 || picked)) {
+        // Releasing Option preserves both element and range picks. Only
+        // read-only admission or an explicit deselect ends the note.
+        if (readOnly && (selected.length > 0 || picked)) {
           selected = [];
           picked = null;
           window.getSelection() && window.getSelection().removeAllRanges();
@@ -1274,6 +1322,7 @@ const script = (artifactId: string, version: number, author: string): string => 
   // happening from one press, in the wrong order.
   document.addEventListener("mousedown", function (e) {
     if (!e.isTrusted || mode !== "annotate" || readOnly) return;
+    annotationGesture = true;
     if (linkAt(e.target)) return;
     // Cancelling every mousedown also cancels the browser's own text
     // selection, which is what a drag is made of - so annotating a phrase
@@ -1317,6 +1366,9 @@ const script = (artifactId: string, version: number, author: string): string => 
   // click handler below.
   document.addEventListener("mouseup", function (e) {
     if (!e.isTrusted || mode !== "annotate" || readOnly) return;
+    // Finish the gesture in the mode in which it started, even if Alt was
+    // released during the drag. The following click still belongs to it.
+    setTimeout(function () { annotationGesture = false; updateMode(); }, 0);
     var sel = window.getSelection();
     if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
     var exact = sel.toString();
@@ -1357,7 +1409,7 @@ const script = (artifactId: string, version: number, author: string): string => 
     var id = el.getAttribute(ATTR);
     // Command on a Mac, control elsewhere. Holding it adds a spot to the
     // selection lucid already has; without it a click starts a new one.
-    var adding = e.metaKey || e.ctrlKey;
+    var adding = baseMode === "annotate" || (annotationHeld && (e.metaKey || e.ctrlKey));
     var at = selected.indexOf(id);
     if (adding) {
       if (at === -1) selected.push(id);

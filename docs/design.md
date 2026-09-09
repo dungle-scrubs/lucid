@@ -17,11 +17,15 @@ and appears only when there is something to report. Save and discard belong
 in the document header; guidance stays beneath the document. Center
 the sheet within its column. The artifact can request its maximum width with
 `lucid-width` metadata; without it, the sheet fills the available pane. The
-Document width header control overrides that preference for this reader and
-artifact. Both choices fit the available pane, with a 320px frame floor where
+Width tab at the sheet’s top center overrides that preference for this reader
+and artifact. Hover, focus, or tap expands its slightly rounded border into a
+compact panel; the controls fade in after expansion starts. Moving away closes
+it after a short delay. Escape and tapping outside also dismiss it. Narrow,
+Reading, Full, and Default share one row above the slider. Default removes
+the reader override and follows the document’s preferred width. Both choices fit the available pane, with a 320px frame floor where
 space permits. Spare width shows the patterned ground. The slider starts at
-the measured width and displays actual pixels and percentage, while keeping
-the requested preference separate. Reset follows the artifact again. The
+the measured width and displays one live percentage, while keeping
+the requested preference separate. Reduced-motion settings disable the transition. The
 control remains available during unsaved edits and read-only viewing; comparison
 columns retain their own layout.
 
@@ -76,7 +80,7 @@ size together without size animation. Panel open/close animation remains.
 
 Composer and note sends retain one exact request in this tab until admission
 is known. A lost response or expired token keeps a visible saved-send card in
-the scrolling conversation, with explicit Retry. Reload restores that card
+the scrolling chat, with explicit Retry. Reload restores that card
 without sending it. A matching accepted receipt clears it; a matching
 admission refusal restores editable text. Malformed recovery data cannot be
 sent or replaced automatically. Discarding it is explicit and does not cancel
@@ -84,8 +88,12 @@ an accepted input. The recovery card must not push the composer off-screen.
 
 The artifact name uses 14px type and keeps its hover edit icon. Version
 tags use 10.5px type, a muted background, no border, and 4px corners.
-Annotate/Edit uses a segmented control with 6px outer and 4px inner
-corners; cyan marks the active mode.
+Edit is the default. Hold Option/Alt to annotate, adding Command for multiple
+spots. The sheet tab shows the active mode; desktop has no mode toggle. Touch
+devices retain Annotate and Done annotating. Releasing keys preserves the note.
+The note box has a drag handle, subdued placeholder text, and an arrow whose
+fill and border join the box. Dragging hides the arrow and keeps the box in
+place for the current note.
 
 ## Documents and notes
 
@@ -143,16 +151,20 @@ transcript remains in the conversation pane. Accepted source markers link to
 the corresponding note. Stale drafts disable fresh Send until Review latest;
 unresolved sends show recovery controls without changing their payload.
 
-Comparison has light and dark token sets. The surrounding application retains
-its existing light-only theme. Both comparison themes are checked at 390,
-768, and 1440px; the existing narrow-pane height divider remains available.
+Comparison follows the application appearance. Both palettes are checked at
+390, 768, and 1440px; the existing narrow-pane height divider remains available.
+Saved-version inspection follows the version-specific artifact policy.
 
 ## Limits of the design
 
-The interface is light-only. Preserve the existing narrow-window stacking
-and touch editing cues; a full mobile or touch redesign is not specified.
-The artifact iframe declares both color schemes so an authored document can
-respond to the system preference independently of the surrounding interface.
+The hub and reading view share a browser-owned System, Light, or Dark preference.
+The upper-right sun/moon action selects an override; adjacent Settings offers
+Follow system. Driver settings stay in the composer, whose Settings also opens
+Appearance. Preserve the existing narrow-window stacking and touch editing cues.
+The reading view and hub retain their own semantic palette vocabularies in both
+appearances. Annotation palettes are namespaced inside the artifact frame and
+follow its policy. See the artifact contract for declaration, storage, and save
+invariants. A full mobile or touch redesign is not specified.
 There is no shared-user ownership mode. Do not copy another person's locked
 document state from an old handoff into this single-user product.
 
@@ -171,7 +183,7 @@ current visibility per conversation in the tab's `sessionStorage`. Reloading res
 which takes precedence over the URL initializer. Invalid or unavailable storage
 falls back to the initializer. Toggles do not change URLs or conversation records.
 
-The header's Show conversation / Hide conversation button is available in all
+The header's Show chat / Hide chat button is available in all
 five header branches, including empty, unsaved, historical, comparison, and
 connection-error views. It exposes the expanded state and controlled panel.
 Closing moves focus to that button, makes the mounted panel inert and hidden

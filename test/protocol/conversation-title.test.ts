@@ -30,5 +30,5 @@ test("an annotation envelope without text or files does not invent a naming prom
     notes: [{ note: "", spots: [] }],
   });
   expect(namingInput(envelope)).toEqual({ kind: "empty" });
-  expect(namingPrompt(envelope)).toBe("New conversation");
+  expect(namingPrompt(envelope)).toBe("New artifact");
 });

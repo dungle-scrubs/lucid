@@ -14,6 +14,9 @@ interface InputRecoveryProps {
 export function InputRecovery(props: InputRecoveryProps) {
   const { busy, dead, onDiscard, onRetry, reason, state } = props;
   if (state.status === "idle") return null;
+  // Persisting a request before transport does not mean it needs recovery.
+  // An explicit retry keeps its existing recovery card while checking.
+  if (state.status === "unresolved" && busy && reason === null) return null;
   return (
     <section className="card input-recovery" aria-label="Saved send" aria-live="polite">
       <div className="card-title text-balance">

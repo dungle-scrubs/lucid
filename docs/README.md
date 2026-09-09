@@ -40,6 +40,10 @@ Do not maintain a second archive directory.
 
 ## Historical references
 
+Commit `b0562e3` contains RFC 21, its review, and the completed shared
+application and artifact appearance tickets. Current rules live in
+[the artifact contract](artifacts.md#application-and-artifact-appearance).
+
 Commit `4dcbb8d` contains the completed substrate plan, RFCs 02 through
 13, their reviews, the old decision register, and the resolved audits.
 RFC 10 was withdrawn. Later contracts supersede earlier proposals, so the

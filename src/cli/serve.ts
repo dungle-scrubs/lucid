@@ -46,10 +46,10 @@ export const serveConversation = async (opts: ServeOpts = {}): Promise<void> => 
   const log = opts.log ?? ((line: string) => process.stdout.write(`${line}\n`));
   const running = await startServe(opts);
   log(`lucid browser on ${running.url}`);
-  log(`open the conversation hub: ${running.url}/`);
+  log(`open the artifact hub: ${running.url}/`);
   if (opts.conversationId !== undefined || opts.conversationPanel !== undefined) {
     log(
-      `open a conversation: ${conversationViewUrl(running.url, opts.conversationId ?? "demo", opts.conversationPanel)}`,
+      `open an artifact: ${conversationViewUrl(running.url, opts.conversationId ?? "demo", opts.conversationPanel)}`,
     );
   }
 

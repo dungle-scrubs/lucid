@@ -1,5 +1,15 @@
 # Active RFCs
 
+RFC 21 is implemented on `feat/shared-application-and-artifact-themes`.
+Its completed proposal, review, and tickets are preserved in commit `b0562e3`.
+Current appearance contracts live in [artifacts](../artifacts.md#application-and-artifact-appearance)
+and [the design reference](../design.md).
+
+RFC 20 drafts [agent compatibility feedback](20_agent-compatibility-feedback.rfc.md).
+It specifies warnings and errors for the selected HCN and harness installations,
+with manual package repair and runtime restart. It is not accepted or implemented.
+
+
 RFC 19 implements [Codex native context management](19_codex-native-context-management.rfc.md)
 in the local build. Published dependency integration remains separate.
 
@@ -16,7 +26,7 @@ commit `000381b`; its current contract is in [the design reference](../design.md
 Current reading-view design is listed in the
 [documentation index](../README.md#browser-design).
 
-The highest allocated RFC number is **19**. The next RFC is **20**.
+The highest allocated RFC number is **21**. The next RFC is **22**.
 Never reset numbering because completed files have been removed. Before
 allocating, check this high-water mark, active filenames, and Git history;
 use one greater than the highest number allocated and update this mark.

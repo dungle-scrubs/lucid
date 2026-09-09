@@ -31,7 +31,7 @@ export function InputRecoveryPanel(props: InputRecoveryPanelProps) {
     state.kind === "pending"
       ? state.message
       : state.kind === "invalid"
-        ? "This saved send cannot be recovered. Inspect the conversation before discarding it."
+        ? "This saved send cannot be recovered. Inspect the artifact before discarding it."
         : state.kind === "storage-error"
           ? outcome?.kind === "accepted"
             ? "Note sent. Browser recovery data could not be cleared."

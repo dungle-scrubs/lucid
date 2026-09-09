@@ -9,6 +9,16 @@ changing what it covers.
 For changes larger than a correction, follow the RFC workflow in
 `docs/rfc/README.md` before code.
 
+## Explain the interface
+
+Always assume the user does not know how Lucid works or what its UI means.
+When designing or changing a control, icon, status, or interaction, make its
+purpose and behavior clear where it appears. Explain unfamiliar terms and
+visual indicators with plain labels, nearby help, or accessible rich tooltips
+available on hover and keyboard focus. Review the interface from a first-time
+user's perspective; understanding it must not require prior conversations or
+knowledge of the implementation.
+
 ## Build and verify - single command
 
 ```sh

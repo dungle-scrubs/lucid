@@ -154,9 +154,9 @@ test("attachment-only input has a short label and waits for the first text witho
     ],
   });
   host.enqueueInput({ id: "file", text, mode: "queue" });
-  expect(await readConversationTitle(paths.dir)).toBe("Attachment conversation");
+  expect(await readConversationTitle(paths.dir)).toBe("Artifact with attachments");
   expect(readRecordMetadata(paths.dir)).toMatchObject({
-    conversationTitle: "Attachment conversation",
+    conversationTitle: "Artifact with attachments",
     titleGeneration: { status: "waiting-input", attempts: 0 },
   });
   host.enqueueInput({ id: "text", text: "Explain the design", mode: "queue" });

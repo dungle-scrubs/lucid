@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="lucid-theme" content="adaptive">
+  <meta name="color-scheme" content="light dark">
+  <title>Watershed field notes</title>
+  <style>
+    :root { --page: #faf9f6; --ink: #242e2b; --muted: #56625c; --line: #c6cec6; --accent: #27664e; --wash: #e5eee6; }
+    @media (prefers-color-scheme: dark) {
+      :root { --page: #202724; --ink: #e9efea; --muted: #b2beb5; --line: #59645c; --accent: #a0cfb5; --wash: #303e35; }
+    }
+    :root { background: var(--page); color: var(--ink); }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 28px clamp(18px, 5vw, 56px) 56px; background: var(--page); color: var(--ink); font: 17px/1.65 Georgia, serif; }
+    main { max-width: 680px; margin-inline: auto; container-type: inline-size; }
+    main > * + * { margin-block-start: 24px; }
+    h1, h2, p, figure { margin-block: 0; }
+    h1 { font-size: clamp(30px, 6vw, 46px); line-height: 1.12; text-wrap: balance; }
+    h2 { font-size: 24px; text-wrap: balance; }
+    .eyebrow, figcaption, label { font: 13px/1.5 system-ui, sans-serif; }
+    .eyebrow { color: var(--muted); letter-spacing: .12em; text-transform: uppercase; }
+    a { color: var(--accent); cursor: pointer; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+    ::selection { background: var(--accent); color: var(--page); }
+    figure { overflow-x: auto; padding-block: 20px; border-block: 1px solid var(--line); }
+    figure > * + * { margin-block-start: 12px; }
+    svg { display: block; min-width: 520px; width: 100%; height: auto; }
+    svg text { fill: var(--ink); font: 14px system-ui, sans-serif; }
+    figcaption { color: var(--muted); }
+    .field { display: grid; gap: 6px; }
+    input { width: 100%; padding: 10px; color: var(--ink); background: var(--wash); border: 1px solid var(--line); border-radius: 3px; font: inherit; }
+    canvas { display: block; width: 100%; height: 36px; }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">Field notes · Example data</p>
+    <h1>Where the rain goes</h1>
+    <p id="summary">The upper catchment holds water longer than the open pasture. Keep the next survey focused on the stream edge.</p>
+    <figure aria-labelledby="chart-caption">
+      <svg viewBox="0 0 520 160" role="img" aria-label="Example water retention: woodland 78, meadow 52, pasture 31 percent">
+        <text x="0" y="30">Woodland</text><rect x="110" y="12" width="312" height="24" fill="var(--accent)"/><text x="436" y="30">78%</text>
+        <text x="0" y="80">Meadow</text><rect x="110" y="62" width="208" height="24" fill="var(--accent)"/><text x="332" y="80">52%</text>
+        <text x="0" y="130">Pasture</text><rect x="110" y="112" width="124" height="24" fill="var(--accent)"/><text x="248" y="130">31%</text>
+      </svg>
+      <figcaption id="chart-caption">Woodland 78%, meadow 52%, pasture 31%. Illustrative retention after one day; example data, not measurements.</figcaption>
+    </figure>
+    <h2 id="next-survey">Next survey</h2>
+    <p>Record the surface condition at each point. Compare the result with the <a href="#chart-caption">retention chart</a> before adding another site.</p>
+    <label class="field">Observer note<input id="observer" value="Return after rainfall"></label>
+    <figure>
+      <canvas width="640" height="36" aria-label="A decorative band representing the three survey areas"></canvas>
+      <figcaption>The band repeats the three survey areas. The chart above carries all values in text.</figcaption>
+    </figure>
+  </main>
+  <script>
+    // Repaint pixels only. SVG colors use static CSS; no theme writes to markup.
+    const palette = matchMedia('(prefers-color-scheme: dark)');
+    function repaint() {
+      const canvas = document.querySelector('canvas');
+      const context = canvas.getContext('2d');
+      const style = getComputedStyle(document.documentElement);
+      context.fillStyle = style.getPropertyValue('--wash');
+      context.fillRect(0, 0, 640, 36);
+      context.fillStyle = style.getPropertyValue('--accent');
+      for (let i = 0; i < 3; i++) context.fillRect(i * 214, 0, 150 - i * 35, 36);
+    }
+    palette.addEventListener('change', repaint);
+    repaint();
+  </script>
+</body>
+</html>

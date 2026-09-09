@@ -27,7 +27,6 @@ import {
   useExternalStoreRuntime,
   useMessage,
 } from "@assistant-ui/react";
-import * as Popover from "@radix-ui/react-popover";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -64,7 +63,7 @@ import { ContentComparisonView } from "./content-comparison.js";
 import { useConversationPanel } from "./conversation-panel.js";
 import type { DriverChoiceBody, DriverChoices, DriverPreference } from "./driver-menus.js";
 import { ExecutionRecovery } from "./execution-recovery.js";
-import { isModeToggle, isQueueSend } from "./hotkeys.js";
+import { isQueueSend } from "./hotkeys.js";
 import {
   ArchiveDuotone,
   ArrowDownDuotone,
@@ -76,7 +75,6 @@ import {
   ImageDuotone,
   LockDuotone,
   PaperclipDuotone,
-  PencilDuotone,
   ProhibitDuotone,
   TableDuotone,
   XDuotone,
@@ -100,10 +98,13 @@ import {
   writeConversationWidth,
 } from "./layout.js";
 import { LocationControl, type LocationState } from "./location-control.js";
+import { NoteAnchorHelp } from "./note-anchor-help.js";
+import { NotePopover } from "./note-popover.js";
 import { formatRoute, parseRoute, type Route, sameRoute } from "./route.js";
 import { seamsForLost } from "./seams.js";
 import { SettingsForm } from "./settings-form.js";
 import { SettingsPopover } from "./settings-popover.js";
+import { AppearanceSettings, ThemeControls } from "./theme-controls.js";
 import {
   collapseToolActivity,
   type Msg,
@@ -112,6 +113,10 @@ import {
   type SentBatch,
   weaveNotes,
 } from "./timeline.js";
+import { Tooltip } from "./tooltip.js";
+import { useArtifactAppearance } from "./use-artifact-appearance.js";
+import { useDocumentMode } from "./use-document-mode.js";
+
 import { diffVersions } from "./version-diff.js";
 import { isReadOnly, versionState } from "./version-state.js";
 
@@ -189,11 +194,6 @@ const DocName = ({
         }}
       >
         {shown}
-        {/* The affordance, on approach only: the name is the most
-            prominent word in the bar and needs no standing label beside it. */}
-        <span className="pencil">
-          <PencilDuotone size={14} />
-        </span>
       </button>
     );
   }
@@ -500,6 +500,7 @@ const Message = (): React.ReactElement => {
             const lostKey = `${n.note}:${spot?.id ?? ""}`;
             const goLost = (): void => light(lostKey);
             const fromVersion = status?.fromVersion;
+            const NoteTarget = canGo || lost ? "button" : "div";
             return (
               <React.Fragment key={lostKey}>
                 <div
@@ -509,52 +510,35 @@ const Message = (): React.ReactElement => {
                     canGo ? "goes" : "",
                     lit === lostKey ? "lit" : "",
                   ]
-                    .filter((c) => c !== "")
+                    .filter(Boolean)
                     .join(" ")}
-                  {...(canGo
-                    ? {
-                        role: "button" as const,
-                        tabIndex: 0,
-                        title: "Go to what this note is about",
-                        onClick: () => focusSpot?.(targets),
-                        onKeyDown: (e: React.KeyboardEvent) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            focusSpot?.(targets);
-                          }
-                        },
-                      }
-                    : lost
-                      ? {
-                          role: "button" as const,
-                          tabIndex: 0,
-                          title: "Nothing to go to - the passage is gone from this version",
-                          onClick: goLost,
-                          onKeyDown: (e: React.KeyboardEvent) => {
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.preventDefault();
-                              goLost();
-                            }
-                          },
-                        }
-                      : {})}
                 >
                   <span className="note-card-head">
                     <span className="note-card-kind">Your note</span>
-                    {status === undefined ? null : (
-                      <Bands how={how ?? null} lost={status.lost} later={status.later} />
-                    )}
-                    <span className="note-card-state">{state}</span>
+                    <NoteAnchorHelp>
+                      {status === undefined ? null : (
+                        <Bands how={how ?? null} lost={status.lost} later={status.later} />
+                      )}
+                      <span className="note-card-state">{state}</span>
+                    </NoteAnchorHelp>
                   </span>
-                  <span className="note-card-quote">
-                    {n.spots.map((sp) => `“${sp.snippet.slice(0, 44)}”`).join(", ")}
-                  </span>
-                  <span className="note-card-note">{n.note}</span>
-                  {/* Sent attachments ride the note: read, never imported.
-                      The "read in full - N words, N rows" confirmation line
-                      is NOT drawn, because the client would have to compute
-                      it and the record never states it; the agent's own turn
-                      text carries whatever it measured. */}
+                  <NoteTarget
+                    className="note-card-target"
+                    {...(canGo || lost
+                      ? {
+                          type: "button" as const,
+                          "aria-label": canGo
+                            ? `Go to the passage for your note: ${n.note}`
+                            : `Highlight your lost note: ${n.note}`,
+                          onClick: canGo ? () => focusSpot?.(targets) : goLost,
+                        }
+                      : {})}
+                  >
+                    <span className="note-card-quote">
+                      {n.spots.map((sp) => `“${sp.snippet.slice(0, 44)}”`).join(", ")}
+                    </span>
+                    <span className="note-card-note">{n.note}</span>
+                  </NoteTarget>
                   {n.files === undefined || n.files.length === 0 ? null : (
                     <span className="note-card-files">
                       {n.files.map((f) => (
@@ -570,8 +554,8 @@ const Message = (): React.ReactElement => {
                   <div className="card">
                     <div className="card-title">A lost note is a fact, not an error.</div>
                     <div className="card-body">
-                      The words it was attached to are not in this version. It stays in the
-                      conversation, and it still reads on v{fromVersion}, where the passage lives.
+                      The words it was attached to are not in this version. It stays in the chat,
+                      and it still reads on v{fromVersion}, where the passage lives.
                     </div>
                     <div className="card-actions">
                       <button type="button" onClick={() => compareWith(fromVersion)}>
@@ -856,6 +840,7 @@ const ComposerSettings = ({
   const [open, setOpen] = React.useState(false);
   return (
     <SettingsPopover label="Settings" open={open} onOpenChange={setOpen}>
+      <AppearanceSettings />
       <SettingsForm
         key={preference?.revision ?? 0}
         initial={{
@@ -985,7 +970,7 @@ const Thread = ({
       <div className="thread-wrap">
         <ThreadPrimitive.Viewport autoScroll className={dead ? "thread dead" : "thread"}>
           <ThreadPrimitive.Empty>
-            <div className="empty">Nothing in this conversation yet.</div>
+            <div className="empty">No messages yet.</div>
           </ThreadPrimitive.Empty>
           <ThreadPrimitive.Messages components={{ Message }} />
 
@@ -1181,7 +1166,7 @@ const Thread = ({
                     ? "Drop to attach — the original is kept"
                     : interactive
                       ? "Interject…"
-                      : "Send to the conversation…"
+                      : "Send a message…"
             }
             rows={2}
             aria-label={interactive ? "Interject" : "Message"}
@@ -1320,6 +1305,8 @@ const DocumentFrame = ({
   onSeamClick,
   seams,
   onHotkey,
+  onAnnotationHeld,
+  annotationHeld,
   onDirty,
   noteCounts,
   mode,
@@ -1360,7 +1347,9 @@ const DocumentFrame = ({
    * the frame says it is ready. */
   seams: readonly { before: number; label: string; version: number }[];
   /** A key the frame caught that means something to the whole page. */
-  onHotkey: (which: "toggle-mode" | "send-queue") => void;
+  onHotkey: (which: "send-queue") => void;
+  onAnnotationHeld: (held: boolean) => void;
+  annotationHeld: boolean;
   /** The frame says the person changed something in it, and how many blocks
    * carry an edit - the quantity the discard dialog names (6c). */
   onDirty: (edits: number) => void;
@@ -1376,6 +1365,11 @@ const DocumentFrame = ({
   readOnly: boolean;
 }): React.ReactElement => {
   const ref = React.useRef<HTMLIFrameElement | null>(null);
+  const colorScheme = useArtifactAppearance(doc.bytes);
+  const frameSource = React.useMemo(
+    () => instrumentArtifact(doc.bytes, doc.artifactId, doc.version),
+    [doc.bytes, doc.artifactId, doc.version],
+  );
   const pending = React.useRef(new Map<string, (spots: AnnotationSpot[]) => void>());
   const snaps = React.useRef(
     new Map<string, (v: { html: string; values: Record<string, string> } | null) => void>(),
@@ -1415,7 +1409,11 @@ const DocumentFrame = ({
       // it carries no artifact and is answered before anything is checked
       // against one.
       if (m.kind === "hotkey") {
-        if (m.hotkey === "toggle-mode" || m.hotkey === "send-queue") onHotkey(m.hotkey);
+        if (m.hotkey === "send-queue") onHotkey(m.hotkey);
+        return;
+      }
+      if (m.kind === "annotation-held" && typeof m.held === "boolean") {
+        onAnnotationHeld(m.held);
         return;
       }
 
@@ -1571,6 +1569,7 @@ const DocumentFrame = ({
     doc.version,
     onSelection,
     onHotkey,
+    onAnnotationHeld,
     onDirty,
     place,
     pendingRestore,
@@ -1664,22 +1663,23 @@ const DocumentFrame = ({
     // the version changes, and a fresh frame starts in edit mode.
     const send = (): void =>
       ref.current?.contentWindow?.postMessage(
-        { source: FRAME_MESSAGE_SOURCE, kind: "mode", mode, readOnly },
+        { source: FRAME_MESSAGE_SOURCE, kind: "mode", mode, held: annotationHeld, readOnly },
         "*",
       );
     send();
     const id = window.setInterval(send, 1000);
     return () => window.clearInterval(id);
-  }, [mode, readOnly]);
+  }, [mode, annotationHeld, readOnly]);
 
   return (
     <iframe
       ref={ref}
       key={`${doc.artifactId}@${doc.version}`}
       className="doc-frame"
+      style={{ colorScheme }}
       title={`${doc.artifactId} v${doc.version}`}
       sandbox="allow-scripts"
-      srcDoc={instrumentArtifact(doc.bytes, doc.artifactId, doc.version)}
+      srcDoc={frameSource}
     />
   );
 };
@@ -1852,6 +1852,12 @@ const App = (): React.ReactElement => {
     initiallyEmpty === true,
     conversationId,
   );
+  const headerControls = (
+    <>
+      {conversationPanel.control}
+      <ThemeControls />
+    </>
+  );
   /** Sent notes, by `artifactId@version` — the version each was made
    * against. */
   const [sentNotes, setSentNotes] = React.useState<Record<string, Annotation[]>>({});
@@ -1932,14 +1938,8 @@ const App = (): React.ReactElement => {
   const [editedCount, setEditedCount] = React.useState(0);
   const [saving, setSaving] = React.useState(false);
   const [saved, setSaved] = React.useState<string | null>(null);
-  /** What a click means right now. Two things wanted the same click — ticking
-   * a box and picking an element to write about — so which one it is, is a
-   * choice rather than a guess.
-   *
-   * Annotate is the default. What a person does with a document an agent
-   * produced is read it and say what is wrong with it; filling it in is the
-   * rarer act, and it is the one that has a mode switch to reach it. */
-  const [mode, setMode] = React.useState<"edit" | "annotate">("annotate");
+  const documentMode = useDocumentMode();
+  const { mode } = documentMode;
   const noteBox = React.useRef<HTMLTextAreaElement | null>(null);
   /** Where in the frame the selection sits, so the note box opens beside it
    * rather than in a panel at the bottom, away from what it is about. */
@@ -2037,11 +2037,6 @@ const App = (): React.ReactElement => {
    * must keep its identity across keystrokes, so it cannot close over the
    * draft itself. */
   const draftRef = React.useRef("");
-  /** Read from the hotkey callback, which must keep its identity. */
-  /** Read only, for the hotkey path. Fed from `pinnedOld`: being
-   * overtaken does not take the modes away. */
-  const viewingOldRef = React.useRef(false);
-  const editedRef = React.useRef(false);
   /** A batch of notes is on its way to the record. */
   const [sending, setSending] = React.useState(false);
   const sendingNotes = React.useRef(false);
@@ -2193,40 +2188,18 @@ const App = (): React.ReactElement => {
     return () => window.removeEventListener("beforeunload", ask);
   }, [edited, comparisonDraft, recoveryLocked]);
 
-  const toggleMode = React.useCallback((): void => {
-    // Nothing to switch between on a version that permits neither, and
-    // nothing to switch to while the bar is asking to save or discard.
-    if (viewingOldRef.current || editedRef.current) return;
-    setMode((m) => (m === "edit" ? "annotate" : "edit"));
-    // Leaving annotate mode ends whatever note was being written: there is no
-    // selection in edit mode for it to point at.
-    cancelNote();
-  }, [cancelNote]);
-
   // Pressed anywhere in the page. The frame catches its own and posts them
   // out, so both work with the caret in the document too.
-  const onHotkey = React.useCallback(
-    (which: "toggle-mode" | "send-queue"): void => {
-      if (which === "toggle-mode") {
-        toggleMode();
-        return;
-      }
-      // The note box has its own meaning for this key: add the note being
-      // written to the queue. Once no note is being written, the same press
-      // sends what the queue holds.
-      if (queueSendRef.current === null) return;
-      void queueSendRef.current();
-    },
-    [toggleMode],
-  );
+  const onHotkey = React.useCallback((_which: "send-queue"): void => {
+    // The note box has its own meaning for this key: add the note being
+    // written to the queue. Once no note is being written, the same press
+    // sends what the queue holds.
+    if (queueSendRef.current === null) return;
+    void queueSendRef.current();
+  }, []);
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (isModeToggle(e)) {
-        e.preventDefault();
-        onHotkey("toggle-mode");
-        return;
-      }
       if (!isQueueSend(e)) return;
       if (queueSendRef.current === null) return;
       e.preventDefault();
@@ -2255,8 +2228,8 @@ const App = (): React.ReactElement => {
   // out of a note being typed.
   const hasSelection = selection.length > 0;
   React.useEffect(() => {
-    if (hasSelection) noteBox.current?.focus();
-  }, [hasSelection]);
+    if (hasSelection && !documentMode.held) noteBox.current?.focus();
+  }, [hasSelection, documentMode.held]);
 
   const docKey = doc === null ? "" : `${doc.artifactId}@${doc.version}`;
   const notes = React.useMemo(() => notesByVersion[docKey] ?? [], [notesByVersion, docKey]);
@@ -2284,6 +2257,7 @@ const App = (): React.ReactElement => {
       const originalArtifact =
         artifactId ?? (previous.status === "unresolved" ? previous.request.artifactId : null);
       setSubmissionBusy(true);
+      setSubmissionReason(text === undefined ? "Checking this saved send." : null);
       try {
         const result =
           text === undefined ? await submission.retry() : await submission.submit(text, artifactId);
@@ -2372,7 +2346,7 @@ const App = (): React.ReactElement => {
           setProblem(
             typeof failure.reason === "string"
               ? failure.reason
-              : `Could not read the conversation (${res.status}).`,
+              : `Could not read the artifact (${res.status}).`,
           );
           return;
         }
@@ -2619,6 +2593,20 @@ const App = (): React.ReactElement => {
     pinned,
   });
   const pinnedOld = isReadOnly(shownVersion);
+  const touchAnnotationControl = (
+    <span className="touch-annotation">
+      <button
+        type="button"
+        className="m"
+        aria-pressed={documentMode.touchAnnotate}
+        onClick={documentMode.toggleTouch}
+        disabled={pinnedOld || dead || damaged}
+        title="Select parts of the document for a note"
+      >
+        {documentMode.touchAnnotate ? "Done annotating" : "Annotate"}
+      </button>
+    </span>
+  );
   const overtaken = shownVersion === "overtaken";
   /** Not the newest, either way. Cosmetic only - what the picker looks like,
    * and what the follow button says. Never what is disabled. */
@@ -3452,18 +3440,13 @@ const App = (): React.ReactElement => {
     return m;
   }, [anchored]);
 
-  viewingOldRef.current = pinnedOld;
-  // The save bar hides the mode control while an edit is pending, so the
-  // hotkey goes with it. A key that still worked would be an unlabelled
-  // way past a bar whose whole claim is that there are two things to do.
-  editedRef.current = edited;
   // The version on screen, for readers that must not re-run when it
   // changes. The document channel is one: making it depend on `doc`
   // would restart a fetching effect every time a fetch finished.
   docRef.current = doc;
 
   const guidance = ((): { text: string; tone: "idle" | "ready" | "warn" } => {
-    if (doc === null) return { text: "No document in this conversation yet.", tone: "idle" };
+    if (doc === null) return { text: "No document yet.", tone: "idle" };
     if (refusal !== null) return { text: refusal, tone: "warn" };
     // Said before anything else about the document, because it explains why
     // every other affordance is missing.
@@ -3489,7 +3472,12 @@ const App = (): React.ReactElement => {
     // The box is beside what it is about now, and it says what is selected.
     // Repeating that down here told the reader to look in the wrong place.
     if (selection.length > 0)
-      return { text: "⌘-click to put more of the document in this note.", tone: "ready" };
+      return {
+        text: documentMode.touchAnnotate
+          ? "Tap more parts of the document to add them to this note."
+          : "Hold ⌥⌘ and click to add more spots to this note.",
+        tone: "ready",
+      };
     if (notes.length > 0)
       return {
         text: `${notes.length} note${notes.length === 1 ? "" : "s"} ready. ⌘⏎ sends them, or select more.`,
@@ -3668,12 +3656,12 @@ const App = (): React.ReactElement => {
                             {displayName(allArtifacts[0] as CatalogEntry)}
                           </span>
                         )}
-                        {conversationPanel.control}
+                        {headerControls}
                       </div>
                       <div className="doc-ground">
                         <div className="empty-panel">
                           <div className="miss-heading">
-                            This conversation has no artifact called{" "}
+                            This artifact has no document called{" "}
                             <code className="miss-name">{unknownArtifact}</code>.
                           </div>
                           <div className="miss-line">
@@ -3730,14 +3718,14 @@ const App = (): React.ReactElement => {
                         </a>
                         <span className="doc-head-sep" aria-hidden="true" />
                         <span className="none-name">No document</span>
-                        {conversationPanel.control}
+                        {headerControls}
                       </div>
                       <div className="doc-ground">
                         <div className="empty-panel">
-                          <div className="empty-line">Start a conversation</div>
+                          <div className="empty-line">Start an artifact</div>
                         </div>
                         <div className="doc-panel">
-                          <div className="guidance idle">No document in this conversation yet.</div>
+                          <div className="guidance idle">No document yet.</div>
                         </div>
                       </div>
                     </>
@@ -3768,8 +3756,7 @@ const App = (): React.ReactElement => {
                           >
                             Reload
                           </button>
-                          {comparing === null ? artifactWidth.control : null}
-                          {conversationPanel.control}
+                          {headerControls}
                         </div>
                       ) : edited ? (
                         <div className="doc-head saving-bar">
@@ -3779,7 +3766,6 @@ const App = (): React.ReactElement => {
                           </a>
                           <span className="doc-head-sep" aria-hidden="true" />
                           {headerTitle(doc)}
-                          {comparing === null ? artifactWidth.control : null}
                           <span className="saving-clause">
                             {waiting !== null && waiting > doc.version
                               ? `unsaved · v${waiting} arrived while you typed`
@@ -3801,7 +3787,8 @@ const App = (): React.ReactElement => {
                           >
                             {saving ? "Saving…" : `Save as v${nextVersion}`}
                           </button>
-                          {conversationPanel.control}
+                          {touchAnnotationControl}
+                          {headerControls}
                         </div>
                       ) : (
                         <div className="doc-head">
@@ -3900,7 +3887,6 @@ const App = (): React.ReactElement => {
                                 ))}
                             </select>
                           )}
-                          {comparing === null ? artifactWidth.control : null}
                           {comparing === null && pinned !== null ? (
                             <button
                               type="button"
@@ -3935,28 +3921,9 @@ const App = (): React.ReactElement => {
                                 </button>
                               </>
                             ) : (
-                              <span className="modes">
-                                <button
-                                  type="button"
-                                  className={mode === "annotate" ? "m current" : "m"}
-                                  onClick={() => setMode("annotate")}
-                                  disabled={pinnedOld}
-                                  title="Click parts of the document to write notes about them (⌥⌫)"
-                                >
-                                  Annotate
-                                </button>
-                                <button
-                                  type="button"
-                                  className={mode === "edit" ? "m current" : "m"}
-                                  onClick={() => setMode("edit")}
-                                  disabled={pinnedOld}
-                                  title="Tick boxes, fill fields, and edit text (⌥⌫)"
-                                >
-                                  Edit
-                                </button>
-                              </span>
+                              touchAnnotationControl
                             )}
-                            {conversationPanel.control}
+                            {headerControls}
                           </span>
                         </div>
                       )}
@@ -4016,6 +3983,7 @@ const App = (): React.ReactElement => {
                               : "doc-ground"
                           }
                         >
+                          {artifactWidth.control}
                           {/* The frame and the note box share one positioned box, so
                   a rect in the frame's own viewport is also a position on
                   this page and the anchor needs no arithmetic. The box is
@@ -4067,9 +4035,11 @@ const App = (): React.ReactElement => {
                               onSeamClick={(v) => void compareWith(v)}
                               seams={seams}
                               onHotkey={onHotkey}
+                              onAnnotationHeld={documentMode.setHeld}
+                              annotationHeld={documentMode.held}
                               onDirty={onDirty}
                               noteCounts={noteCountByBlock}
-                              mode={mode}
+                              mode={documentMode.touchAnnotate ? "annotate" : "edit"}
                               readOnly={pinnedOld || dead || damaged}
                             />
 
@@ -4099,148 +4069,96 @@ const App = (): React.ReactElement => {
                             {/* Written where you clicked. The box used to be a panel at
                     the bottom of the pane, so the thing being written about
                     and the writing were at opposite ends of the screen. */}
-                            <Popover.Root
-                              open={selection.length > 0 && selRect !== null}
-                              // Whether it is open is a fact about the selection, so
-                              // the selection is the only thing that decides it. The
-                              // library asked to close on any click outside and took
-                              // a half-written note with it; refusing here means the
-                              // ways out are Cancel, Escape, and Add note.
-                              onOpenChange={() => {}}
+                            <NotePopover
+                              rect={selection.length > 0 ? selRect : null}
+                              held={documentMode.held}
+                              onCancel={cancelNote}
+                              onFocus={() => noteBox.current?.focus()}
+                              label={
+                                notes.length >= NOTE_QUEUE_MAX
+                                  ? `${NOTE_QUEUE_MAX} notes queued - send them before writing another`
+                                  : `${selection.length} selected`
+                              }
                             >
-                              <Popover.Anchor asChild>
-                                <div
-                                  className="sel-anchor"
-                                  style={
-                                    selRect === null
-                                      ? { display: "none" }
-                                      : {
-                                          left: `${selRect.x}px`,
-                                          top: `${selRect.y}px`,
-                                          width: `${selRect.width}px`,
-                                          height: `${selRect.height}px`,
-                                        }
-                                  }
-                                />
-                              </Popover.Anchor>
-                              <Popover.Portal>
-                                <Popover.Content
-                                  className="note-pop"
-                                  // Under the line, not beside it. A block in a
-                                  // document is as wide as the column, so there is
-                                  // never room to the side — Radix said so, reporting
-                                  // 128px available, and the box hung off the screen.
-                                  // Below, it flips above near the bottom and slides
-                                  // sideways to stay in view.
-                                  side="bottom"
-                                  align="start"
-                                  // Stepped in from the left edge of what it points at.
-                                  // Flush, its edge lined up with the paragraph's and
-                                  // the two read as one block.
-                                  alignOffset={28}
-                                  sideOffset={8}
-                                  collisionPadding={12}
-                                  // Only Escape and the buttons close it. A click into
-                                  // the document is how a second spot is added, and it
-                                  // must not throw away what is already typed.
-                                  onInteractOutside={(e) => e.preventDefault()}
-                                  onFocusOutside={(e) => e.preventDefault()}
-                                  onEscapeKeyDown={cancelNote}
-                                  onOpenAutoFocus={(e) => {
+                              <textarea
+                                ref={noteBox}
+                                aria-label="Annotation note text"
+                                value={draft}
+                                onChange={(e) => setDraft(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                                     e.preventDefault();
-                                    noteBox.current?.focus();
-                                  }}
-                                >
-                                  <div className="note-pop-head">
-                                    {notes.length >= NOTE_QUEUE_MAX
-                                      ? `${NOTE_QUEUE_MAX} notes queued — send them before writing another`
-                                      : `${selection.length} selected${selection.length > 1 ? " — ⌘-click adds more" : ""}`}
-                                  </div>
-                                  <textarea
-                                    ref={noteBox}
-                                    value={draft}
-                                    onChange={(e) => setDraft(e.target.value)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                                        e.preventDefault();
-                                        void addNote();
-                                      }
-                                    }}
-                                    placeholder={`What about ${selection.length === 1 ? "this" : `these ${selection.length}`}? (⌘⏎ to add)`}
-                                    rows={3}
-                                  />
-                                  {noteFiles.length + noteUploading.length + noteRefusals.length ===
-                                  0 ? null : (
-                                    <div className="attached in-note">
-                                      {noteUploading.map((u) => (
-                                        <UploadingChip key={u.id} name={u.name} bytes={u.bytes} />
-                                      ))}
-                                      {noteFiles.map((a) =>
-                                        a.url !== null || a.contentType.startsWith("image/") ? (
-                                          <ImageChip
-                                            key={a.hash}
-                                            name={a.name}
-                                            url={a.url}
-                                            onRemove={() => removeNoteFile(a.hash)}
-                                          />
-                                        ) : (
-                                          <PillChip
-                                            key={a.hash}
-                                            name={a.name}
-                                            contentType={a.contentType}
-                                            bytes={a.bytes}
-                                            onRemove={() => removeNoteFile(a.hash)}
-                                          />
-                                        ),
-                                      )}
-                                      {noteRefusals.map((r) => (
-                                        <RefusalChip
-                                          key={r.id}
-                                          name={r.name}
-                                          reason={r.reason}
-                                          onDismiss={() =>
-                                            setNoteRefusals((prev) =>
-                                              prev.filter((x) => x.id !== r.id),
-                                            )
-                                          }
-                                        />
-                                      ))}
-                                    </div>
+                                    void addNote();
+                                  }
+                                }}
+                                placeholder={`What about ${selection.length === 1 ? "this" : `these ${selection.length}`}? (⌘⏎ to add)`}
+                                rows={3}
+                              />
+                              {noteFiles.length + noteUploading.length + noteRefusals.length ===
+                              0 ? null : (
+                                <div className="attached in-note">
+                                  {noteUploading.map((u) => (
+                                    <UploadingChip key={u.id} name={u.name} bytes={u.bytes} />
+                                  ))}
+                                  {noteFiles.map((a) =>
+                                    a.url !== null || a.contentType.startsWith("image/") ? (
+                                      <ImageChip
+                                        key={a.hash}
+                                        name={a.name}
+                                        url={a.url}
+                                        onRemove={() => removeNoteFile(a.hash)}
+                                      />
+                                    ) : (
+                                      <PillChip
+                                        key={a.hash}
+                                        name={a.name}
+                                        contentType={a.contentType}
+                                        bytes={a.bytes}
+                                        onRemove={() => removeNoteFile(a.hash)}
+                                      />
+                                    ),
                                   )}
-                                  <div className="note-pop-actions">
-                                    {/* The half that carries this feature: a
+                                  {noteRefusals.map((r) => (
+                                    <RefusalChip
+                                      key={r.id}
+                                      name={r.name}
+                                      reason={r.reason}
+                                      onDismiss={() =>
+                                        setNoteRefusals((prev) => prev.filter((x) => x.id !== r.id))
+                                      }
+                                    />
+                                  ))}
+                                </div>
+                              )}
+                              <div className="note-pop-actions">
+                                {/* The half that carries this feature: a
                               screenshot of what is wrong with a paragraph is
                               marking up, which is what lucid is for. */}
-                                    <label className="attach" title="Attach a file to this note">
-                                      <PaperclipDuotone size={16} />
-                                      <input
-                                        type="file"
-                                        multiple
-                                        onChange={(e) => {
-                                          if (e.currentTarget.files !== null)
-                                            void attachToNote(e.currentTarget.files);
-                                          e.currentTarget.value = "";
-                                        }}
-                                      />
-                                    </label>
-                                    <button type="button" className="ghost" onClick={cancelNote}>
-                                      Cancel
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="primary"
-                                      onClick={() => void addNote()}
-                                      disabled={
-                                        draft.trim() === "" || notes.length >= NOTE_QUEUE_MAX
-                                      }
-                                    >
-                                      Add note
-                                    </button>
-                                  </div>
-                                  <Popover.Arrow className="note-pop-arrow" width={12} height={6} />
-                                </Popover.Content>
-                              </Popover.Portal>
-                            </Popover.Root>
+                                <label className="attach" title="Attach a file to this note">
+                                  <PaperclipDuotone size={16} />
+                                  <input
+                                    type="file"
+                                    multiple
+                                    onChange={(e) => {
+                                      if (e.currentTarget.files !== null)
+                                        void attachToNote(e.currentTarget.files);
+                                      e.currentTarget.value = "";
+                                    }}
+                                  />
+                                </label>
+                                <button type="button" className="ghost" onClick={cancelNote}>
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  className="primary"
+                                  onClick={() => void addNote()}
+                                  disabled={draft.trim() === "" || notes.length >= NOTE_QUEUE_MAX}
+                                >
+                                  Add note
+                                </button>
+                              </div>
+                            </NotePopover>
                           </div>
 
                           {/* The guidance line, under the sheet on the ground.
@@ -4297,7 +4215,7 @@ const App = (): React.ReactElement => {
                   onKeyDown={nudgeDrag}
                   tabIndex={conversationPanel.open ? 0 : -1}
                   aria-orientation={stacked ? "horizontal" : "vertical"}
-                  aria-label={stacked ? "Resize document height" : "Resize the conversation"}
+                  aria-label={stacked ? "Resize document height" : "Resize the chat"}
                   aria-valuemin={stacked ? DOCUMENT_SHARE_MIN * 100 : CONVERSATION_MIN}
                   aria-valuemax={stacked ? DOCUMENT_SHARE_MAX * 100 : CONVERSATION_MAX}
                   aria-valuenow={
@@ -4321,6 +4239,9 @@ const App = (): React.ReactElement => {
                   }
                 >
                   <div className="pane conversation" {...conversationPanel.panelProps}>
+                    <div className="conversation-appearance">
+                      <ThemeControls />
+                    </div>
                     <Thread
                       pending={notes}
                       onSendNotes={() => void sendNotes()}
@@ -4387,7 +4308,7 @@ const App = (): React.ReactElement => {
                             const failure = (await response.json()) as { reason?: string };
                             return (
                               failure.reason ??
-                              "Recovery could not be confirmed. Refresh the conversation."
+                              "Recovery could not be confirmed. Refresh the artifact."
                             );
                           }}
                         />
@@ -4508,4 +4429,9 @@ const App = (): React.ReactElement => {
 };
 
 const root = document.getElementById("root");
-if (root !== null) createRoot(root).render(<App />);
+if (root !== null)
+  createRoot(root).render(
+    <Tooltip.Provider delayDuration={250}>
+      <App />
+    </Tooltip.Provider>,
+  );

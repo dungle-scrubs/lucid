@@ -26,16 +26,16 @@ bun run build
 ```
 
 `lucid serve` starts the browser surface at
-[the conversation hub](http://127.0.0.1:17454/). The server binds to loopback.
-The hub lists local conversations by repository or starting folder; selecting
-one opens its artifacts and transcript. **New** creates a conversation with
+[the artifact hub](http://127.0.0.1:17454/). The server binds to loopback.
+The hub lists local artifacts by repository or starting folder; selecting
+one opens its document and chat. **New** creates an artifact with
 an optional project folder and saved harness, model, effort, and mode. Creating or opening
-a conversation starts no agent. Submitting a prompt starts or resumes a managed
+an artifact starts no agent. Submitting a prompt starts or resumes a managed
 worker when the saved folder and route support execution.
 
-An empty document starts with the conversation panel open. Use the
-Show conversation button in the document toolbar to toggle it. Closing the panel
-releases document space and preserves drafts, notes, and the running conversation.
+An empty document starts with the chat panel open. Use the
+Show chat button in the document toolbar to toggle it. Closing the panel
+releases document space and preserves drafts, notes, and the running task.
 
 Choose the initial state of the printed link explicitly:
 
@@ -64,15 +64,18 @@ the terminal. Harnesses run through hcn; see [drivers](docs/drivers.md).
 
 Records live in `~/.lucid2/records` by default. An explicit root wins over
 `LUCID_ROOT`, then user configuration. [User defaults](docs/drivers.md#user-defaults-and-creation)
-configure new hub conversations and the record root.
+configure new hub artifacts and the record root.
 The older v1 installation's `~/.lucid` directory is separate. V2 does not read or
 convert v1 records automatically; preserve them before replacing a v1 installation.
 
 ## Working with a document
 
-A conversation holds one artifact with immutable versions. In the browser,
-use mode operates the document; markup mode selects places to discuss.
-Click an element or drag over words, write notes, then send the queue as
+A record holds one artifact with immutable document versions. The browser
+opens in Edit. Hold Option/Alt to annotate; hold Option+Command (Alt+Control
+on other keyboards) to select multiple spots. Touch devices have an Annotate
+action. Releasing the keys preserves the selected spots and note box.
+Use the note box's drag handle to move it out of the way while selecting or
+writing. Click an element or drag over words, write notes, then send the queue as
 one input. Command-click adds to a selection. Command+Enter adds a note
 when the note box is open and sends the queue when it is closed.
 

@@ -1,5 +1,6 @@
 import { isWireId, TEXT_MAX } from "../../protocol/frames.js";
 import { TOKEN_HEADER } from "../constants.js";
+import { tryCatch } from "./try-catch.js";
 
 export interface PendingInput {
   readonly artifactId: string;
@@ -55,16 +56,6 @@ const ENTRY_MAX = BODY_MAX * 2 + 1024;
 
 export const recoveryKey = (conversationId: string): string =>
   `lucid:comparison-input:v1:${encodeURIComponent(conversationId)}`;
-
-const tryCatch = <TValue>(
-  fn: () => TValue,
-): readonly [Error, undefined] | readonly [undefined, TValue] => {
-  try {
-    return [undefined, fn()];
-  } catch (cause) {
-    return [cause instanceof Error ? cause : new Error("Browser storage failed"), undefined];
-  }
-};
 
 const objectOf = (text: string): Record<string, unknown> | null => {
   const [error, value] = tryCatch<unknown>(() => JSON.parse(text));

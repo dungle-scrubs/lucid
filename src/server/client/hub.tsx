@@ -10,6 +10,7 @@ import type { ConversationPage, ListedConversation } from "../../protocol/conver
 import { TOKEN_HEADER } from "../constants.js";
 import { ConversationRename } from "./conversation-rename.js";
 import { NewConversation, PENDING_CREATION } from "./new-conversation.js";
+import { ThemeControls } from "./theme-controls.js";
 import { Button } from "./ui/button.js";
 
 class SessionExpired extends Error {}
@@ -54,9 +55,7 @@ async function fetchPage(cursor: string | null, signal: AbortSignal): Promise<Co
     signal,
   );
   if (!response.ok)
-    throw new Error(
-      "Conversations are unavailable. Check the configured record folder, then refresh.",
-    );
+    throw new Error("Artifacts are unavailable. Check the configured record folder, then refresh.");
   return (await response.json()) as ConversationPage;
 }
 
@@ -140,7 +139,7 @@ function Hub() {
         <a href="/" aria-label="Lucid hub" className="hub-logo">
           <span aria-hidden="true">.</span>lucid
         </a>
-        <h1>Documents</h1>
+        <h1>Artifacts</h1>
         <Button variant="outline" onClick={() => setCreating(!creating)}>
           {creating ? "Close" : "+ New"}
         </Button>
@@ -153,19 +152,18 @@ function Hub() {
         >
           {query.error instanceof SessionExpired ? "Reload" : "Refresh"}
         </Button>
+        <ThemeControls />
       </header>
       <main className="hub-main">
         {creating ? <NewConversation request={apiFetch} /> : null}
         <label className="hub-search">
           <span className="sr-only">
-            {query.hasNextPage ? "Search loaded conversations" : "Search conversations"}
+            {query.hasNextPage ? "Search loaded artifacts" : "Search artifacts"}
           </span>
           <input
             data-slot="input"
             type="search"
-            placeholder={
-              query.hasNextPage ? "Search loaded conversations…" : "Search conversations…"
-            }
+            placeholder={query.hasNextPage ? "Search loaded artifacts…" : "Search artifacts…"}
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
@@ -190,17 +188,17 @@ function Hub() {
             </ul>
           </aside>
         ) : null}
-        {query.isPending ? <p role="status">Loading conversations…</p> : null}
+        {query.isPending ? <p role="status">Loading artifacts…</p> : null}
         {projects.map(([path, items]) => (
           <Project key={path ?? ""} path={path} items={items} />
         ))}
         {!query.isPending && !query.error && groups.size === 0 ? (
           <p className="hub-empty">
             {search
-              ? "No matching conversations."
+              ? "No matching artifacts."
               : errors.size > 0
-                ? "No readable conversations."
-                : "No conversations yet. Conversations started in the terminal appear here."}
+                ? "No readable artifacts."
+                : "No artifacts yet. Artifacts started in the terminal appear here."}
           </p>
         ) : null}
         {query.hasNextPage ? (
@@ -209,12 +207,13 @@ function Hub() {
             onClick={() => void query.fetchNextPage({ cancelRefetch: false })}
             disabled={query.isFetching}
           >
-            {query.isFetchingNextPage ? "Loading…" : "Load more conversations"}
+            {query.isFetchingNextPage ? "Loading…" : "Load more artifacts"}
           </Button>
         ) : null}
         <footer className="hub-footer">
           <span>
-            {records.size} conversations{query.hasNextPage ? " loaded" : ""}
+            {records.size} artifact{records.size === 1 ? "" : "s"}
+            {query.hasNextPage ? " loaded" : ""}
           </span>
           <span>Grouped by repository or starting folder</span>
         </footer>

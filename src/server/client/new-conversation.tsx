@@ -35,7 +35,7 @@ export function NewConversation(props: {
           sessionStorage.removeItem(PENDING_CREATION);
           setPending(null);
         } else setPending(body);
-        throw new Error(data.reason ?? "Cannot create conversation");
+        throw new Error(data.reason ?? "Cannot create artifact");
       }
       sessionStorage.removeItem(PENDING_CREATION);
       window.location.assign(`/c/${encodeURIComponent(data.conversationId)}`);
@@ -52,8 +52,8 @@ export function NewConversation(props: {
     }
   };
   return (
-    <section className="hub-create" aria-label="New conversation">
-      <h2>New conversation</h2>
+    <section className="hub-create" aria-label="New artifact">
+      <h2>New artifact</h2>
       {defaults.error ? (
         <p role="alert" className="settings-error">
           {defaults.error.message}
@@ -71,7 +71,7 @@ export function NewConversation(props: {
         <>
           <p>
             Creation has not been confirmed. Check the saved request before creating another
-            conversation.
+            artifact.
           </p>
           <Button variant="outline" disabled={create.isPending} onClick={() => void send(pending)}>
             Retry creation
@@ -86,7 +86,7 @@ export function NewConversation(props: {
           >
             Discard saved request
           </Button>
-          <p>A conversation may already exist. Discarding this request does not delete it.</p>
+          <p>An artifact may already exist. Discarding this request does not delete it.</p>
           {create.error ? (
             <p role="alert" className="settings-error">
               {create.error.message}
@@ -112,7 +112,7 @@ export function NewConversation(props: {
                 }
               : undefined
           }
-          submitLabel="Create conversation"
+          submitLabel="Create artifact"
           onSave={(settings, workingDirectory) =>
             send(JSON.stringify({ creationId: crypto.randomUUID(), workingDirectory, settings }))
           }
@@ -122,7 +122,7 @@ export function NewConversation(props: {
       ) : (
         <Button onClick={() => void defaults.refetch()}>Reload defaults</Button>
       )}
-      <p>Creating or opening a conversation starts no agent.</p>
+      <p>Creating or opening an artifact starts no agent.</p>
     </section>
   );
 }
