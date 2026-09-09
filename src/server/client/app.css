@@ -1525,7 +1525,18 @@ body {
   color: var(--color-text);
 }
 
+/* Once moved, the note owns viewport positioning. Flatten the placement
+   wrapper so its transform cannot make a containing block for the fixed note.
+   The portal, note, and inputs stay mounted throughout the drag. */
+:has(> .note-pop[data-detached="true"]) {
+  display: contents;
+}
+
 .note-pop[data-detached="true"] {
+  position: fixed;
+  top: 0;
+  left: 0;
+  transform: translate3d(var(--note-x), var(--note-y), 0);
   max-width: calc(100vw - 24px);
 }
 
@@ -1555,6 +1566,10 @@ body {
   fill: var(--paper);
   overflow: visible;
   transform: translateY(-1px);
+}
+
+.note-pop[data-detached="true"] .note-pop-arrow {
+  visibility: hidden;
 }
 
 .note-pop-drag {

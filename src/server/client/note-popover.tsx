@@ -18,59 +18,65 @@ interface NotePopoverProps {
 /** The note stays mounted when moved, so its draft, focus and files survive. */
 export function NotePopover(props: NotePopoverProps) {
   const { children, held, label, onCancel, onFocus, rect } = props;
-  const content = React.useRef<HTMLDivElement>(null);
-  const [position, setPosition] = React.useState<Position | null>(null);
+  const [content, setContent] = React.useState<HTMLDivElement | null>(null);
+  // Drag coordinates belong to the DOM, not React's rendering/placement cycle.
+  const position = React.useRef<Position | null>(null);
   const drag = React.useRef<{ readonly id: number; readonly offset: Position } | null>(null);
-  const [dragging, setDragging] = React.useState(false);
   const open = rect !== null;
 
-  const move = React.useCallback((next: Position): void => {
-    const box = content.current?.getBoundingClientRect();
-    if (!box) return;
-    const fitted = {
-      x: Math.max(12, Math.min(next.x, window.innerWidth - box.width - 12)),
-      y: Math.max(12, Math.min(next.y, window.innerHeight - box.height - 12)),
-    };
-    setPosition((previous) =>
-      previous?.x === fitted.x && previous.y === fitted.y ? previous : fitted,
-    );
-  }, []);
+  const move = React.useCallback(
+    (next: Position): void => {
+      const node = content;
+      if (!node) return;
+      node.dataset.detached = "true";
+      const box = node.getBoundingClientRect();
+      const fitted = {
+        x: Math.max(12, Math.min(next.x, window.innerWidth - box.width - 12)),
+        y: Math.max(12, Math.min(next.y, window.innerHeight - box.height - 12)),
+      };
+      position.current = fitted;
+      node.style.setProperty("--note-x", `${fitted.x}px`);
+      node.style.setProperty("--note-y", `${fitted.y}px`);
+    },
+    [content],
+  );
+
+  const endDrag = (): void => {
+    drag.current = null;
+    if (content) content.dataset.dragging = "false";
+  };
+
+  const resetPosition = (): void => {
+    position.current = null;
+    if (content) {
+      content.dataset.detached = "false";
+      content.style.removeProperty("--note-x");
+      content.style.removeProperty("--note-y");
+    }
+  };
 
   React.useEffect(() => {
     if (!open) {
-      setPosition(null);
+      position.current = null;
       drag.current = null;
-      setDragging(false);
+      return;
     }
-  }, [open]);
-
-  React.useEffect(() => {
-    if (position === null) return;
-    const fit = (): void => move(position);
+    if (!content) return;
+    const fit = (): void => {
+      if (position.current) move(position.current);
+    };
     const observer = new ResizeObserver(fit);
-    if (content.current) observer.observe(content.current);
+    observer.observe(content);
     window.addEventListener("resize", fit);
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", fit);
     };
-  }, [move, position]);
-
-  const virtualAnchor = React.useMemo(
-    () =>
-      position === null
-        ? undefined
-        : {
-            current: {
-              getBoundingClientRect: (): DOMRect => new DOMRect(position.x, position.y, 0, 0),
-            },
-          },
-    [position],
-  );
+  }, [content, move, open]);
 
   return (
     <Popover.Root open={open} onOpenChange={() => {}}>
-      <Popover.Anchor asChild virtualRef={virtualAnchor}>
+      <Popover.Anchor asChild>
         <div
           className="sel-anchor"
           style={
@@ -87,16 +93,14 @@ export function NotePopover(props: NotePopoverProps) {
       </Popover.Anchor>
       <Popover.Portal>
         <Popover.Content
-          ref={content}
+          ref={setContent}
           className="note-pop"
           aria-label="Annotation note"
-          data-detached={position !== null}
-          data-dragging={dragging}
           side="bottom"
           align="start"
-          alignOffset={position === null ? 28 : 0}
-          sideOffset={position === null ? 8 : 0}
-          avoidCollisions={position === null}
+          alignOffset={28}
+          sideOffset={8}
+          avoidCollisions
           collisionPadding={12}
           arrowPadding={16}
           onInteractOutside={(event) => event.preventDefault()}
@@ -117,7 +121,7 @@ export function NotePopover(props: NotePopoverProps) {
                 title="Drag to move. Arrow keys move; Home returns beside selection."
                 onPointerDown={(event) => {
                   if (event.button !== 0) return;
-                  const box = content.current?.getBoundingClientRect();
+                  const box = content?.getBoundingClientRect();
                   if (!box) return;
                   event.preventDefault();
                   event.currentTarget.setPointerCapture(event.pointerId);
@@ -128,7 +132,7 @@ export function NotePopover(props: NotePopoverProps) {
                       y: event.clientY - box.y,
                     },
                   };
-                  setDragging(true);
+                  if (content) content.dataset.dragging = "true";
                 }}
                 onPointerMove={(event) => {
                   const active = drag.current;
@@ -137,25 +141,18 @@ export function NotePopover(props: NotePopoverProps) {
                 }}
                 onPointerUp={(event) => {
                   if (drag.current?.id !== event.pointerId) return;
-                  drag.current = null;
-                  setDragging(false);
+                  endDrag();
                   event.currentTarget.releasePointerCapture(event.pointerId);
                 }}
-                onLostPointerCapture={() => {
-                  drag.current = null;
-                  setDragging(false);
-                }}
-                onPointerCancel={() => {
-                  drag.current = null;
-                  setDragging(false);
-                }}
+                onLostPointerCapture={endDrag}
+                onPointerCancel={endDrag}
                 onKeyDown={(event) => {
                   if (event.key === "Home") {
                     event.preventDefault();
-                    setPosition(null);
+                    resetPosition();
                     return;
                   }
-                  const box = content.current?.getBoundingClientRect();
+                  const box = content?.getBoundingClientRect();
                   if (
                     !box ||
                     !["ArrowDown", "ArrowLeft", "ArrowRight", "ArrowUp"].includes(event.key)
@@ -191,20 +188,18 @@ export function NotePopover(props: NotePopoverProps) {
             </div>
             {children}
           </div>
-          {position === null ? (
-            <Popover.Arrow asChild width={16} height={8}>
-              <svg
-                className="note-pop-arrow"
-                width="16"
-                height="8"
-                viewBox="0 0 16 8"
-                aria-hidden="true"
-              >
-                <path d="M0 -1H16L8 7Z" fill="var(--paper)" />
-                <path d="M0 0L8 7L16 0" fill="none" stroke="var(--edge-2)" />
-              </svg>
-            </Popover.Arrow>
-          ) : null}
+          <Popover.Arrow asChild width={16} height={8}>
+            <svg
+              className="note-pop-arrow"
+              width="16"
+              height="8"
+              viewBox="0 0 16 8"
+              aria-hidden="true"
+            >
+              <path d="M0 -1H16L8 7Z" fill="var(--paper)" />
+              <path d="M0 0L8 7L16 0" fill="none" stroke="var(--edge-2)" />
+            </svg>
+          </Popover.Arrow>
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
