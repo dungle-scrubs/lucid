@@ -28,6 +28,7 @@ import {
   useMessage,
 } from "@assistant-ui/react";
 import * as Popover from "@radix-ui/react-popover";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -46,6 +47,7 @@ import {
 } from "../../protocol/artifact-title.js";
 import { ATTACHMENT_BYTES_MAX } from "../../protocol/attachment.js";
 import { comparisonMetadata } from "../../protocol/comparison-note.js";
+import type { CompatibilityDiagnostic } from "../../protocol/compatibility.js";
 import type { ExecutionView } from "../../protocol/execution-view.js";
 import { type Activity as ActivitySnapshot, describeActivity, type Report } from "./activity.js";
 import {
@@ -59,6 +61,7 @@ import {
 import { useArtifactWidth } from "./artifact-width-control.js";
 import type { ComparisonDraft } from "./comparison-draft.js";
 import { comparisonDraftText, restoreComparisonDraft } from "./comparison-draft.js";
+import { CompatibilityNotice, useRuntimeCompatibility } from "./compatibility-notice.js";
 import type { ComparisonPair } from "./content-comparison.js";
 import { ContentComparisonView } from "./content-comparison.js";
 import { useConversationPanel } from "./conversation-panel.js";
@@ -1826,6 +1829,18 @@ const App = (): React.ReactElement => {
    * reloading, and retrying a dead token forever is the failure this flag
    * exists to prevent. */
   const [dead, setDead] = React.useState(false);
+  const runtimeCompatibility = useRuntimeCompatibility(
+    (signal) => fetch("/api/defaults", { headers: { [TOKEN_HEADER]: token ?? "" }, signal }),
+    token !== null && !dead,
+  );
+  const [selectionCompatibility, setSelectionCompatibility] = React.useState<
+    readonly CompatibilityDiagnostic[]
+  >([]);
+  const compatibility = React.useMemo(
+    () => [...runtimeCompatibility, ...selectionCompatibility],
+    [runtimeCompatibility, selectionCompatibility],
+  );
+  const [settingsErrorInCompatibility, setSettingsErrorInCompatibility] = React.useState(false);
   const [doc, setDoc] = React.useState<Doc | null>(null);
   const artifactWidth = useArtifactWidth(conversationId, doc?.artifactId ?? "", doc?.bytes ?? "");
   /** Which version is on screen. Compared against the catalog so a fetch
@@ -2356,7 +2371,10 @@ const App = (): React.ReactElement => {
   React.useEffect(() => {
     if (token === null || dead || conversationId === "") return;
     let alive = true;
+    let requested = 0;
+    let applied = 0;
     const tick = async (): Promise<void> => {
+      const sequence = ++requested;
       try {
         const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}`, {
           headers: { [TOKEN_HEADER]: token },
@@ -2377,6 +2395,7 @@ const App = (): React.ReactElement => {
           return;
         }
         const data = (await res.json()) as {
+          compatibility?: readonly CompatibilityDiagnostic[];
           lines: Line[];
           status: string;
           damaged?: boolean;
@@ -2387,13 +2406,21 @@ const App = (): React.ReactElement => {
             selected: DriverPreference | null;
             revision: number;
             error: string | null;
+            errorInCompatibility?: boolean;
           };
           driverChoices?: DriverChoices | null;
           activity?: Activity;
           executions?: readonly ExecutionView[];
         };
         if (!alive) return;
+        if (sequence < applied) return;
+        applied = sequence;
         const next = linesToMessages(data.lines);
+        setSelectionCompatibility((previous) =>
+          JSON.stringify(previous) === JSON.stringify(data.compatibility ?? [])
+            ? previous
+            : (data.compatibility ?? []),
+        );
         setMessages((prev) => {
           const changed =
             prev.length !== next.length ||
@@ -2405,6 +2432,7 @@ const App = (): React.ReactElement => {
         setDriver(data.driver ?? {});
         setLocation(data.location ?? null);
         setSettingsIssue(data.conversationSettings?.error ?? null);
+        setSettingsErrorInCompatibility(data.conversationSettings?.errorInCompatibility === true);
         setDriverPreference(
           data.conversationSettings?.selected
             ? {
@@ -3650,6 +3678,17 @@ const App = (): React.ReactElement => {
                   style={{ "--document-height": `${documentShare * 100}%` } as React.CSSProperties}
                 >
                   {comparisonRefusal && !comparing ? <p role="alert">{comparisonRefusal}</p> : null}
+                  <CompatibilityNotice
+                    diagnostics={compatibility}
+                    selection={JSON.stringify([
+                      driverPreference?.harness,
+                      driverPreference?.model,
+                      driverPreference?.effort,
+                      driverPreference?.provider,
+                      driverPreference?.profile,
+                      location,
+                    ])}
+                  />
                   {unknownArtifact !== null ? (
                     <>
                       {/* 6d: the address named an artifact this record does not
@@ -4350,7 +4389,9 @@ const App = (): React.ReactElement => {
                       driverChoices={driverChoices}
                       onDriverChoice={chooseDriver}
                       location={location}
-                      settingsIssue={settingsIssue}
+                      settingsIssue={
+                        settingsIssue && settingsErrorInCompatibility ? null : settingsIssue
+                      }
                       onLocation={chooseLocation}
                       comparisonBlocked={recoveryLocked}
                       comparisonRecovery={
@@ -4508,4 +4549,9 @@ const App = (): React.ReactElement => {
 };
 
 const root = document.getElementById("root");
-if (root !== null) createRoot(root).render(<App />);
+if (root !== null)
+  createRoot(root).render(
+    <QueryClientProvider client={new QueryClient()}>
+      <App />
+    </QueryClientProvider>,
+  );

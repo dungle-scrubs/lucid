@@ -13,6 +13,8 @@
  * recordings of hcn's output.
  */
 
+import type { HcnInstallation } from "./compatibility.js";
+
 export interface HcnProcess {
   readonly inputError?: Promise<void>;
   readonly stdout: AsyncIterable<string>;
@@ -28,6 +30,7 @@ export interface HcnProcess {
 export type SpawnHcn = (argv: readonly string[], opts: { readonly cwd?: string }) => HcnProcess;
 
 export interface HarnessDeps {
+  readonly installation?: HcnInstallation;
   readonly spawn: SpawnHcn;
   /** Grace before escalating a refused child from SIGTERM to SIGKILL. */
   readonly refusalGraceMs?: number;

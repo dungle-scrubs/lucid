@@ -1,3 +1,9 @@
+import {
+  diagnosticMessage,
+  failureDiagnostic,
+  selectionDiagnostic,
+  selectionProblem,
+} from "../harness/compatibility.js";
 import { verifiedExecutable } from "../harness/inspection-facts.js";
 import type { HarnessRunner } from "../harness/runner.js";
 import { composeAnnotationPrompt } from "../protocol/annotations.js";
@@ -81,6 +87,7 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
       code: ExecutionHold["code"],
       reason: string,
       actions?: readonly string[],
+      compatibility?: import("../protocol/compatibility.js").CompatibilityDiagnostic,
     ): ManagedPrepared => {
       const result = host.writeExecution({
         kind: "held",
@@ -89,6 +96,7 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
         hold: {
           code,
           reason: reason.slice(0, 4096),
+          ...(compatibility ? { compatibility } : {}),
           prerequisite: managedPrerequisite(host.dir, host.state(), code),
           ...(code === "E-COMP-07" && comparisonMetadata(input.text).kind === "comparison"
             ? (() => {
@@ -231,20 +239,49 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
       const resume = native.kind === "resume" ? native.sessionId : undefined;
       const facts = await runner
         .inspect(driver.harness, {
+          diagnosticOrigin: "execution-check",
           signal: input.signal,
           model: driver.model,
           effort: driver.effort,
           provider: driver.provider,
           runtime: { cwd, profile: driver.profile, resume },
         })
-        .catch(() => {
+        .catch((error) => {
+          const diagnostic =
+            failureDiagnostic(error) ??
+            selectionProblem(
+              driver,
+              runner.installation,
+              "inspection-unavailable",
+              undefined,
+              "execution-check",
+            );
           throw new HubError(
-            "The selected harness could not be inspected. Review its settings and installed executable.",
+            diagnosticMessage(diagnostic),
             "E-HUB-03",
+            400,
+            ["Review settings"],
+            diagnostic,
           );
         });
-      if (!verifiedExecutable(facts.runtime?.executable, facts.verifiedAgainst))
-        throw new HubError("The selected executable is unverified.", "E-HUB-03");
+      const admitted =
+        verifiedExecutable(facts.runtime?.executable, facts.verifiedAgainst) !== null;
+      const diagnostic = selectionDiagnostic(
+        facts,
+        driver,
+        runner.installation,
+        "execution-check",
+        admitted,
+      );
+      if (!admitted)
+        throw new HubError(
+          diagnostic ? diagnosticMessage(diagnostic) : "The selected executable is unverified.",
+          "E-HUB-03",
+          400,
+          ["Review settings"],
+          diagnostic ?? undefined,
+        );
+      if (diagnostic) runner.reportCompatibility?.(diagnostic);
       if (resume !== undefined && facts.runtime?.resume.status !== "supported")
         throw new HubError(
           "Native resume compatibility is unverified for this selection.",
@@ -353,6 +390,7 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
           )
             ? cause.actions
             : undefined,
+          cause.diagnostic,
         );
       }
       if (cause instanceof ContextPreparationError) {

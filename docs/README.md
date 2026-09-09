@@ -9,6 +9,7 @@ not beside the instructions for current work.
 | Check scope or choose a domain term | [CONTEXT](../CONTEXT.md) |
 | Change record storage, delivery, or lifecycle | [Architecture](architecture.md) |
 | Attach a source or implement frames | [Source protocol](skill-chat-substrate.md) |
+| Explain agent installation warnings or refusals | [Compatibility feedback](compatibility.md) |
 | Change harness selection or session recall | [Drivers](drivers.md) |
 | Change documents, annotations, saves, or attachments | [Artifacts](artifacts.md) |
 | Understand a lasting tradeoff | [Architecture decisions](adr/README.md) |
@@ -39,6 +40,10 @@ review counts, implementation checklists, and superseded defaults do not.
 Do not maintain a second archive directory.
 
 ## Historical references
+
+Commit `aacacfe` contains completed RFC 20, its review, and all four resolved
+agent compatibility tickets. [Compatibility feedback](compatibility.md)
+records the current contract.
 
 Commit `4dcbb8d` contains the completed substrate plan, RFCs 02 through
 13, their reviews, the old decision register, and the resolved audits.

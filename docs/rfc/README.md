@@ -1,5 +1,10 @@
 # Active RFCs
 
+RFC 20 is implemented. Its proposal, review, and four resolved tickets are
+preserved in commit `aacacfe`. Current contracts live in
+[agent compatibility feedback](../compatibility.md). RFC 21 was allocated
+concurrently in the main worktree; its number remains reserved here.
+
 RFC 19 implements [Codex native context management](19_codex-native-context-management.rfc.md)
 in the local build. Published dependency integration remains separate.
 
@@ -16,7 +21,7 @@ commit `000381b`; its current contract is in [the design reference](../design.md
 Current reading-view design is listed in the
 [documentation index](../README.md#browser-design).
 
-The highest allocated RFC number is **19**. The next RFC is **20**.
+The highest allocated RFC number is **21**. The next RFC is **22**.
 Never reset numbering because completed files have been removed. Before
 allocating, check this high-water mark, active filenames, and Git history;
 use one greater than the highest number allocated and update this mark.
