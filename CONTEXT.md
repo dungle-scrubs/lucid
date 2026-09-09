@@ -55,6 +55,7 @@ Take nouns from here. One name per thing.
 | **lease** | Time-bounded right to be the writer. Lapses if not renewed |
 | **turn** | One agent answer, identified by a `turnId` |
 | **input** | Something a human said, delivered to the agent. Carries an idempotent `id` and a `mode` |
+| **input recovery** | Reconciliation of a browser send with its acceptance or refusal, retaining the original input identity and content; distinct from editing an unsent draft |
 | **disposition** | What actually happened to an input: `applied`, `queued`, `rejected` |
 | **event** | Agent output. `droppable` (`token`, `progress`, `context`) or `lossless` (everything else) |
 | **credit** | Flow control for the droppable class only. Shipped drivers grant none; live deltas remain unrecorded |
@@ -83,6 +84,8 @@ record; `conversationId` and artifact/version addresses keep their meanings.
 | **artifactId** | The name the agent gave the document. Chosen on the first emission and immutable after: annotations and revisions both point at it |
 | **title** | The name a person gave the document. Displayed instead of the `artifactId` when one has been written |
 | **version** | One artifact entry: its bytes, its author (`agent` or `human`), and its hash. Never rewritten |
+| **artifact frame** | The isolated view of one artifact version, where a person reads, uses, edits, or marks up the document; distinct from a source-protocol frame |
+| **comparison pair** | Two saved artifact versions chosen for comparison: the earlier version and the reviewed version |
 | **save** | A version authored by a person, recording the version it was working from. Not an input, and starts no turn |
 | **annotation batch** | One or more notes, sent as a single input. Rides in the input text behind a fence, like an artifact block |
 | **note** | What a person wrote, against one or more spots |
