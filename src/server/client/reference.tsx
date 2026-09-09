@@ -24,9 +24,13 @@
  */
 
 import type React from "react";
+import { useLayoutEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
+import { MoonDuotone, SunDuotone } from "./icons.js";
 import { InputRecovery } from "./input-submission-recovery.js";
 import { ELEMENT_ATTR, STYLE } from "./instrument.js";
+import { Button } from "./ui/button.js";
 
 /** One state: what it is called, what produces it, what it means. */
 const Case = ({
@@ -102,7 +106,7 @@ const InDocument = (): React.ReactElement => (
     <Case
       name="Selected"
       classes=".lucid-selected"
-      note="In the note being written. ⌘-click adds more."
+      note="In the note being written. ⌥⌘-click adds more."
     >
       <Marked cls="lucid-selected" text={SAMPLE} />
     </Case>
@@ -256,7 +260,7 @@ const NOTE_CARDS: readonly {
 
 const NoteCards = (): React.ReactElement => (
   <Section
-    title="Notes, in the conversation"
+    title="Notes, in the chat"
     blurb="Eight states, not the three usually on screen at once. Six of them are one question — how confident lucid is that the note still points where it did. A note that still points somewhere takes you there when clicked; one that does not is inert, because there is nowhere to go."
   >
     {NOTE_CARDS.map((c) => (
@@ -346,14 +350,6 @@ const Head = (): React.ReactElement => (
             <option value="24">v24 · by the agent · current</option>
             <option value="23">v23 · by you</option>
           </select>
-          <span className="modes">
-            <button type="button" className="m">
-              Edit
-            </button>
-            <button type="button" className="m current">
-              Annotate
-            </button>
-          </span>
         </div>
       </div>
     </Case>
@@ -368,14 +364,6 @@ const Head = (): React.ReactElement => (
             onboarding-checklist
           </button>
           <span className="doc-version">v1</span>
-          <span className="modes">
-            <button type="button" className="m current">
-              Edit
-            </button>
-            <button type="button" className="m">
-              Annotate
-            </button>
-          </span>
         </div>
       </div>
     </Case>
@@ -429,21 +417,13 @@ const Head = (): React.ReactElement => (
           <button type="button" className="v restore">
             Restore this version
           </button>
-          <span className="modes">
-            <button type="button" className="m" disabled>
-              Edit
-            </button>
-            <button type="button" className="m current" disabled>
-              Annotate
-            </button>
-          </span>
         </div>
       </div>
     </Case>
     <Case
       name="An unsaved edit"
       classes=".doc-head.saving-bar"
-      note="The bar stops describing the document and becomes the question. The name, the version and the modes are gone rather than greyed — the two things on it are the only two there are to do. The mode hotkey goes with the buttons, so there is no unlabelled way past it."
+      note="The bar stops describing the document and becomes the question. The name, the version and the modes are gone rather than greyed — the two things on it are the only two there are to do. Holding Option/Alt still lets you annotate the edited text."
     >
       <div className="ref-pane">
         <div className="doc-head saving-bar">
@@ -512,7 +492,7 @@ const Panel = (): React.ReactElement => (
       <div className="ref-pane">
         <div className="doc-panel">
           <div className="guidance idle">
-            Marking up: click a part of the document to select it, ⌘-click to add more.
+            Marking up: click a part of the document to select it, ⌥⌘-click to add more.
           </div>
           <div className="note-actions">
             <button type="button" disabled>
@@ -627,8 +607,8 @@ const Panel = (): React.ReactElement => (
 
 const Dock = (): React.ReactElement => (
   <Section
-    title="The conversation composer"
-    blurb="Queued notes, prompt entry, and the driver choices stay beside the conversation."
+    title="The chat composer"
+    blurb="Queued notes, prompt entry, and the driver choices stay beside the chat."
     wide
   >
     <Case
@@ -723,7 +703,7 @@ const Dock = (): React.ReactElement => (
       <div className="ref-pane">
         <div className="dock">
           <form className="composer">
-            <textarea placeholder="Send to the conversation…" rows={2} />
+            <textarea placeholder="Send a message…" rows={2} />
             <div className="composer-toolbar">
               <button type="button" className="composer-attach" aria-label="Attach a file">
                 +
@@ -822,7 +802,7 @@ const Attaching = (): React.ReactElement => (
       <div className="ref-pane">
         <div className="dock">
           <form className="composer">
-            <textarea placeholder="Send to the conversation…" rows={2} />
+            <textarea placeholder="Send a message…" rows={2} />
             <div className="composer-toolbar">
               <button type="button" className="composer-attach" aria-label="Attach a file">
                 +
@@ -925,11 +905,11 @@ const Failures = (): React.ReactElement => (
     <Case
       name="No artifact by that name"
       classes=".empty-panel"
-      note="The URL named something this conversation does not hold, so it offers the one it does."
+      note="The URL named something this artifact does not hold, so it offers the one it does."
     >
       <div className="empty-panel">
         <p className="miss-heading">
-          This conversation has no artifact called <code className="miss-name">roadmap</code>.
+          This artifact has no document called <code className="miss-name">roadmap</code>.
         </p>
         <button type="button" className="primary">
           Open onboarding-checklist
@@ -950,7 +930,7 @@ const Failures = (): React.ReactElement => (
       classes=".notice"
       note="A damaged record, or a server that answered with something else."
     >
-      <div className="notice">Could not read the conversation (500)</div>
+      <div className="notice">Could not read the artifact (500)</div>
     </Case>
   </Section>
 );
@@ -1004,5 +984,118 @@ const Page = (): React.ReactElement => (
   </>
 );
 
+function HubExamples(props: { readonly appearance: "light" | "dark" }) {
+  return (
+    <>
+      <header className="hub-header" id="hub-top">
+        <a href="#hub-top" className="hub-logo">
+          <span>.</span>lucid
+        </a>
+        <h1>Documents</h1>
+        <Button variant="outline">+ New</Button>
+        <Button variant="ghost">Refresh</Button>
+        <div className="theme-controls">
+          <button type="button" className="theme-settings">
+            Settings
+          </button>
+          <button
+            type="button"
+            className="theme-toggle"
+            aria-label={
+              props.appearance === "dark" ? "Switch to light mode" : "Switch to dark mode"
+            }
+          >
+            {props.appearance === "dark" ? <SunDuotone size={16} /> : <MoonDuotone size={16} />}
+          </button>
+        </div>
+      </header>
+      <main className="hub-main">
+        <label className="hub-search">
+          <span className="sr-only">Search conversations</span>
+          <input data-slot="input" placeholder="Search conversations..." />
+        </label>
+        <details className="hub-group" open>
+          <summary>
+            Field research <span className="hub-count">1</span>
+          </summary>
+          <ul>
+            <li className="hub-item" id="hub-example">
+              <a className="hub-row" href="#hub-example">
+                <span className="hub-title">Watershed notes</span>
+                <span className="hub-context">Catchment survey</span>
+              </a>
+            </li>
+          </ul>
+        </details>
+        <p className="hub-empty">No conversations match this search.</p>
+        <p className="hub-error" role="alert">
+          Cannot connect to Lucid. Refresh to try again.
+        </p>
+        <footer className="hub-footer">
+          <span>1 conversation</span>
+          <span>Grouped by repository or starting folder</span>
+        </footer>
+      </main>
+    </>
+  );
+}
+
+function ReferenceFrame(props: {
+  readonly appearance: "light" | "dark";
+  readonly css: string;
+  readonly hub?: boolean;
+}) {
+  const [frameDocument, setFrameDocument] = useState<Document | null>(null);
+  const [height, setHeight] = useState(1000);
+  const srcDoc = useMemo(
+    () =>
+      `<!doctype html><html class="${props.appearance === "dark" ? "dark" : ""}" style="color-scheme:${props.appearance}"><head><meta name="color-scheme" content="${props.appearance}"><style>${props.css}</style></head><body class="${props.hub ? "hub-reference" : "ref"}"></body></html>`,
+    [props.appearance, props.css, props.hub],
+  );
+  useLayoutEffect(() => {
+    if (!frameDocument) return;
+    const measure = () => setHeight(frameDocument.body.scrollHeight);
+    const observer = new ResizeObserver(measure);
+    observer.observe(frameDocument.body);
+    measure();
+    return () => observer.disconnect();
+  }, [frameDocument]);
+  return (
+    <>
+      <iframe
+        title={`${props.appearance} ${props.hub ? "hub" : "behaviour"} reference`}
+        style={{ colorScheme: props.appearance, width: "100%", height, border: 0 }}
+        onLoad={(event) => setFrameDocument(event.currentTarget.contentDocument)}
+        srcDoc={srcDoc}
+      />
+      {frameDocument
+        ? createPortal(
+            props.hub ? <HubExamples appearance={props.appearance} /> : <Page />,
+            frameDocument.body,
+          )
+        : null}
+    </>
+  );
+}
+
 const root = document.getElementById("ref-root");
-if (root !== null) createRoot(root).render(<Page />);
+if (root !== null) {
+  const css = [...document.styleSheets]
+    .flatMap((sheet) => [...sheet.cssRules].map((rule) => rule.cssText))
+    .join("\n");
+  createRoot(root).render(
+    <>
+      <header className="ref-head">
+        <h1>Lucid appearances</h1>
+        <p>Explicit light and dark previews. These do not change your application preference.</p>
+      </header>
+      {(["light", "dark"] as const).map((appearance) => (
+        <section className="ref-section" key={appearance}>
+          <h2>{appearance === "light" ? "Light" : "Dark"}</h2>
+          <ReferenceFrame appearance={appearance} css={css} hub />
+          <ReferenceFrame appearance={appearance} css={css} />
+        </section>
+      ))}
+    </>,
+  );
+}

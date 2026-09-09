@@ -83,14 +83,14 @@ this design must prevent.
 
 ## 3. The two modes
 
-**Annotate** — the mode a document opens in. Clicking picks a part of the
+**Annotate** - held with Option/Alt, or enabled by the touch Annotate action. Clicking picks a part of the
 document to write a note about. The agent's own controls do not operate: a
 click on a checkbox selects it for a note rather than ticking it.
 Links with an `href` remain ordinary links: a pointer cursor, no annotation
 hover outline, and direct activation follows the destination. This includes
 child labels and icons. Dragging to select linked text still supports notes.
 
-**Edit** — the document behaves as the agent built it. Controls work, text
+**Edit** - the default. The document behaves as the agent built it. Controls work, text
 takes a caret, and changes are saved as a new version.
 
 ### The mode may never be ambiguous
@@ -125,8 +125,10 @@ Forced by behaviour, so the design must carry it:
 - Text is editable in edit mode only.
 - The agent's controls are inert in annotate mode.
 - An older version suspends both modes without being a third mode.
-- **Annotate is where a document opens**, so the first state anyone meets is
-  the one where clicking a control does not operate it.
+- **Edit is where a document opens**. Holding Option/Alt annotates; adding
+  Command selects multiple spots. Releasing keys keeps the selection and note
+  box. Touch has an Annotate action. The note box can be dragged out of the
+  way; its position lasts for that note.
 
 Open to the designer: the cursor (a crosshair today, which is a choice),
 every colour, and whether annotations stay visible while editing.
@@ -247,6 +249,11 @@ still points where it did* — and the design needs **three bands plus lost
 plus not-on-this-version**, not seven treatments.
 
 **Lost is not an error.** It is a fact about history: the document moved on.
+
+Sent notes have no hover background fill. The status indicator's rich tooltip
+opens on hover or keyboard focus and explains the three match levels, lost as level 0, and
+the separate not-on-this-version state. It also distinguishes a passage match
+from whether the agent has addressed the note.
 
 ### Attaching a file
 

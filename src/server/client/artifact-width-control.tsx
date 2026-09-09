@@ -1,9 +1,7 @@
-import * as Popover from "@radix-ui/react-popover";
 import * as React from "react";
 import {
   ARTIFACT_FRAME_MIN,
   artifactWidthKey,
-  artifactWidthLabel,
   artifactWidthPixels,
   preferredArtifactWidth,
   readArtifactWidth,
@@ -82,18 +80,149 @@ export function useArtifactWidth(
   const value = Math.max(minimum, Math.min(100, percentage));
   const pixels = artifactWidthPixels(preferred, override, measure.available, measure.rootFontSize);
   const control = (
-    <Popover.Root>
-      <Popover.Trigger asChild>
-        <button type="button" className="v width-trigger">
-          Document width
-        </button>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content className="width-panel" sideOffset={8} align="end" collisionPadding={12}>
-          <label htmlFor={id}>Document width</label>
-          <output htmlFor={id}>
-            {Math.round(measure.used)}px · {percentage}% of available space
-          </output>
+    <ArtifactWidthControl
+      key={key}
+      id={id}
+      minimum={minimum}
+      onChange={change}
+      override={override}
+      percentage={percentage}
+      value={value}
+    />
+  );
+  return { control, stage, style: { inlineSize: measure.available > 0 ? `${pixels}px` : "100%" } };
+}
+
+/** The border grows from the tab; the controls keep their size as they fade in. */
+function ArtifactWidthControl(props: {
+  readonly id: string;
+  readonly minimum: number;
+  readonly onChange: (value: number | null) => void;
+  readonly override: number | null;
+  readonly percentage: number;
+  readonly value: number;
+}) {
+  const { id, minimum, onChange, override, percentage, value } = props;
+  const [open, setOpen] = React.useState(false);
+  const [height, setHeight] = React.useState(100);
+  const root = React.useRef<HTMLDivElement>(null);
+  const content = React.useRef<HTMLDivElement>(null);
+  const trigger = React.useRef<HTMLButtonElement>(null);
+  const closeTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dragging = React.useRef(false);
+  const returningFocus = React.useRef(false);
+  const clearClose = (): void => {
+    if (closeTimer.current !== null) clearTimeout(closeTimer.current);
+    closeTimer.current = null;
+  };
+  const show = (): void => {
+    clearClose();
+    setOpen(true);
+  };
+  const scheduleClose = (): void => {
+    clearClose();
+    if (!dragging.current) closeTimer.current = setTimeout(() => setOpen(false), 180);
+  };
+  React.useLayoutEffect(() => {
+    const node = content.current;
+    if (!node) return;
+    const measure = (): void => setHeight(node.offsetHeight + 2);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  React.useEffect(
+    () => () => {
+      if (closeTimer.current !== null) clearTimeout(closeTimer.current);
+    },
+    [],
+  );
+  React.useLayoutEffect(() => {
+    content.current?.toggleAttribute("inert", !open);
+  }, [open]);
+  React.useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: PointerEvent): void => {
+      if (event.target instanceof Node && !root.current?.contains(event.target)) setOpen(false);
+    };
+    const blur = (): void => setOpen(false);
+    document.addEventListener("pointerdown", dismiss);
+    window.addEventListener("blur", blur);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      window.removeEventListener("blur", blur);
+    };
+  }, [open]);
+  return (
+    <div
+      ref={root}
+      className="width-control"
+      role="toolbar"
+      aria-label="Document width"
+      data-state={open ? "open" : "closed"}
+      style={{ "--width-panel-height": `${height}px` } as React.CSSProperties}
+      onPointerEnter={(event) => {
+        if (event.pointerType !== "touch") show();
+      }}
+      onPointerLeave={(event) => {
+        if (event.pointerType !== "touch") scheduleClose();
+      }}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) {
+          clearClose();
+          setOpen(false);
+        }
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          clearClose();
+          setOpen(false);
+          returningFocus.current = true;
+          trigger.current?.focus();
+          returningFocus.current = false;
+        }
+      }}
+    >
+      <button
+        ref={trigger}
+        type="button"
+        className="width-trigger"
+        aria-label="Adjust document width"
+        aria-controls={`${id}-panel`}
+        aria-expanded={open}
+        onClick={show}
+        onFocus={() => {
+          if (!returningFocus.current) show();
+        }}
+      >
+        Width
+      </button>
+      <div className="width-panel" id={`${id}-panel`}>
+        <div ref={content} className="width-panel-content">
+          <div className="width-panel-heading">
+            <label htmlFor={id}>Document width</label>
+            <output htmlFor={id}>{percentage}%</output>
+          </div>
+          <fieldset className="width-presets" aria-label="Document width presets">
+            {[
+              { label: "Narrow", width: 55 },
+              { label: "Reading", width: 75 },
+              { label: "Full", width: 100 },
+              { label: "Default", width: null },
+            ].map((preset) => (
+              <button
+                key={preset.label}
+                type="button"
+                aria-pressed={override === preset.width}
+                title={preset.width === null ? "Restore the document's preferred width" : undefined}
+                onClick={() => onChange(preset.width)}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </fieldset>
           <input
             id={id}
             type="range"
@@ -101,25 +230,32 @@ export function useArtifactWidth(
             max={100}
             step={1}
             value={value}
-            aria-valuetext={`${Math.round(measure.used)} pixels, ${percentage} percent of available space`}
-            onChange={(event) => change(Number(event.currentTarget.value))}
+            aria-valuetext={`${percentage} percent of available space`}
+            onChange={(event) => onChange(Number(event.currentTarget.value))}
+            onPointerDown={() => {
+              dragging.current = true;
+              clearClose();
+            }}
+            onPointerUp={(event) => {
+              dragging.current = false;
+              const bounds = root.current?.getBoundingClientRect();
+              if (
+                bounds &&
+                (event.clientX < bounds.left ||
+                  event.clientX > bounds.right ||
+                  event.clientY < bounds.top - height / 2 ||
+                  event.clientY > bounds.top + height / 2)
+              ) {
+                scheduleClose();
+              }
+            }}
+            onPointerCancel={() => {
+              dragging.current = false;
+              scheduleClose();
+            }}
           />
-          <p>
-            {override === null
-              ? `Artifact: ${artifactWidthLabel(preferred)}`
-              : `Reader preference: ${override}%`}
-          </p>
-          <button
-            type="button"
-            className="v"
-            disabled={override === null}
-            onClick={() => change(null)}
-          >
-            Use artifact width
-          </button>
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+        </div>
+      </div>
+    </div>
   );
-  return { control, stage, style: { inlineSize: measure.available > 0 ? `${pixels}px` : "100%" } };
 }

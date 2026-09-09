@@ -1,4 +1,4 @@
-import { parse } from "parse5";
+import { artifactMetadata } from "./artifact-metadata.js";
 
 export type ArtifactWidth =
   | { readonly unit: "full" }
@@ -17,24 +17,8 @@ export const parseArtifactWidth = (raw: string | null): ArtifactWidth => {
 };
 
 /** Parse bytes without creating browser elements or fetching their resources. */
-export const preferredArtifactWidth = (bytes: string): ArtifactWidth => {
-  const tree = parse(bytes);
-  const html = tree.childNodes.find((node) => node.nodeName === "html");
-  if (!html || !("childNodes" in html)) return { unit: "full" };
-  const head = html.childNodes.find((node) => node.nodeName === "head");
-  if (!head || !("childNodes" in head)) return { unit: "full" };
-  const meta = head.childNodes.find(
-    (node) =>
-      node.nodeName === "meta" &&
-      "attrs" in node &&
-      node.attrs.some((attr) => attr.name === "name" && attr.value === "lucid-width"),
-  );
-  return parseArtifactWidth(
-    meta && "attrs" in meta
-      ? (meta.attrs.find((attr) => attr.name === "content")?.value ?? null)
-      : null,
-  );
-};
+export const preferredArtifactWidth = (bytes: string): ArtifactWidth =>
+  parseArtifactWidth(artifactMetadata(bytes, "lucid-width"));
 
 export const artifactWidthLabel = (width: ArtifactWidth): string =>
   width.unit === "full" ? "Full available width" : `${width.value}${width.unit}`;

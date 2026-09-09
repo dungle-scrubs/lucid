@@ -71,7 +71,10 @@ header yourself.
 - Controls may be interactive, but the useful meaning of the document must
   remain readable without interaction.
 
-If the `lucid-design` skill is available, use its visual guidance as well.
+For new reading artifacts, follow [lucid-design](../lucid-design/SKILL.md),
+including its adaptive default and verified example. The
+[artifact appearance contract](../../docs/artifacts.md#application-and-artifact-appearance)
+owns declaration, synchronization, and saved-content rules.
 
 ## Revise the existing artifact
 

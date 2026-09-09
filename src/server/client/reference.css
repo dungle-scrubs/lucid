@@ -13,8 +13,8 @@
 body.ref {
   margin: 0;
   padding: 0 0 6rem;
-  background: var(--bg);
-  color: var(--fg);
+  background: var(--color-bg);
+  color: var(--color-text);
   font:
     14px / 1.5 ui-sans-serif,
     -apple-system,
@@ -25,7 +25,7 @@ body.ref {
 
 .ref-head {
   padding: 2rem 2rem 1.25rem;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--edge);
 }
 
 .ref-head h1 {
@@ -37,7 +37,7 @@ body.ref {
 .ref-head p {
   margin: 0 0 0.35rem;
   max-width: 62ch;
-  color: var(--muted);
+  color: var(--color-neutral-600);
 }
 
 .ref-section {
@@ -53,7 +53,7 @@ body.ref {
 .ref-section > p {
   margin: 0 0 1.1rem;
   max-width: 68ch;
-  color: var(--muted);
+  color: var(--color-neutral-600);
 }
 
 /* One card per state. The grid is the whole point of the page: every state
@@ -69,9 +69,9 @@ body.ref {
 }
 
 .ref-case {
-  border: 1px solid var(--line);
+  border: 1px solid var(--edge);
   border-radius: 8px;
-  background: var(--panel);
+  background: var(--paper);
   overflow: hidden;
 }
 
@@ -80,8 +80,8 @@ body.ref {
   align-items: baseline;
   gap: 0.5rem;
   padding: 0.55rem 0.75rem;
-  border-bottom: 1px solid var(--line);
-  background: var(--bg);
+  border-bottom: 1px solid var(--edge);
+  background: var(--color-bg);
 }
 
 .ref-case-name {
@@ -92,26 +92,26 @@ body.ref {
 .ref-case-classes {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.72rem;
-  color: var(--faint);
+  color: var(--color-neutral-500);
   margin-left: auto;
 }
 
 .ref-case-note {
   padding: 0.45rem 0.75rem 0.6rem;
   font-size: 0.78rem;
-  color: var(--muted);
-  border-top: 1px solid var(--line);
+  color: var(--color-neutral-600);
+  border-top: 1px solid var(--edge);
 }
 
 /* Flags a state the resolutions found broken, so nobody designs from it as
    though it were intended. */
 .ref-case.broken .ref-case-head {
-  background: color-mix(in srgb, var(--error) 12%, var(--bg));
+  background: color-mix(in srgb, var(--color-accent-2) 12%, var(--color-bg));
 }
 
 .ref-case.broken .ref-case-name::after {
   content: " — defect";
-  color: var(--error);
+  color: var(--color-accent-2);
   font-weight: 500;
 }
 
@@ -123,8 +123,8 @@ body.ref {
    agent's document supplies its own and lucid's marks have to read over
    whatever that turns out to be. */
 .ref-doc {
-  background: var(--panel);
-  color: var(--fg);
+  background: var(--paper);
+  color: var(--color-text);
   padding: 0.4rem 0.2rem;
 }
 
@@ -135,14 +135,14 @@ body.ref {
 /* The dock and head cases need a container the width of a real pane, or
    flex children size to the card instead of to the surface. */
 .ref-pane {
-  border: 1px solid var(--line);
+  border: 1px solid var(--edge);
   border-radius: 6px;
   overflow: hidden;
-  background: var(--bg);
+  background: var(--color-bg);
 }
 
 .ref-foot {
   padding: 2.5rem 2rem 0;
-  color: var(--muted);
+  color: var(--color-neutral-600);
   max-width: 72ch;
 }

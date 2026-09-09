@@ -43,6 +43,13 @@ const fire = (type, id, modifiers = {}) => {
   return event;
 };
 try {
+  // These cases exercise latched annotation, regardless of the initial mode.
+  dom.window.dispatchEvent(
+    new dom.window.MessageEvent("message", {
+      data: { source: "lucid-artifact", kind: "mode", mode: "annotate" },
+      source: dom.window,
+    }),
+  );
   switch (process.argv[2]) {
     case "link":
     case "label":

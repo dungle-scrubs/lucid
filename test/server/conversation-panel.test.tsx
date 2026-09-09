@@ -68,7 +68,7 @@ test("view toggles preserve mounted drafts, focus, and visibility across updates
     expect(panel.querySelector("textarea")).toBe(draft);
     expect(draft.value).toBe("unsent change");
     await React.act(() => first.click());
-    expect(first.getAttribute("aria-label")).toBe("Hide conversation");
+    expect(first.getAttribute("aria-label")).toBe("Hide chat");
     expect(panel.querySelector("p")?.textContent).toBe("v2 and new message");
   } finally {
     await React.act(() => root.unmount());

@@ -52,7 +52,7 @@ export const conversationTitle = (prompt: string, saved?: string): string => {
       break;
     end = next;
   }
-  return normalized.slice(0, end).trim() || "New conversation";
+  return normalized.slice(0, end).trim() || "New artifact";
 };
 
 export type NamingInput =
@@ -77,8 +77,8 @@ export function namingPrompt(text: string): string {
   return input.kind === "text"
     ? input.text
     : input.kind === "attachment"
-      ? "Attachment conversation"
-      : "New conversation";
+      ? "Artifact with attachments"
+      : conversationTitle("");
 }
 
 /** Validate stored title fields once for discovery and detail projections. */
@@ -114,7 +114,7 @@ export function titleState(value: Parameters<typeof savedTitleFields>[0]) {
 }
 
 export function fallbackConversationTitle(inputs: Iterable<{ readonly text: string }>): string {
-  let fallback = "New conversation";
+  let fallback = conversationTitle("");
   for (const input of inputs) {
     const naming = namingInput(input.text);
     if (naming.kind === "text") return conversationTitle(naming.text);

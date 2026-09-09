@@ -4,6 +4,20 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>lucid</title>
+    <!-- Keep this synchronous: Bun merges module scripts and drops blocking=render.
+         theme-bootstrap.test.ts checks these rules against the shared preference owner. -->
+    <script id="lucid-theme-bootstrap-reader">
+      (() => {
+        let preference;
+        try { preference = localStorage.getItem("lucid.theme.v1"); } catch {}
+        let dark = preference === "dark";
+        if (preference !== "light" && preference !== "dark") {
+          try { dark = matchMedia("(prefers-color-scheme: dark)").matches; } catch {}
+        }
+        document.documentElement.classList.toggle("dark", dark);
+        document.documentElement.style.colorScheme = dark ? "dark" : "light";
+      })();
+    </script>
     <link rel="stylesheet" href="./app.css" />
     <link rel="stylesheet" href="./settings.css" />
   </head>

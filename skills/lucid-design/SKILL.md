@@ -29,9 +29,13 @@ For emission and revision syntax, read the sibling `lucid/SKILL.md`.
 7. Prefer self-contained HTML, CSS, and SVG. Use external libraries only when
    they materially improve correctness or interaction; pin their versions and
    identify any network requirement. Never include credentials.
-8. Support light and dark reading with complete foreground/background pairs,
-   unless the user requests a fixed theme. An explicit document theme wins
-   over the system preference. Do not depend on Lucid remapping your tokens.
+8. Make new reading artifacts adaptive by default. Use the
+   [verified example](examples/adaptive-reading.html) for both palettes and
+   serialization-safe SVG/canvas colors. Follow the
+   [runtime appearance contract](../../docs/artifacts.md#application-and-artifact-appearance)
+   for declarations, native media-query selection, and saved-content rules.
+   Explicit user or subject-design requirements can select a fixed theme.
+   Your colors and typography remain the document's design.
 
 ## Verify before delivery
 
@@ -43,3 +47,9 @@ cannot assume access to its parent page or local files.
 Use color with text, shape, or position so it is never the only signal. Label
 chart units, scales, sources, and whether values are real or illustrative.
 Distinguish zero from missing data. Report any behavior that remains untested.
+
+When graphics adapt, compare snapshots after repaint with input held constant.
+CSS-driven SVG keeps attributes unchanged; canvas changes pixels only. A script
+that rewrites fill attributes or inline styles on a theme change fails this
+check. Verify a human text edit survives saving and reopening in the opposite
+appearance. Keep an adjacent accessible explanation for canvas/WebGL.

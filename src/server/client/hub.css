@@ -315,3 +315,30 @@ summary:focus-visible {
   color: var(--foreground);
   border: 1px solid transparent;
 }
+
+@media (max-width: 560px) {
+  .hub-header {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 6px;
+    padding-inline: 10px;
+  }
+  .hub-header .hub-logo {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .hub-header h1 {
+    grid-column: 1;
+    grid-row: 2;
+    min-width: 0;
+  }
+  .hub-header > .theme-controls {
+    grid-column: 2 / 4;
+    grid-row: 1;
+    justify-self: end;
+  }
+  .hub-header > button {
+    grid-row: 2;
+    justify-self: end;
+  }
+}

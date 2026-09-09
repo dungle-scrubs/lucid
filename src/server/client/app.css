@@ -37,23 +37,23 @@
 /* The browser surface: the reading view.
  *
  * Design: current reading-view rules are in `docs/design.md`. Two panes - a document sheet on the eggshell ground, the
- * conversation beside it - under exactly one 34px header per column.
+ * conversation beside it - under one header per column, at least 34px high.
  *
  * Laws carried in this file:
  * - Cyan (--color-accent) is everything the user or agent does. Magenta
  *   (--color-accent-2) is only the substrate refusing. Neutral ink is
  *   anything waiting.
  * - No shadows anywhere. Elevation is the paper-on-pattern relationship.
- * - Light only. Dark mode is not designed.
+ * - Both appearances preserve the same reading hierarchy and accent roles.
  *
- * The artifact frame cannot inherit this :root - a sandbox is its own
- * document - so `instrument.ts` redefines the same tokens inside the
- * injected mark stylesheet (FRAME_TOKENS). The two blocks move together:
- * same names, same values.
+ * Artifact annotation tokens are namespaced and follow the frame preference.
+ * FRAME_TOKENS in instrument.ts carries the same palette values under
+ * namespaced properties. Its media query follows the frame, not this root.
  */
 
 :root {
   color-scheme: light;
+  --on-accent: #fff;
 
   /* Broadsheet roles and ramps. */
   --color-bg: #f3f2f2;
@@ -118,6 +118,45 @@
      an @supports override - and it emits at most ONE such override per
      rule block, silently dropping the rest. One block per token is what
      makes all five survive both pipelines. */
+}
+
+:root.dark {
+  color-scheme: dark;
+  --on-accent: #112a33;
+  --color-bg: #202020;
+  --color-surface: #2a2929;
+  --color-text: #eeebeb;
+  --color-accent: #62c5ee;
+  --color-accent-2: #ff90b1;
+  --color-divider: #ffffff29;
+  --color-neutral-100: #252424;
+  --color-neutral-200: #302e2e;
+  --color-neutral-300: #444141;
+  --color-neutral-400: #605d5d;
+  --color-neutral-500: #9b9797;
+  --color-neutral-600: #bab6b6;
+  --color-neutral-700: #d7d3d3;
+  --color-neutral-800: #eae7e7;
+  --color-neutral-900: #f8f4f4;
+  --color-accent-100: #14303c;
+  --color-accent-200: #1c4352;
+  --color-accent-300: #276078;
+  --color-accent-400: #3986a3;
+  --color-accent-500: #38a6cf;
+  --color-accent-600: #62c5ee;
+  --color-accent-700: #99e0ff;
+  --color-accent-800: #cbeeff;
+  --color-accent-900: #e9f8ff;
+  --color-accent-2-100: #381d29;
+  --color-accent-2-200: #4b2437;
+  --color-accent-2-300: #683149;
+  --color-accent-2-400: #a25270;
+  --color-accent-2-500: #ff458e;
+  --color-accent-2-600: #ff90b1;
+  --color-accent-2-700: #ffc0d0;
+  --color-accent-2-800: #ffdee6;
+  --color-accent-2-900: #fff1f4;
+  --paper: #272626;
 }
 
 :root {
@@ -322,13 +361,14 @@ body {
     outline-offset: -3px;
   }
   .doc-ground {
+    position: relative;
     margin: 0 -14px;
   }
 }
 
 /* --- the one header ------------------------------------------------------
  *
- * A single 34px row over the document column: the lucid mark, a hairline,
+ * A header over the document column: the lucid mark, a hairline,
  * the name, the version pill, and the mode toggle pushed right. No second
  * header, no toolbar under it. Transparent on the ground at rest;
  * the ink state fills it. */
@@ -378,9 +418,7 @@ body {
   background: var(--edge-2);
 }
 
-/* The name is a button until you press it. It carries no button chrome:
-   the pencil on approach is the affordance, and the name is already the
-   most prominent word in the bar. */
+/* The name is a button until you press it. Hover marks the editable title. */
 .doc-head .doc-id {
   color: var(--color-text);
 }
@@ -388,7 +426,6 @@ body {
 .doc-rename {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
   border: 0;
   background: transparent;
   color: inherit;
@@ -405,20 +442,6 @@ body {
 
 .doc-rename:hover {
   background: color-mix(in srgb, var(--color-text) 6%, transparent);
-}
-
-/* The pencil appears on approach - instant, like every approach mark. */
-.doc-rename .pencil {
-  display: flex;
-  flex: none;
-  color: color-mix(in srgb, var(--color-text) 40%, transparent);
-  opacity: 0;
-  transition: opacity 80ms ease;
-}
-
-.doc-rename:hover .pencil,
-.doc-rename:focus-visible .pencil {
-  opacity: 1;
 }
 
 .doc-renaming {
@@ -554,10 +577,6 @@ body {
   color: var(--color-text);
 }
 
-.doc-head button.width-trigger {
-  border-radius: 4px;
-}
-
 /* The lock chips (G4, 6b): a version that refuses everything, and the
    compare view. Neutral ink - going back on purpose refused nothing, and
    comparing is a reading act. Same family as the conversation's status
@@ -604,17 +623,7 @@ body {
   text-overflow: ellipsis;
 }
 
-/* The mode toggle, pushed right. The active mode is filled with the
-   accent: a mode is a thing the person chose. */
-.modes {
-  margin-left: auto;
-  display: flex;
-  flex: none;
-  padding: 2px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--color-text) 7%, transparent);
-}
-
+/* The touch annotation action. Desktop annotation uses held modifiers. */
 .doc-head button.m {
   padding: 5px 11px;
   border: 0;
@@ -625,9 +634,9 @@ body {
   cursor: pointer;
 }
 
-.doc-head button.m.current {
+.doc-head .touch-annotation button[aria-pressed="true"] {
   background: var(--color-accent);
-  color: #fff;
+  color: var(--on-accent);
   font-family: var(--font-heading);
   font-weight: var(--font-heading-weight);
 }
@@ -686,7 +695,7 @@ body {
 .doc-head.saving-bar button.v.primary {
   background: var(--color-accent);
   border-color: var(--color-accent);
-  color: #fff;
+  color: var(--on-accent);
   font-family: var(--font-heading);
   font-weight: var(--font-heading-weight);
 }
@@ -749,6 +758,7 @@ body {
  * on. */
 
 .doc-ground {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -831,7 +841,7 @@ body {
   padding: 3px 11px 4px;
   border-radius: 0 0 8px 8px;
   background: var(--color-accent);
-  color: #fff;
+  color: var(--on-accent);
   font: 600 10px / 1 var(--font-heading);
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -843,9 +853,7 @@ body {
 }
 
 .doc-frame {
-  /* Let the artifact observe the system preference independently of the
-     surrounding app's light-only scheme. */
-  color-scheme: light dark;
+  /* The version's artifactColorScheme policy sets the inline scheme. */
   flex: 1;
   min-height: 0;
   width: 100%;
@@ -856,36 +864,129 @@ body {
   background: transparent;
 }
 
-.width-panel {
-  z-index: 100;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  inline-size: min(290px, calc(100vw - 24px));
-  padding: 16px;
-  border: 1px solid var(--edge-2);
-  border-radius: 8px;
-  background: var(--paper);
+.width-control {
+  container-type: inline-size;
+  position: absolute;
+  inset-block-start: 16px;
+  inset-inline-start: 50%;
+  inline-size: min(320px, calc(100% - 24px));
+  block-size: 0;
+  transform: translateX(-50%);
+  z-index: 20;
   color: var(--color-text);
-  font: 13px / 1.5 var(--font-body);
+  font: 13px / 1.4 var(--font-body);
+}
+.width-trigger {
+  position: absolute;
+  inset-inline-start: 50%;
+  transform: translate(-50%, -50%);
+  inline-size: 74px;
+  block-size: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-neutral-600);
+  font: 10px / 1 var(--font-heading);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  z-index: 1;
+}
+.width-control[data-state="open"] .width-trigger {
+  opacity: 0;
+  pointer-events: none;
+}
+.width-panel {
+  position: absolute;
+  inset-inline-start: 50%;
+  transform: translate(-50%, -50%);
+  inline-size: 74px;
+  block-size: 20px;
+  overflow: hidden;
+  border: 1px solid var(--edge-2);
+  border-radius: 5px;
+  background: var(--paper);
+  pointer-events: none;
+  transition:
+    inline-size 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    block-size 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 180ms ease;
+}
+.width-control[data-state="open"] .width-panel {
+  inline-size: 100%;
+  block-size: var(--width-panel-height);
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--color-text) 8%, transparent);
+  pointer-events: auto;
+}
+.width-panel-content {
+  position: absolute;
+  inset-inline-start: 50%;
+  inset-block-start: 50%;
+  transform: translate(-50%, -50%);
+  inline-size: calc(100cqi - 2px);
+  padding: 12px;
+  opacity: 0;
+  transition: opacity 80ms ease;
+}
+.width-control[data-state="open"] .width-panel-content {
+  opacity: 1;
+  transition: opacity 110ms ease 65ms;
+}
+.width-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 .width-panel label {
+  font-size: 14px;
   font-weight: 600;
 }
 .width-panel output {
   font-variant-numeric: tabular-nums;
 }
-.width-panel p {
+.width-presets {
+  min-inline-size: 0;
+  padding: 0;
+  border: 0;
   margin: 0;
+  display: flex;
+  gap: 4px;
+  margin-block-start: 8px;
 }
-:where(.width-panel) input {
-  inline-size: 100%;
-  accent-color: var(--color-accent);
+.width-presets button {
+  flex: 1;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--color-text) 6%, transparent);
+  color: var(--color-neutral-700);
+  font: 12px / 1.3 var(--font-heading);
   cursor: pointer;
 }
-.width-panel :focus-visible {
+.width-presets button:hover,
+.width-presets button:where([aria-pressed="true"]) {
+  background: var(--color-accent-100);
+  color: var(--color-accent-800);
+}
+:where(.width-panel) input {
+  display: block;
+  inline-size: 100%;
+  margin: 10px 0 0;
+  accent-color: var(--color-accent);
+  cursor: ew-resize;
+}
+.width-control :focus-visible {
   outline: 2px solid var(--color-accent);
-  outline-offset: 3px;
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .width-panel,
+  .width-panel-content,
+  .width-control[data-state="open"] .width-panel-content {
+    transition: none;
+  }
 }
 
 /* --- 6a: the travel offer ----------------------------------------------
@@ -904,7 +1005,7 @@ body {
   padding: 9px 12px;
   border: 0;
   background: var(--color-accent);
-  color: #fff;
+  color: var(--on-accent);
   cursor: pointer;
   text-align: left;
 }
@@ -935,7 +1036,7 @@ body {
   height: 24px;
   padding: 0 11px;
   border-radius: 20px;
-  background: #fff;
+  background: var(--paper);
   color: var(--color-accent-800);
   font: 600 11.5px / 1 var(--font-heading);
 }
@@ -1140,7 +1241,7 @@ body {
   border: 1px solid var(--color-accent);
   border-radius: 20px;
   background: var(--color-accent);
-  color: #fff;
+  color: var(--on-accent);
   font: 600 12.5px / 1 var(--font-heading);
   cursor: pointer;
 }
@@ -1400,6 +1501,16 @@ body {
   pointer-events: none;
 }
 
+.touch-annotation {
+  display: none;
+}
+
+@media (any-pointer: coarse) {
+  .touch-annotation {
+    display: inline-flex;
+  }
+}
+
 .note-pop {
   z-index: 40;
   /* What Radix measured is the only true answer here: the box is placed
@@ -1407,25 +1518,82 @@ body {
      width and hung off the edge. */
   width: 360px;
   max-width: var(--radix-popper-available-width, 360px);
-  max-height: var(--radix-popper-available-height, none);
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px;
+  overflow: visible;
   border: 1px solid var(--edge-2);
   border-radius: 12px;
   background: var(--paper);
   color: var(--color-text);
 }
 
+.note-pop[data-detached="true"] {
+  max-width: calc(100vw - 24px);
+}
+
+.note-pop-body {
+  max-height: min(var(--radix-popper-available-height, 100dvh), calc(100dvh - 24px));
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+
+.note-pop[data-detached="true"] .note-pop-body {
+  max-height: calc(100dvh - 24px);
+}
+
 .note-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   font-size: 11px;
   color: color-mix(in srgb, var(--color-text) 62%, transparent);
 }
 
 .note-pop-arrow {
   fill: var(--paper);
+  overflow: visible;
+  transform: translateY(-1px);
+}
+
+.note-pop-drag {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  color: inherit;
+  background: transparent;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.note-pop-drag:hover {
+  background: var(--edge-2);
+}
+
+.note-pop-drag:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.note-pop[data-dragging="true"] .note-pop-drag {
+  cursor: grabbing;
+}
+
+/* Keep drag events in the parent while crossing the sandboxed document. */
+body:has(.note-pop[data-dragging="true"]) iframe {
+  pointer-events: none;
+}
+
+.note-pop textarea::placeholder {
+  color: color-mix(in srgb, var(--color-text) 62%, var(--paper));
+  opacity: 1;
 }
 
 .note-pop-actions {
@@ -1450,8 +1618,9 @@ body {
   font-size: 13px;
 }
 
-.note-pop-actions textarea:focus {
+.note-pop textarea:focus {
   border-color: var(--color-accent);
+  outline: 1px solid var(--color-accent);
 }
 
 /* G9: the note box is the composer in another position, so its controls are
@@ -1471,7 +1640,7 @@ body {
 .note-pop-actions button.primary {
   border-color: var(--color-accent);
   background: var(--color-accent);
-  color: #fff;
+  color: var(--on-accent);
   font-family: var(--font-heading);
   font-weight: var(--font-heading-weight);
 }
@@ -1719,11 +1888,8 @@ body {
   cursor: pointer;
 }
 
-.note-card.goes:hover {
-  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
-}
-
-.note-card.goes:focus-visible {
+.note-card-target:focus-visible,
+.note-anchor-trigger:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
@@ -1740,6 +1906,36 @@ body {
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+
+.note-card-target,
+.note-anchor-trigger {
+  appearance: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+button.note-card-target,
+.note-anchor-trigger {
+  cursor: pointer;
+}
+
+.note-card-target {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.note-anchor-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border-radius: 2px;
 }
 
 .note-card-kind {
@@ -1820,6 +2016,60 @@ body {
   border: 1px dashed color-mix(in srgb, var(--color-text) 30%, transparent);
   box-sizing: border-box;
   background: transparent;
+}
+
+.rich-tooltip {
+  z-index: 100;
+  box-sizing: border-box;
+  max-width: min(360px, calc(100vw - 24px));
+  max-height: var(--radix-tooltip-content-available-height);
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid var(--color-divider);
+  border-radius: 6px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: 400 13px / 1.45 var(--font-body);
+  overflow-wrap: anywhere;
+}
+
+.note-anchor-help {
+  width: 280px;
+  padding: 12px;
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.note-anchor-help h3 {
+  margin: 0;
+  font: 600 13px / 1.3 var(--font-heading);
+  text-wrap: balance;
+}
+
+.note-anchor-help :where(p) {
+  margin: 0;
+}
+
+.note-anchor-levels {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.note-anchor-levels dt {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 600;
+}
+
+.note-anchor-levels dd {
+  margin: 2px 0 0 26px;
+}
+
+.note-anchor-help-footer {
+  padding-top: 8px;
+  border-top: 1px solid var(--color-divider);
 }
 
 /* Clicking a lost note lights the note itself (6a): the same accent wash
@@ -1921,7 +2171,7 @@ body {
 .card-actions button.primary {
   border-color: var(--color-accent);
   background: var(--color-accent);
-  color: #fff;
+  color: var(--on-accent);
   font-family: var(--font-heading);
   font-weight: var(--font-heading-weight);
 }
@@ -2074,7 +2324,7 @@ body {
 .queue-bar button.primary {
   background: var(--color-accent);
   border-color: var(--color-accent);
-  color: #fff;
+  color: var(--on-accent);
   font-family: var(--font-heading);
   font-weight: var(--font-heading-weight);
 }
@@ -2456,7 +2706,7 @@ body {
 
 .driver-seg.pick[aria-expanded="true"] {
   background: var(--color-accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .driver-seg.pick[aria-expanded="true"] .driver-caret {
@@ -2638,5 +2888,50 @@ body {
 @container (max-width: 420px) {
   .doc-version-pill .of {
     display: none;
+  }
+}
+
+.conversation-appearance {
+  display: none;
+}
+.doc-head {
+  min-width: 0;
+  flex-wrap: wrap;
+  flex-basis: auto;
+  min-height: 34px;
+}
+.doc-head :is(.dim-name, .none-name, .doc-rename) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (width > 900px) {
+  .conversation-appearance {
+    display: flex;
+    flex: 0 0 34px;
+    align-items: center;
+  }
+  .panes[data-conversation-open="true"] .doc-head .theme-controls {
+    display: none;
+  }
+}
+@container (max-width: 600px) {
+  .doc-head {
+    gap: 4px;
+    padding-block: 2px;
+  }
+  .doc-head .doc-rename {
+    max-width: 100px;
+  }
+  .doc-head.saving-bar {
+    gap: 4px;
+  }
+  .saving-clause {
+    display: none;
+  }
+  .doc-actions {
+    gap: 4px;
+    flex-wrap: wrap;
+    max-width: 100%;
   }
 }

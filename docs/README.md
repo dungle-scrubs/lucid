@@ -41,6 +41,10 @@ Do not maintain a second archive directory.
 
 ## Historical references
 
+Commit `b0562e3` contains RFC 21, its review, and the completed shared
+application and artifact appearance tickets. Current rules live in
+[the artifact contract](artifacts.md#application-and-artifact-appearance).
+
 Commit `aacacfe` contains completed RFC 20, its review, and all four resolved
 agent compatibility tickets. [Compatibility feedback](compatibility.md)
 records the current contract.

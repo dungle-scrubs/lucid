@@ -7,6 +7,7 @@ import { FRAME_MESSAGE_SOURCE, instrumentArtifact } from "./instrument.js";
 import type { SentBatch } from "./timeline.js";
 import { Button } from "./ui/button.js";
 import { Textarea } from "./ui/textarea.js";
+import { useArtifactAppearance } from "./use-artifact-appearance.js";
 
 export interface ComparedVersion {
   readonly author?: string;
@@ -384,20 +385,34 @@ export const ContentComparisonView = ({
           <span>Saved v{inspection?.version}</span>
           <Button onClick={closeInspection}>Back to comparison</Button>
         </header>
-        {inspection ? (
-          <iframe
-            title={`${artifactId} saved v${inspection.version}`}
-            sandbox="allow-scripts"
-            onLoad={(event) =>
-              event.currentTarget.contentWindow?.postMessage(
-                { source: FRAME_MESSAGE_SOURCE, kind: "mode", mode: "annotate", readOnly: true },
-                "*",
-              )
-            }
-            srcDoc={instrumentArtifact(inspection.bytes, artifactId, inspection.version)}
-          />
-        ) : null}
+        {inspection ? <InspectionFrame artifactId={artifactId} inspection={inspection} /> : null}
       </dialog>
     </section>
   );
 };
+
+function InspectionFrame(props: {
+  readonly artifactId: string;
+  readonly inspection: ComparedVersion;
+}) {
+  const { artifactId, inspection } = props;
+  const colorScheme = useArtifactAppearance(inspection.bytes);
+  const srcDoc = React.useMemo(
+    () => instrumentArtifact(inspection.bytes, artifactId, inspection.version),
+    [inspection, artifactId],
+  );
+  return (
+    <iframe
+      title={`${artifactId} saved v${inspection.version}`}
+      style={{ colorScheme }}
+      sandbox="allow-scripts"
+      onLoad={(event) =>
+        event.currentTarget.contentWindow?.postMessage(
+          { source: FRAME_MESSAGE_SOURCE, kind: "mode", mode: "annotate", readOnly: true },
+          "*",
+        )
+      }
+      srcDoc={srcDoc}
+    />
+  );
+}

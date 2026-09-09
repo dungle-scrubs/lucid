@@ -159,6 +159,24 @@ current content.
 
 ## Annotations and anchoring
 
+The current document opens in Edit. Holding Option/Alt temporarily enters
+Annotate; Option+Command-click adds or removes a spot (Alt+Control on keyboards
+without Command). Releasing the keys returns to Edit while preserving selected
+spots, the note draft, and attached files. The note box takes typing focus after
+release, so holding the keys across successive selections keeps focus in the
+document. A selection gesture finishes in the mode in which it started.
+Read-only versions stay read-only. Mode changes do not save or send anything.
+
+Touch devices expose Annotate and Done annotating. In this latched mode, taps
+add or remove spots. Returning to Edit keeps the open note. The desktop mode
+toggle and Alt+Backspace toggle are removed.
+
+Every note box has a drag handle. Its moved position lasts for that note,
+survives additional selections and document scrolling, and stays inside the
+viewport. Arrow keys on the handle move it; Home returns it beside the selection.
+A new note starts beside its selection. The attached arrow shares the box's
+fill and border; it is hidden after manual movement. Placeholder text is subdued.
+
 Links with an `href` navigate in both document modes. They show a pointer cursor
 and no annotation hover outline, including over child labels and icons. A direct
 click does not select the link for a note. Text selection across a link remains
@@ -265,11 +283,12 @@ Surrounding whitespace is ignored. Missing or invalid metadata uses full width.
 Percentages refer to the available document pane after gutters; rem refers to
 the viewer root font size. Parsing creates no browser nodes or resource requests.
 
-The Document width header control overrides the author with a reader percentage.
-Use artifact width removes that override. The effective frame width is clamped
+The Width tab at the document’s top center overrides the author with a reader
+percentage. Narrow selects 55%, Reading 75%, and Full 100%. Default removes
+that override. The effective frame width is clamped
 between the smaller of 320px and available space, and all available space. The
-slider reflects actual rendered width with a dynamic minimum and a pixel readout;
-the requested preference is shown separately. Pane resizing does not overwrite it.
+slider reflects actual rendered width with a dynamic minimum and one live
+percentage readout. Pane resizing does not overwrite the requested preference.
 The browser remembers overrides per conversationId and artifactId across versions.
 Unavailable or full local storage leaves the current view usable in memory.
 
@@ -304,3 +323,79 @@ identity, retained drafts, admission, bounded holds, and current revisions.
 validation, precedence, layout bounds, and preference isolation and failure.
 Rendered checks cover reader controls, frame continuity, range marks and note
 anchors after resize, and contrast during selection and edit focus in both themes.
+
+## Application and artifact appearance
+
+The browser owns one theme preference: System (the default), Light, or Dark.
+The upper-right moon/sun button selects the opposite resolved appearance and
+saves an override. Settings beside it offers Appearance and Follow system;
+the composer Settings also exposes Appearance without moving driver settings.
+These controls work on the hub and reading view, with chat hidden or visible,
+and without a driver. Appearance applies immediately, separately from Save settings.
+
+The preference is the literal `system`, `light`, or `dark` under
+`localStorage` key `lucid.theme.v1`. Missing or invalid values mean System.
+System follows the browser's dark preference, falling back to light when that
+signal is unavailable. An explicit override ignores subsequent system changes.
+Same-origin tabs reread the latest preference on storage updates, removal, or
+clear; restored pages refresh it. Storage failure leaves the current-page
+choice usable and reports that it could not be saved. Persistence is scoped
+to one browser profile and origin, including port; clearing storage or closing
+a private session can reset it. No preference is written to a record or server.
+
+A stored HTML version can opt into a frame policy with a direct head element:
+
+```html
+<meta name="lucid-theme" content="adaptive">
+<meta name="color-scheme" content="light dark">
+```
+
+The first matching head declaration wins. Trim ASCII whitespace and accept
+only lowercase `adaptive`, `light`, and `dark`. Unknown, missing, empty, or
+invalid-first declarations are unmanaged; later duplicates and body metadata
+are ignored. Parsing is inert and never infers support from colors, styles,
+or prose. A standard `color-scheme` declaration alone does not opt into Lucid
+synchronization. The policy belongs to the version being viewed.
+
+| Declaration | Embedding frame scheme |
+|---|---|
+| `adaptive` | Application's resolved light or dark |
+| `light` | Light |
+| `dark` | Dark |
+| Unmanaged | System preference, through `light dark` |
+
+Reading and saved-version inspection use the same policy. Unmanaged inspection
+now follows the system; it previously inherited the light application scheme.
+That can change an older document's inspection appearance on a dark system.
+Hardcoded colors remain authored. Fixed-theme documents pair their declaration
+with matching standard browser metadata and complete foreground/background pairs.
+
+The browser carries the embedding scheme across the existing sandbox into
+`prefers-color-scheme`. No new theme messages, parent storage access, or
+sandbox permissions are involved. Switching updates the embedding element
+without replacing its document. Lucid's namespaced annotation controls follow
+the frame query, including for fixed themes. For unmanaged documents that query
+is a system preference, not a claim about the authored background.
+
+Adaptive documents provide both palettes through static media rules and
+semantic custom properties. Cover text, backgrounds, borders, links, controls,
+focus, diagrams, and chart labels. DOM/SVG graphics keep serialized markup
+unchanged on theme switches: for example, keep `fill="var(--chart-ink)"`
+constant and change the custom property through media rules. Canvas/WebGL may
+repaint transient drawing state while retaining markup, input, and interaction
+state. Provide an adjacent accessible explanation for such graphics.
+
+Theme-only switching preserves scroll, focus, selection, values, pending notes,
+document mode, unsaved edits, and comparison recovery. Compliant adaptive
+snapshots are identical across appearances when content/input are unchanged
+and repaint is complete. Human saves retain authored metadata and both palettes,
+exclude injected annotation code, and do not store the reader's override.
+If an authored script rewrites SVG attributes or other serialized markup,
+normal save semantics retain those changes; Lucid does not guess original
+values to restore. That document fails adaptive authoring verification but
+still renders and saves normally.
+
+For a new reading artifact, use the [adaptive authoring example](../skills/lucid-design/examples/adaptive-reading.html)
+and [design guidance](../skills/lucid-design/SKILL.md). Standalone adaptive HTML
+follows the browser preference. Verify both appearances and save/reopen behavior;
+a metadata declaration is an author claim, not evidence of correct styling.

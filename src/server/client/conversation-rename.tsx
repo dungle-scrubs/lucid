@@ -59,9 +59,7 @@ function TitleForm(props: {
         void form.handleSubmit();
       }}
     >
-      <label htmlFor={labelId}>
-        {artifactId === undefined ? "Conversation title" : "Document name"}
-      </label>
+      <label htmlFor={labelId}>Artifact name</label>
       <form.Field name="title">
         {(field) => (
           <input

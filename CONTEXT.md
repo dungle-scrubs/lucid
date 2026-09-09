@@ -71,6 +71,12 @@ Take nouns from here. One name per thing.
 
 **The document, and marking it up**
 
+In the browser, an **artifact** names the workspace opened from the hub,
+including one that is waiting for its first document. Hub counts, search,
+creation, and navigation use this name. The message pane is **chat**.
+The storage and protocol term **conversation** still identifies its durable
+record; `conversationId` and artifact/version addresses keep their meanings.
+
 | Term | What it is |
 |---|---|
 | **artifact** | The document an agent emitted, identified by an `artifactId` and kept as an ordered list of versions. One per conversation |

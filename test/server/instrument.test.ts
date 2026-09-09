@@ -149,7 +149,11 @@ describe("the document's own behaviour is left alone", () => {
     const interaction = out.match(/document\.addEventListener\(/g) ?? [];
     const guards = out.match(/if \(!e\.isTrusted/g) ?? [];
     expect(interaction.length).toBeGreaterThan(0);
-    expect(guards.length).toBe(interaction.length);
+    // Four modifier listeners share one trusted-event guard; visibility
+    // changes carry no user input and need no trusted-event guard.
+    const shared = out.match(/document\.addEventListener\("[a-z]+", syncModifiers, true\)/g) ?? [];
+    const visibility = out.match(/document\.addEventListener\("visibilitychange"/g) ?? [];
+    expect(guards.length + shared.length - 1).toBe(interaction.length - visibility.length);
   });
 
   test("the one listener that is not a user interaction guards on the sender", () => {
@@ -211,16 +215,9 @@ describe("what lucid added is not part of what gets saved", () => {
 });
 
 describe("two modes, so one click does one thing", () => {
-  test("mark-up mode is where the document starts", () => {
+  test("edit mode is where the document starts", () => {
     const out = instrumentArtifact(DOC, "doc-1", 1);
-    // What a person does with a document an agent produced is read it and
-    // say what is wrong with it. Filling it in is the rarer act, and it is
-    // the one with a switch to reach it.
-    expect(out).toContain('var mode = "annotate"');
-    // The page defaults to the same mode. If these ever disagree, the frame
-    // renders every block editable for the moment before the page's first
-    // mode message lands.
-    expect(out).not.toContain('var mode = "edit"');
+    expect(out).toContain('var mode = "edit"');
   });
 
   test("text is editable in use mode, and a caret is the browser's job", () => {
@@ -262,13 +259,13 @@ describe("two modes, so one click does one thing", () => {
     }
   });
 
-  test("leaving mark-up mode drops the selection", () => {
+  test("read-only admission clears the selection, releasing Alt does not", () => {
     const out = instrumentArtifact(DOC, "doc-1", 1);
     // It addressed elements for a note, and there is no note being written
     // in use mode.
     // Read-only drops it for the same reason: there is nothing to write
     // about a version that cannot be annotated.
-    expect(out).toContain('if ((mode === "edit" || readOnly) && (selected.length > 0 || picked))');
+    expect(out).toContain("if (readOnly && (selected.length > 0 || picked))");
     // Both kinds of pick, and the browser's own selection with them. A range
     // left standing would be read again by the next mouseup.
     expect(out).toContain("picked = null;");
@@ -439,7 +436,7 @@ describe("selecting text to mark it up", () => {
     // mousedown cancels the browser's own text selection, and a drag is made
     // of one. If the guard goes away, selecting a phrase silently stops
     // working and every other test still passes.
-    const at = out.indexOf('addEventListener("mousedown"');
+    const at = out.indexOf('addEventListener("mousedown", function');
     expect(at).toBeGreaterThan(-1);
     const body = out.slice(at, at + 900);
     expect(body).toContain("t.matches(CONTROL)");
@@ -449,7 +446,7 @@ describe("selecting text to mark it up", () => {
   test("a press on a control is still cancelled", () => {
     // Focus moves on mousedown, so a press on a textarea drew a caret before
     // the click could pick the element: one press, two things, wrong order.
-    const at = out.indexOf('addEventListener("mousedown"');
+    const at = out.indexOf('addEventListener("mousedown", function');
     const body = out.slice(at, at + 900);
     const guard = body.indexOf("t.matches(CONTROL)");
     expect(body.indexOf("e.preventDefault()", guard)).toBeGreaterThan(guard);
@@ -470,8 +467,8 @@ describe("the mark language", () => {
 
   test("the frame carries the chrome's own tokens, not literals", () => {
     // A sandboxed frame inherits nothing from the page around it, so the
-    // sheet has to bring the custom properties itself - the same names and
-    // values app.css defines, which is what lets one mark style hold in the
+    // sheet brings namespaced custom properties with the same palette
+    // values app.css defines, which lets one mark style hold in the
     // frame and on the reference page without a second vocabulary.
     for (const token of [
       "--lucid-color-accent: #0088b0",

@@ -1,0 +1,11 @@
+/* Import the production hub rules without overriding the reading surface. */
+@import "./hub.css" layer(hub-reference);
+
+body.hub-reference {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font:
+    14px / 1.5 system-ui,
+    sans-serif;
+}
