@@ -328,10 +328,10 @@ anchors after resize, and contrast during selection and edit focus in both theme
 
 The browser owns one theme preference: System (the default), Light, or Dark.
 The upper-right moon/sun button selects the opposite resolved appearance and
-saves an override. Settings beside it offers Appearance and Follow system;
-the composer Settings also exposes Appearance without moving driver settings.
-These controls work on the hub and reading view, with chat hidden or visible,
-and without a driver. Appearance applies immediately, separately from Save settings.
+saves an override. The composer Settings exposes Appearance and Follow system
+alongside driver settings. The moon/sun button works on the hub and reading
+view, with chat hidden or visible, and without a driver. Appearance applies
+immediately, separately from Save settings.
 
 The preference is the literal `system`, `light`, or `dark` under
 `localStorage` key `lucid.theme.v1`. Missing or invalid values mean System.

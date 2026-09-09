@@ -158,9 +158,9 @@ Saved-version inspection follows the version-specific artifact policy.
 ## Limits of the design
 
 The hub and reading view share a browser-owned System, Light, or Dark preference.
-The upper-right sun/moon action selects an override; adjacent Settings offers
-Follow system. Driver settings stay in the composer, whose Settings also opens
-Appearance. Preserve the existing narrow-window stacking and touch editing cues.
+The upper-right sun/moon action selects an override. The composer Settings
+offers Appearance and Follow system alongside driver settings. Preserve the
+existing narrow-window stacking and touch editing cues.
 The reading view and hub retain their own semantic palette vocabularies in both
 appearances. Annotation palettes are namespaced inside the artifact frame and
 follow its policy. See the artifact contract for declaration, storage, and save

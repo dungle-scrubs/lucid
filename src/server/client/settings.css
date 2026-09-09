@@ -172,11 +172,12 @@
   gap: 2px;
   margin-inline-start: auto;
 }
-.theme-controls :is(.theme-toggle, .theme-settings) {
+.theme-controls .theme-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   height: 28px;
+  width: 28px;
   padding: 4px 6px;
   border: 1px solid transparent;
   border-radius: 3px;
@@ -187,18 +188,12 @@
     sans-serif;
   cursor: pointer;
 }
-.theme-controls .theme-toggle {
-  width: 28px;
-}
 .theme-controls button:hover {
   border-color: currentColor;
 }
 .theme-controls button:focus-visible {
   outline: 2px solid currentColor;
   outline-offset: -2px;
-}
-.appearance-popover {
-  width: min(260px, calc(100vw - 32px));
 }
 .appearance-settings p {
   margin: 0;

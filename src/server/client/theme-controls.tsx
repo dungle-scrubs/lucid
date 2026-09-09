@@ -1,6 +1,5 @@
 import { getBrowserTheme } from "./browser-theme.js";
 import { MoonDuotone, SunDuotone } from "./icons.js";
-import { SettingsPopover } from "./settings-popover.js";
 import { parseThemePreference } from "./theme.js";
 import { useTheme } from "./use-theme.js";
 
@@ -32,15 +31,6 @@ export function ThemeControls() {
   const action = dark ? "Switch to light mode" : "Switch to dark mode";
   return (
     <div className="theme-controls">
-      <SettingsPopover
-        label="Appearance settings"
-        trigger="Settings"
-        triggerClassName="theme-settings"
-        side="bottom"
-        className="appearance-popover"
-      >
-        <AppearanceSettings />
-      </SettingsPopover>
       <button
         type="button"
         className="theme-toggle"
