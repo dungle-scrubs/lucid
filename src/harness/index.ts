@@ -12,7 +12,6 @@ export {
 } from "./events.js";
 export { createHcnRunner } from "./hcn-runner.js";
 export {
-  assertHcnVersion,
   nodeHarnessDeps,
   nodeSpawnHcn,
   resolveHcnBin,
@@ -31,11 +30,9 @@ export {
   type HarnessRunner,
   HarnessSpawnError,
   type HarnessTurn,
-  HarnessVersionError,
   type OpenSessionOptions,
   type SendResult,
   type SessionClosed,
   type SessionHandle,
   type StreamTurnOptions,
 } from "./runner.js";
-export { belowFloor, compareVersions, HCN_MIN_VERSION } from "./version.js";

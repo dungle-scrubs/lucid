@@ -6,7 +6,9 @@ import { runManagedWorker } from "../../src/cli/managed-worker.js";
 import { openDrivenConversation } from "../../src/cli/runtime.js";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
 import type { HarnessRunner } from "../../src/harness/runner.js";
-import { HCN_MIN_VERSION } from "../../src/harness/version.js";
+
+const SYNTHETIC_HCN_IDENTITY = "synthetic";
+
 import { recoveryPolicy } from "../../src/protocol/execution.js";
 import { createConversationHost } from "../../src/store/conversation-host.js";
 import { replaceSettings } from "../../src/store/settings.js";
@@ -290,7 +292,7 @@ test("managed session prepares and settles consecutive turns on its persistent p
       kind: "session",
       sessionId: "persistent-native",
       harness: "claude",
-      hcn: HCN_MIN_VERSION,
+      hcn: SYNTHETIC_HCN_IDENTITY,
     });
     await until(() =>
       proc.commands.some((command) => command.op === "send" && command.id === "one"),
@@ -586,7 +588,7 @@ test("a managed session's explicit send refusal is safe to retry without acknowl
       kind: "session",
       sessionId: "persistent-native",
       harness: "claude",
-      hcn: HCN_MIN_VERSION,
+      hcn: SYNTHETIC_HCN_IDENTITY,
     });
     await until(() => proc.commands.some((command) => command.op === "send"));
     proc.emit({
@@ -949,7 +951,7 @@ test("a managed persistent worker closes its native session and releases presenc
       kind: "session",
       sessionId: "idle-native",
       harness: "claude",
-      hcn: HCN_MIN_VERSION,
+      hcn: SYNTHETIC_HCN_IDENTITY,
     });
     await until(() => proc.commands.some((command) => command.op === "send"));
     proc.emit({ kind: "disposition", id: "one", disposition: "started" });

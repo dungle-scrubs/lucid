@@ -6,7 +6,9 @@ import { conversations } from "../../src/cli/record-addressing.js";
 import { openDrivenConversation, startHeadless } from "../../src/cli/runtime.js";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
 import type { HarnessRunner } from "../../src/harness/runner.js";
-import { HCN_MIN_VERSION } from "../../src/harness/version.js";
+
+const SYNTHETIC_HCN_IDENTITY = "synthetic";
+
 import type { createHeadlessHost } from "../../src/modes/host.js";
 import { readProcessOwner } from "../../src/process-owner.js";
 import type { Frame } from "../../src/protocol/index.js";
@@ -511,7 +513,7 @@ test("both headless profiles launch in the saved working folder rather than the 
           kind: "session",
           sessionId: "native-cwd",
           harness: "claude",
-          hcn: HCN_MIN_VERSION,
+          hcn: SYNTHETIC_HCN_IDENTITY,
         });
       running.host.enqueueInput({ id: "cwd-input", text: "work here", mode: "queue" });
       await Bun.sleep(0);
@@ -724,7 +726,12 @@ test("failed-log shutdown retains presence through harness cleanup even when dia
   });
   if (handle.kind !== "running") throw new Error("did not start");
   const cursor = handle.host.cursor();
-  proc.emit({ kind: "session", sessionId: "session-1", harness: "claude", hcn: HCN_MIN_VERSION });
+  proc.emit({
+    kind: "session",
+    sessionId: "session-1",
+    harness: "claude",
+    hcn: SYNTHETIC_HCN_IDENTITY,
+  });
   handle.source.receive({
     kind: "input",
     id: "in-1",

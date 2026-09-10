@@ -20,7 +20,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
 import type { HarnessName } from "../../src/harness/runner.js";
-import { HCN_MIN_VERSION } from "../../src/harness/version.js";
+
+const SYNTHETIC_HCN_IDENTITY = "synthetic";
+
 import { type HonoringSource, openHonoringDriver } from "../../src/modes/honor.js";
 import { createHeadlessHost } from "../../src/modes/host.js";
 import type { Frame } from "../../src/protocol/index.js";
@@ -181,7 +183,7 @@ const sessionLine = (proc: FakeHcnProcess, sessionId: string): void => {
     kind: "session",
     sessionId,
     harness: "claude",
-    hcn: HCN_MIN_VERSION,
+    hcn: SYNTHETIC_HCN_IDENTITY,
     escalateQuestions: true,
   });
 };

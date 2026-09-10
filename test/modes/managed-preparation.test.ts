@@ -115,7 +115,7 @@ const input = {
   native: { kind: "fresh" },
 } as const;
 
-test("a refused attempt explains the actual gate when runtime and admission evidence disagree", async () => {
+test("fresh work trusts HCN operation results despite differing version metadata", async () => {
   const f = setup();
   const runner: HarnessRunner = {
     ...f.runner,
@@ -140,17 +140,8 @@ test("a refused attempt explains the actual gate when runtime and admission evid
   try {
     expect(
       (await preparation.prepare({ ...input, signal: new AbortController().signal })).kind,
-    ).toBe("held");
-    const execution = f.host.state().executions.request;
-    expect(JSON.stringify(execution)).toContain("admission requires 1.0.0");
-    expect(execution).toMatchObject({
-      kind: "held",
-      hold: {
-        code: "E-HUB-03",
-        reason: expect.stringContaining("runtime inspection verifies 1.1.0"),
-      },
-    });
-    expect(f.counts).toHaveLength(0);
+    ).toBe("ready");
+    expect(f.counts).toHaveLength(1);
   } finally {
     preparation.close();
     f.host.close();
@@ -894,7 +885,7 @@ test.each(["headless-turn", "headless-session"] as const)(
   },
 );
 
-test.each(["unverified", "settings-changed", "cancelled"] as const)(
+test.each(["settings-changed", "cancelled"] as const)(
   "native management retains the dispatch fence: %s",
   async (condition) => {
     const f = setup();
@@ -909,7 +900,6 @@ test.each(["unverified", "settings-changed", "cancelled"] as const)(
         return {
           ...facts,
           nativeContextManagement: true,
-          verifiedAgainst: condition === "unverified" ? "different" : facts.verifiedAgainst,
         };
       },
       countContext: async () => {
@@ -930,7 +920,7 @@ test.each(["unverified", "settings-changed", "cancelled"] as const)(
       if (condition !== "cancelled")
         expect(f.host.state().executions.request).toMatchObject({
           kind: "held",
-          hold: { code: condition === "unverified" ? "E-HUB-03" : "E-HUB-06" },
+          hold: { code: "E-HUB-06" },
         });
       for (const path of f.offeredPaths) expect(existsSync(path)).toBe(false);
     } finally {

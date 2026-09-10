@@ -2,7 +2,9 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HCN_MIN_VERSION } from "../../src/harness/version.js";
+
+const SYNTHETIC_HCN_IDENTITY = "synthetic";
+
 import { createConversationRecord, openWriter } from "../../src/store/store.js";
 
 test("the SessionStart hook records the native identity and corroborated parent process", async () => {
@@ -13,7 +15,7 @@ test("the SessionStart hook records the native identity and corroborated parent 
   writeFileSync(
     hcn,
     `#!/usr/bin/env bun
-if(process.argv.includes('--version')) console.log('${HCN_MIN_VERSION}');
+if(process.argv.includes('--version')) console.log('${SYNTHETIC_HCN_IDENTITY}');
 else if(process.argv.includes('--runtime')) console.log(JSON.stringify({v:1,argv:['claude','[prompt]'],executable:{path:${JSON.stringify(process.execPath)},version:'fake'},resume:{status:'unknown',reason:'Synthetic adapter'}}));
 else console.log(JSON.stringify({name:'claude',bin:'claude',sessionMode:{},verifiedAgainst:'fake'}));
 `,

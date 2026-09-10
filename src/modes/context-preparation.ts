@@ -39,7 +39,7 @@ const measured = (count: ContextCount): Accounting => {
       count.reason === "model-divergence")
   )
     throw new HubError(
-      `Context accounting is unavailable for this selection: ${count.reason}. Change the driver settings or verify the installed harness before retrying.`,
+      `Context accounting is unavailable for this selection: ${count.reason}. Check the reported operation failure and driver settings before retrying.`,
       "E-HUB-03",
       400,
       count.reason === "unsupported-adapter" ? ["change-settings"] : ["change-settings", "retry"],
@@ -50,11 +50,7 @@ const measured = (count: ContextCount): Accounting => {
 };
 
 function sameSelection(count: Accounting, previous: Accounting): void {
-  if (
-    count.model !== previous.model ||
-    count.executable.path !== previous.executable.path ||
-    count.executable.version !== previous.executable.version
-  )
+  if (count.model !== previous.model || count.executable.path !== previous.executable.path)
     throw new ContextPreparationError(
       "The selected executable or model changed during preparation",
     );

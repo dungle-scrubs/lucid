@@ -3,7 +3,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
-import { HCN_MIN_VERSION } from "../../src/harness/version.js";
+
+const SYNTHETIC_HCN_IDENTITY = "synthetic";
+
 import type { ComparisonHold } from "../../src/modes/comparison-delivery.js";
 import { createComparisonDelivery } from "../../src/modes/comparison-delivery.js";
 import { hostSeamFor, openHeadlessSession, openHeadlessTurns } from "../../src/modes/host.js";
@@ -281,7 +283,7 @@ for (const mode of ["session", "turn"] as const) {
         kind: "session",
         sessionId: "eb04301d-8756-4a8b-ae3e-aac0e71f7265",
         harness: "claude",
-        hcn: HCN_MIN_VERSION,
+        hcn: SYNTHETIC_HCN_IDENTITY,
         escalateQuestions: true,
       });
     try {
@@ -410,7 +412,7 @@ for (const mode of ["session", "turn"] as const) {
           kind: "session",
           sessionId: "eb04301d-8756-4a8b-ae3e-aac0e71f7265",
           harness: "claude",
-          hcn: HCN_MIN_VERSION,
+          hcn: SYNTHETIC_HCN_IDENTITY,
           escalateQuestions: true,
         });
     };

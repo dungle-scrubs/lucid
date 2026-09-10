@@ -22,9 +22,7 @@ import type { HarnessName } from "../protocol/frames.js";
 import {
   type CompatibilityDiagnostic,
   diagnosticMessage,
-  HCN_PIN,
   type HcnInstallation,
-  hcnDiagnostic,
 } from "./compatibility.js";
 import type { HarnessEvent } from "./events.js";
 
@@ -46,15 +44,14 @@ export interface CapabilityResult {
 
 /** Descriptor facts, plus optional uncached results for this inspection request. */
 export interface HarnessFacts {
-  /** hcn declares an accounting mechanism. A count still verifies the
-   * selected model, executable and profile before it is usable. */
+  /** hcn declares an accounting mechanism. A count reports the selected
+   * model and profile before it is usable. */
   readonly contextAccounting?: true;
-  /** Declared native compaction for headless-turn only. Dispatch must still
-   * verify the selected executable and native resume compatibility. */
+  /** Declared native compaction for headless-turn only. HCN owns
+   * support for the selected executable; resume uses its runtime result. */
   readonly nativeContextManagement?: true;
   readonly runtime?: {
-    readonly verifiedAgainst?: string | null;
-    readonly executable: { readonly path: string | null; readonly version: string | null };
+    readonly executable: { readonly path: string | null };
     readonly resume: { readonly status: "supported" | "unknown"; readonly reason: string | null };
   };
   readonly binary?: string;
@@ -63,7 +60,6 @@ export interface HarnessFacts {
    * headless profile `lucid run` uses - a runtime-verified capability, not a
    * guess (PLAN D-008). */
   readonly session: boolean;
-  readonly verifiedAgainst: string;
   /** What a person may choose for model and effort (RFC-12), projected from
    * the dump's `vocabulary` and `turnOptions`. Absent when the dump carries
    * no vocabulary - the harness then has no lists to offer, and the page's
@@ -235,7 +231,7 @@ export type ContextCountFailure =
 
 export type ContextCount =
   | {
-      readonly executable: { readonly path: string; readonly version: string };
+      readonly executable: { readonly path: string };
       readonly inputLimitTokens: number;
       readonly method: "native-context-estimate";
       readonly model: string;
@@ -272,38 +268,5 @@ export class HarnessSpawnError extends CompatibilityError {
       diagnostic,
     );
     this.name = "HarnessSpawnError";
-  }
-}
-
-/** The hcn on PATH is older than the surface lucid depends on. */
-export class HarnessVersionError extends CompatibilityError {
-  /** Names the binary that was actually used.
-   *
-   * Without it the message said "run bun install" whatever the cause, and
-   * the cause was a stale `hcn` on PATH — `bun install` would have fixed
-   * nothing and the advice sent the reader to the wrong place. */
-  declare readonly diagnostic: CompatibilityDiagnostic;
-  constructor(
-    found: string,
-    required: string,
-    bin?: string,
-    installation?: HcnInstallation,
-    origin: CompatibilityDiagnostic["origin"] = "execution-check",
-  ) {
-    const diagnostic = hcnDiagnostic(
-      {
-        ...installation,
-        detected: found,
-        lookupRoot: installation?.lookupRoot ?? null,
-        minimum: required,
-        path: installation?.path ?? bin ?? null,
-        pin: installation?.pin ?? HCN_PIN,
-        source: installation?.source ?? null,
-      },
-      origin,
-    );
-    if (!diagnostic) throw new Error("Expected an HCN version refusal");
-    super(diagnosticMessage(diagnostic), diagnostic);
-    this.name = "HarnessVersionError";
   }
 }

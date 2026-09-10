@@ -3,7 +3,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
-import { HCN_MIN_VERSION } from "../../src/harness/version.js";
+
+const SYNTHETIC_HCN_IDENTITY = "synthetic";
+
 import { createHeadlessHost, hostSeamFor, type SourceEnd } from "../../src/modes/host.js";
 import type { Frame } from "../../src/protocol/frames.js";
 import { openWriter } from "../../src/store/conversation-host.js";
@@ -66,7 +68,12 @@ const rig = (
     profile,
   );
   if (profile === "headless-session")
-    proc.emit({ kind: "session", sessionId: "session-1", harness: "claude", hcn: HCN_MIN_VERSION });
+    proc.emit({
+      kind: "session",
+      sessionId: "session-1",
+      harness: "claude",
+      hcn: SYNTHETIC_HCN_IDENTITY,
+    });
   return { host, proc, source, ends, frames };
 };
 

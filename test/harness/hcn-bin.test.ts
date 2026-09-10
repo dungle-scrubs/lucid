@@ -13,7 +13,6 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveHcnBin } from "../../src/harness/node-deps.js";
-import { HarnessVersionError } from "../../src/harness/runner.js";
 
 let root: string;
 
@@ -99,21 +98,5 @@ describe("resolving the hcn binary", () => {
       bin: "hcn",
       source: "path",
     });
-  });
-});
-
-describe("the version refusal says where the binary came from", () => {
-  test("naming the binary, so the advice points at the right place", () => {
-    const e = new HarnessVersionError("0.5.3", "0.5.4", "/opt/homebrew/bin/hcn");
-    // "run bun install" would have fixed nothing when the binary came from
-    // Homebrew, which is exactly the case that found this.
-    expect(e.message).toContain("/opt/homebrew/bin/hcn");
-    expect(e.message).toContain("Repair");
-    expect(e.message).not.toContain("bun install");
-  });
-
-  test("without installation provenance it gives neutral repair advice", () => {
-    expect(new HarnessVersionError("0.5.3", "0.5.4").message).toContain("selected HCN executable");
-    expect(new HarnessVersionError("0.5.3", "0.5.4").message).not.toContain("bun install");
   });
 });

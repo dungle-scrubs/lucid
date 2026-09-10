@@ -95,11 +95,6 @@ export function CompatibilityNotice(props: {
                   <dd>
                     <time dateTime={diagnostic.observedAt}>{diagnostic.observedAt}</time>
                   </dd>
-                  <dt>HCN</dt>
-                  <dd>
-                    {diagnostic.hcn.detected ?? "Unknown version"}, Lucid pins {diagnostic.hcn.pin},
-                    minimum {diagnostic.hcn.minimum}
-                  </dd>
                   <dt>Executable</dt>
                   <dd>{diagnostic.hcn.path ?? "Unknown"}</dd>
                   <dt>Selected through</dt>
@@ -113,14 +108,7 @@ export function CompatibilityNotice(props: {
                   {diagnostic.harness ? (
                     <>
                       <dt>Harness</dt>
-                      <dd>
-                        {diagnostic.harness.name ?? "Unknown"}:{" "}
-                        {diagnostic.harness.detected ?? "Unknown version"}; runtime verifies{" "}
-                        {diagnostic.harness.verified ?? "unknown"}
-                        {diagnostic.harness.admissionVerified
-                          ? `; admission requires ${diagnostic.harness.admissionVerified}`
-                          : ""}
-                      </dd>
+                      <dd>{diagnostic.harness.name ?? "Unknown"}</dd>
                       <dt>Harness executable</dt>
                       <dd>{diagnostic.harness.path ?? "Unknown"}</dd>
                     </>
