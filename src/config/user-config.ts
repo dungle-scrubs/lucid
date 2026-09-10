@@ -33,7 +33,7 @@ export function readUserConfig(location: ConfigLocation = {}): UserConfig {
     text = readFileSync(path, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT")
-      return { defaults: { ...BUILT_INS }, path, recordsDir: join(home, ".lucid2/records") };
+      return { defaults: { ...BUILT_INS }, path, recordsDir: join(home, ".lucid/records") };
     throw new ConfigurationError(`Cannot read ${path}. Check its permissions.`);
   }
   let config: Record<string, unknown>;
@@ -58,7 +58,7 @@ export function readUserConfig(location: ConfigLocation = {}): UserConfig {
   const selected = { ...BUILT_INS, ...defaults };
   if (!isDriverHarness(selected.harness)) fail("unknown harness");
   if (!isProfile(selected.profile)) fail("unknown profile");
-  const rawRoot = config.records_dir ?? "~/.lucid2/records";
+  const rawRoot = config.records_dir ?? "~/.lucid/records";
   const recordsDir =
     typeof rawRoot === "string" && rawRoot.startsWith("~/")
       ? join(home, rawRoot.slice(2))

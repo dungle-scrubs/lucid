@@ -1,4 +1,4 @@
-# Agent conventions - lucid-v2
+# Agent conventions - lucid
 
 Coding-agent rules for this repo. `CONTEXT.md` wins on product scope and vocabulary.
 `docs/README.md` routes current contracts and active work;

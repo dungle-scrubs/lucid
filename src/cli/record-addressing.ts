@@ -170,7 +170,7 @@ export interface Conversations {
   ensure(conversationId: string, options?: CreateRecordOptions): { secret: string; dir: string };
 }
 
-/** Records live under `~/.lucid2/records` by default, overridden by
+/** Records live under `~/.lucid/records` by default, overridden by
  * `LUCID_ROOT`.
  *
  * Not `~/.lucid`: that is v1's live state directory — its hub log, its

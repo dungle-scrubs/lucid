@@ -131,7 +131,7 @@ empty, or relative, use `~/.config/lucid/config.toml`:
 
 ```toml
 version = 1
-records_dir = "~/.lucid2/records"
+records_dir = "~/.lucid/records"
 
 [defaults]
 harness = "claude"

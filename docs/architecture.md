@@ -28,7 +28,7 @@ attach authorization boundary. An identity stamp is not authentication.
 ## Conversation discovery
 
 The terminal and browser use the same record-root resolver: an explicit root,
-then LUCID_ROOT, then the XDG user configuration, then ~/.lucid2/records.
+then LUCID_ROOT, then the XDG user configuration, then ~/.lucid/records.
 A custom root replaces the default. A running server keeps its resolved root;
 configuration changes cannot retarget it.
 

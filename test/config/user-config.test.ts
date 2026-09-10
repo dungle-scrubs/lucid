@@ -9,12 +9,19 @@ test("new creation defaults follow XDG and explicit root precedence without shel
   try {
     const fallback = join(home, ".config/lucid");
     mkdirSync(fallback, { recursive: true });
+    expect(readUserConfig({ home, xdgConfigHome: "relative" }).recordsDir).toBe(
+      join(home, ".lucid/records"),
+    );
     expect(readUserConfig({ home, xdgConfigHome: "relative" }).defaults).toEqual({
       harness: "claude",
       model: "opus",
       effort: "high",
       profile: "headless-turn",
     });
+    writeFileSync(join(fallback, "config.toml"), "version = 1\n");
+    expect(readUserConfig({ home, xdgConfigHome: "" }).recordsDir).toBe(
+      join(home, ".lucid/records"),
+    );
     writeFileSync(
       join(fallback, "config.toml"),
       'version = 1\nrecords_dir = "~/history"\n[defaults]\neffort = "medium"\n',
