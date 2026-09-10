@@ -45,7 +45,7 @@ const REVISIONS = Number(arg("revisions", "22"));
  * good one; a patch that lands by luck is the one worth knowing about. */
 const RESTART_AFTER = Number(arg("restart-after", "0"));
 const BIN = join(import.meta.dir, "..", "dist", "lucid");
-const LOG = join(homedir(), ".lucid2", "records", RECORD, "log.ndjson");
+const LOG = join(homedir(), ".lucid", "records", RECORD, "log.ndjson");
 
 /** Small, local changes: the kind a patch is for. Deliberately phrased the
  * way a person would, with no mention of patches or anchors, so what is
@@ -98,7 +98,7 @@ const restartDriver = async (harness: string): Promise<void> => {
   // /dev/null; with somewhere to write, the driver starts and stays up. The
   // log is also the only place a failed restart says why, which a
   // measurement needs more than a tidy console does.
-  const driverLog = join(homedir(), ".lucid2", "records", RECORD, "driver.log");
+  const driverLog = join(homedir(), ".lucid", "records", RECORD, "driver.log");
   const next = spawn(
     "sh",
     ["-c", `nohup ${BIN} run ${RECORD} --harness ${harness} >> ${driverLog} 2>&1 &`],

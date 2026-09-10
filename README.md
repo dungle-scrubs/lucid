@@ -4,7 +4,7 @@ Read an agent's document, mark it up, and continue the conversation that
 produced it. lucid keeps the conversation in a durable local record, so it
 survives a process dying or a change of harness.
 
-This is the v2 beta. It serves one person on one machine. Product scope and terms live in
+Lucid is in beta. It serves one person on one machine. Product scope and terms live in
 [CONTEXT.md](CONTEXT.md).
 
 ## Run it
@@ -62,11 +62,11 @@ In chat, Enter queues input and Alt+Enter steers a running turn where the
 profile supports it. An open question accepts an answer. Ctrl+C restores
 the terminal. Harnesses run through hcn; see [drivers](docs/drivers.md).
 
-Records live in `~/.lucid2/records` by default. An explicit root wins over
+Records live in `~/.lucid/records` by default. An explicit root wins over
 `LUCID_ROOT`, then user configuration. [User defaults](docs/drivers.md#user-defaults-and-creation)
 configure new hub artifacts and the record root.
-The older v1 installation's `~/.lucid` directory is separate. V2 does not read or
-convert v1 records automatically; preserve them before replacing a v1 installation.
+Files from the retired implementation may remain beside `records/` in `~/.lucid`.
+Lucid does not read or convert those older records automatically.
 
 ## Working with a document
 

@@ -9,7 +9,7 @@ import { createConversationRecord, openConversation } from "../src/store/store.j
 import { attach, drive, event, expectAccepted, expectRefused, fresh } from "./protocol/helpers.js";
 
 /**
- * M7.1 - PLAN 4.7 oracle completion sweep, lucid-v2 side. The
+ * M7.1 - PLAN 4.7 oracle completion sweep, lucid side. The
  * spawn-boundary security set (argvOrder / control chars / registry path
  * traversal) and the resumeLast race are NORMALIZER oracles, covered in
  * harness-cli-normalizer (test/interpretation/argv.test.ts,

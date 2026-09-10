@@ -1,25 +1,25 @@
 ---
 name: lucid
 description: >
-  Render a response as a reviewable HTML artifact inside a lucid v2-managed
+  Render a response as a reviewable HTML artifact inside a lucid-managed
   conversation. Use for plans, roadmaps, comparisons, checklists, schemas,
   diagrams, specs, walkthroughs, and other structured answers the user may
   want to annotate at an element or phrase. Requires the lucid artifact
   protocol marker supplied by `lucid chat` or `lucid run`.
-compatibility: Requires lucid v2 and a conversation started through lucid.
+compatibility: Requires lucid and a conversation started through lucid.
 ---
 
-# Lucid v2 artifact authoring
+# Lucid artifact authoring
 
 Use Lucid when the answer is a document the user will want to inspect,
-operate, or mark up in the browser. In lucid v2 the conversation owns the
+operate, or mark up in the browser. In lucid the conversation owns the
 artifact: do not create a sidecar file, call the old `lucid open`/`wait`
 commands, or run a second review loop.
 
 ## Activation guard
 
 Only emit a Lucid artifact when the current prompt contains
-`[lucid artifact protocol]`. That marker is injected by a lucid v2 headless
+`[lucid artifact protocol]`. That marker is injected by a lucid headless
 host and means the answer will be captured into the conversation record.
 
 If the marker is absent, do not emit a `lucid-artifact` fence: an ordinary
