@@ -2310,6 +2310,47 @@ button.note-card-target,
   line-height: 1.55;
 }
 
+/* Closed-chat send stays outside the clipped panes, above the reading controls. */
+.floating-note-send {
+  position: fixed;
+  inset-inline-end: max(20px, env(safe-area-inset-right));
+  inset-block-end: max(20px, env(safe-area-inset-bottom));
+  z-index: 101;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-block-size: 48px;
+  max-inline-size: calc(100% - 40px);
+  padding: 12px 20px;
+  border: 2px solid var(--color-accent-700);
+  border-radius: 8px;
+  background: var(--color-accent-700);
+  color: var(--on-accent);
+  font: 600 16px / 1.25 var(--font-heading);
+  text-wrap: balance;
+  cursor: pointer;
+}
+
+.floating-note-send svg {
+  flex: 0 0 auto;
+}
+
+.floating-note-send:hover:not(:disabled) {
+  background: var(--color-accent-800);
+  border-color: var(--color-accent-800);
+}
+
+.floating-note-send:focus-visible {
+  outline: 3px solid var(--color-text);
+  outline-offset: 3px;
+}
+
+.floating-note-send:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+
 /* The queue's own action, where the queue is. */
 .queue-bar {
   display: flex;

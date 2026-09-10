@@ -78,6 +78,7 @@ import {
   ImageDuotone,
   LockDuotone,
   PaperclipDuotone,
+  PaperPlaneTiltDuotone,
   ProhibitDuotone,
   TableDuotone,
   XDuotone,
@@ -3506,11 +3507,6 @@ const App = (): React.ReactElement => {
           : "Hold ⌥⌘ and click to add more spots to this note.",
         tone: "ready",
       };
-    if (notes.length > 0)
-      return {
-        text: `${notes.length} note${notes.length === 1 ? "" : "s"} ready. ⌘⏎ sends them, or select more.`,
-        tone: "ready",
-      };
     // The mode how-to is gone (Kevin, 2026-08-29): the sheet's tab carries
     // the mode, and a hint that repeats it forever stops being read. What
     // renders down here now is only what is news - a warning, an outcome,
@@ -4372,6 +4368,32 @@ const App = (): React.ReactElement => {
                   </div>
                 </div>
               </div>
+
+              {conversationPanel.open || notes.length === 0 ? null : (
+                <button
+                  type="button"
+                  className="floating-note-send"
+                  onClick={() => void sendNotes()}
+                  disabled={
+                    sending ||
+                    dead ||
+                    damaged ||
+                    token === null ||
+                    recoveryLocked ||
+                    submissionBusy ||
+                    submission.current().status !== "idle"
+                  }
+                  aria-busy={sending}
+                  title="Send the queued notes without opening chat (⌘⏎)"
+                >
+                  <PaperPlaneTiltDuotone size={20} />
+                  <span>
+                    {sending
+                      ? "Sending…"
+                      : `Send ${notes.length} note${notes.length === 1 ? "" : "s"}`}
+                  </span>
+                </button>
+              )}
 
               {/* 6c: discard confirms, and the G5 restore confirm in the same
               shell. The only dialogs, because discard is the only control
