@@ -1,5 +1,13 @@
-{"kind":"identity","sessionId":"01a08188-032e-7fd8-8740-32239c245fc7","authority":"harness-minted","capabilities":{"vision":false,"images":false,"streaming":"none","session":false,"source":"unknown","confidence":"none","escalation":{"supported":false,"source":"unknown","confidence":"none"}}}
-{"kind":"token","text":"\n\n"}
+{"kind":"identity","sessionId":"75f37ede-91f6-4315-aa4b-00b43f720d6f","authority":"harness-minted","capabilities":{"vision":true,"images":true,"streaming":"token","session":true,"source":"curated","confidence":"medium","escalation":{"supported":true,"source":"runtime-verified","confidence":"high","observedOn":{"harness":"claude","model":"sonnet","version":"2.1.263","date":"2026-09-07"}}}}
+{"kind":"progress","label":"hook_started"}
+{"kind":"progress","label":"hook_started"}
+{"kind":"progress","label":"hook_started"}
+{"kind":"progress","label":"hook_started"}
+{"kind":"progress","label":"hook_response"}
+{"kind":"progress","label":"hook_response"}
+{"kind":"progress","label":"hook_response"}
+{"kind":"progress","label":"hook_response"}
+{"kind":"progress","label":"status"}
 {"kind":"token","text":"ok"}
-{"kind":"message","role":"assistant","text":"\n\nok"}
+{"kind":"message","role":"assistant","text":"ok"}
 {"kind":"done","exitCode":0,"cause":"clean","escalation":{"mode":"ask","detection":"none"}}

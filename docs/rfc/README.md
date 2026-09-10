@@ -1,8 +1,9 @@
 # Active RFCs
 
-RFC 24 implements [Claude startup across compatible updates](24_claude-startup-across-compatible-updates.rfc.md)
-in local HCN and Lucid branches. Test seams and order are confirmed. Published
-HCN dependency integration and fixture capture remain open, so the RFC stays active.
+RFC 24 is implemented with HCN 0.6.6. The completed proposal and reviews
+are preserved in commit `48461c5`. Current contracts live in
+[drivers](../drivers.md#recorded-context-preparation) and
+[compatibility feedback](../compatibility.md).
 RFC 23 is already allocated to portable artifact files on a separate branch.
 
 RFC 22 is implemented. HCN owns executable compatibility; Lucid consumes
