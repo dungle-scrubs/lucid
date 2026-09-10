@@ -2906,7 +2906,7 @@ button.note-card-target,
   }
 }
 
-.conversation-appearance {
+.conversation-header-space {
   display: none;
 }
 .doc-head {
@@ -2914,6 +2914,7 @@ button.note-card-target,
   flex-wrap: wrap;
   flex-basis: auto;
   min-height: 34px;
+  margin-inline-end: 84px;
 }
 .doc-head :is(.dim-name, .none-name, .doc-rename) {
   min-width: 0;
@@ -2921,13 +2922,13 @@ button.note-card-target,
   text-overflow: ellipsis;
 }
 @media (width > 900px) {
-  .conversation-appearance {
+  .conversation-header-space {
     display: flex;
     flex: 0 0 34px;
     align-items: center;
   }
-  .panes[data-conversation-open="true"] .doc-head .theme-controls {
-    display: none;
+  .panes[data-conversation-open="true"] .doc-head {
+    margin-inline-end: 0;
   }
 }
 @container (max-width: 600px) {
