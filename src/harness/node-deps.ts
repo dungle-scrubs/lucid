@@ -1,30 +1,12 @@
-/**
- * The real hcn process: node's spawn behind the injected seam, plus the
- * binary resolution and the version floor.
- *
- * The binary is resolved in one place so a test, a CI run, and a developer's
- * shell all agree on which hcn ran, and the choice is logged. lucid depends
- * on the surface hcn shipped in HCN_MIN_VERSION; an older binary on PATH
- * fails loudly here rather than producing a stream lucid cannot read.
- */
-
-import { execFile, spawn as nodeSpawn, spawnSync } from "node:child_process";
+import { spawn as nodeSpawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { selfInvocation } from "../cli/invocation.js";
-import {
-  type CompatibilityDiagnostic,
-  diagnosticMessage,
-  HCN_PIN,
-  type HcnInstallation,
-  hcnDiagnostic,
-  unknownInstallation,
-} from "./compatibility.js";
+import type { CompatibilityDiagnostic, HcnInstallation } from "./compatibility.js";
 import type { HarnessDeps, HcnProcess, SpawnHcn } from "./process.js";
-import { HarnessSpawnError, HarnessVersionError } from "./runner.js";
-import { belowFloor, HCN_MIN_VERSION } from "./version.js";
+import { HarnessSpawnError } from "./runner.js";
 
 /** Where to look, injected so both package-local branches are reachable in
  * a test. Production passes nothing. */
@@ -76,30 +58,6 @@ export const resolveHcnBin = (opts: HcnBinLookup = {}): { bin: string; source: s
   const fromCwd = resolve(opts.cwd ?? process.cwd(), "node_modules", ".bin", "hcn");
   if (existsSync(fromCwd)) return { bin: fromCwd, source: "node_modules(cwd)" };
   return { bin: "hcn", source: "path" };
-};
-
-/** Read `hcn --version` once and refuse a binary below the floor. */
-export const assertHcnVersion = (bin: string, installation?: HcnInstallation): string => {
-  const probe = spawnSync(bin, ["--version"], {
-    encoding: "utf8",
-    timeout: 5000,
-    maxBuffer: 4096,
-    killSignal: "SIGKILL",
-  });
-  if (probe.error !== undefined || probe.status !== 0) {
-    const diagnostic =
-      hcnDiagnostic(
-        installation ?? { ...unknownInstallation, path: isAbsolute(bin) ? bin : null },
-        "execution-check",
-        `${probeFailure(probe.error)}${probe.status === null ? "" : ` (exit ${probe.status})`}`,
-      ) ?? undefined;
-    throw new HarnessSpawnError("HCN version probe failed", diagnostic);
-  }
-  const found = probe.stdout.trim();
-  if (belowFloor(found)) {
-    throw new HarnessVersionError(found, HCN_MIN_VERSION, bin, installation);
-  }
-  return found;
 };
 
 const toLines = (stream: NodeJS.ReadableStream | null): AsyncIterable<string> => ({
@@ -175,32 +133,16 @@ function selectedInstallation(lookup: HcnBinLookup): {
   return {
     bin,
     installation: {
-      detected: null,
       lookupRoot:
         selected.source === "package-dependency"
           ? dirname(dirname(bin))
           : selected.source.startsWith("node_modules")
             ? dirname(dirname(dirname(bin)))
             : null,
-      minimum: HCN_MIN_VERSION,
       path,
-      pin: HCN_PIN,
       source: selected.source,
     },
   };
-}
-
-function probeFailure(error: unknown): string {
-  const code = error && typeof error === "object" && "code" in error ? error.code : null;
-  if (code === "ENOENT") return "the selected executable is missing";
-  if (code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" || code === "ENOBUFS")
-    return "the version response exceeded its output limit";
-  if (
-    code === "ETIMEDOUT" ||
-    (error && typeof error === "object" && "killed" in error && error.killed)
-  )
-    return "the version probe timed out or exceeded its output limit";
-  return "the selected version probe failed";
 }
 
 export interface HarnessStartup {
@@ -208,46 +150,18 @@ export interface HarnessStartup {
   readonly diagnostics: readonly CompatibilityDiagnostic[];
 }
 
-export function prepareNodeHarness(lookup: HcnBinLookup = {}): Promise<HarnessStartup> {
-  const { bin, installation } = selectedInstallation(lookup);
-  return new Promise((done) => {
-    execFile(
-      bin,
-      ["--version"],
-      { encoding: "utf8", timeout: 5000, maxBuffer: 4096, killSignal: "SIGKILL" },
-      (error, stdout) => {
-        const observed = { ...installation, detected: error ? null : stdout.trim() };
-        const diagnostic = hcnDiagnostic(
-          observed,
-          "runtime-start",
-          error ? probeFailure(error) : undefined,
-        );
-        done({
-          deps:
-            error || (observed.detected !== null && belowFloor(observed.detected))
-              ? null
-              : checkedDeps(bin, observed),
-          diagnostics: diagnostic ? [diagnostic] : [],
-        });
-      },
-    );
-  });
+/** Resolve the executable without launching it. Operations report their own failures. */
+export async function prepareNodeHarness(lookup: HcnBinLookup = {}): Promise<HarnessStartup> {
+  return { deps: nodeHarnessDeps(undefined, lookup), diagnostics: [] };
 }
 
-/** Production deps: the resolved binary, version-checked, with the choice
- * recorded so evidence names which hcn actually ran. */
 export const nodeHarnessDeps = (
   log?: (event: Record<string, unknown>) => void,
   lookup: HcnBinLookup = {},
-  warn: (message: string) => void = (message) => console.error(message),
 ): HarnessDeps => {
   const { bin, installation } = selectedInstallation(lookup);
-  const version = assertHcnVersion(bin, installation);
-  const observed = { ...installation, detected: version };
-  const diagnostic = hcnDiagnostic(observed, "execution-check");
-  if (diagnostic) warn(`Warning: ${diagnosticMessage(diagnostic)}`);
-  log?.({ event: "hcn_resolved", bin, source: installation.source, version });
-  return checkedDeps(bin, observed, log);
+  log?.({ event: "hcn_resolved", bin, source: installation.source });
+  return checkedDeps(bin, installation, log);
 };
 
 function checkedDeps(

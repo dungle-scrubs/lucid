@@ -21,11 +21,7 @@ import {
 } from "./compatibility.js";
 import { countContext } from "./context-accounting.js";
 import { decodeHarnessLine, type HarnessEvent } from "./events.js";
-import {
-  inspectedExecutable,
-  nativeContextManagement,
-  verifiedExecutable,
-} from "./inspection-facts.js";
+import { inspectedExecutable, nativeContextManagement } from "./inspection-facts.js";
 import type { HarnessDeps } from "./process.js";
 import { flag, settlesWithin, terminateHcn } from "./process.js";
 import { AsyncQueue } from "./queue.js";
@@ -39,7 +35,6 @@ import {
   type HarnessRunner,
   HarnessSpawnError,
   type HarnessTurn,
-  HarnessVersionError,
   type HarnessVocabulary,
   type OpenSessionOptions,
   type SendResult,
@@ -47,7 +42,6 @@ import {
   type SessionHandle,
   type StreamTurnOptions,
 } from "./runner.js";
-import { belowFloor, HCN_MIN_VERSION } from "./version.js";
 
 /** Split a byte/'text' stream into lines, keeping a partial tail. */
 async function* lines(chunks: AsyncIterable<string>): AsyncIterable<string> {
@@ -260,21 +254,20 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
           parsed.argv.length > 0 &&
           parsed.argv.every((part) => typeof part === "string")
         ) {
-          const { path, version } = inspectedExecutable(executable);
+          const { path } = inspectedExecutable(executable);
+          if (path === null)
+            throw new HarnessRefusal(
+              "invalid-settings",
+              "hcn runtime inspection has no executable path",
+            );
           runtime = {
-            verifiedAgainst:
-              typeof parsed.verifiedAgainst === "string" ? parsed.verifiedAgainst : null,
-            executable: { path, version },
+            executable: { path },
             resume: {
-              status:
-                resume.status === "supported" &&
-                verifiedExecutable(executable, parsed.verifiedAgainst)
-                  ? "supported"
-                  : "unknown",
+              status: resume.status === "supported" ? "supported" : "unknown",
               reason: typeof resume.reason === "string" ? resume.reason : null,
             },
           };
-        }
+        } else throw new HarnessRefusal("invalid-settings", "hcn runtime inspection is malformed");
       }
     }
     if (choice?.signal?.aborted)
@@ -333,7 +326,6 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
       // The descriptor's sessionMode is the runtime-verified answer to
       // "can this harness hold a persistent session" (PLAN D-008).
       session: parsed.sessionMode !== null && parsed.sessionMode !== undefined,
-      verifiedAgainst: String(parsed.verifiedAgainst ?? "unknown"),
       ...(vocabulary === undefined ? {} : { vocabulary }),
     };
   };
@@ -487,21 +479,6 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
         if (event === null) continue;
 
         if (event.kind === "session") {
-          const e = event as Extract<HarnessEvent, { kind: "session" }>;
-          // The binary's own report of what it is. `hcn --version` was
-          // checked once at resolution; this is the stream saying the same
-          // thing, and it is the only check a `run` path could not make.
-          if (typeof e.hcn === "string" && belowFloor(e.hcn)) {
-            refusal = new HarnessVersionError(
-              e.hcn,
-              HCN_MIN_VERSION,
-              deps.bin,
-              deps.installation,
-              "session-handshake",
-            );
-            settleOpen();
-            continue;
-          }
           sawSession = true;
           settleOpen();
           continue;

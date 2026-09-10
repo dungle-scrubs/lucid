@@ -7,7 +7,7 @@ import { createHubSettings } from "../../src/server/hub-settings.js";
 import { replaceLocation, replaceSettings } from "../../src/store/settings.js";
 import { createConversationRecord } from "../../src/store/store.js";
 
-test("managed selection feedback shares runtime inspection while interactive preferences add none", async () => {
+test("saved selections do not trigger version previews or warnings", async () => {
   const root = mkdtempSync(join(tmpdir(), "lucid-selection-"));
   const { paths } = createConversationRecord(root, "selection");
   const choice = {
@@ -51,19 +51,14 @@ test("managed selection feedback shares runtime inspection while interactive pre
     await Promise.all([settings.project(paths.dir), settings.project(paths.dir)]);
     await new Promise((resolve) => setImmediate(resolve));
     const snapshots = await Promise.all([settings.project(paths.dir), settings.project(paths.dir)]);
-    expect(snapshots[0].compatibility).toMatchObject([
-      {
-        code: "harness-version-unverified",
-        harness: { name: "codex", detected: "1.1.0", verified: "1.0.0", path: "/selected/codex" },
-      },
-    ]);
+    expect(snapshots[0].compatibility).toEqual([]);
     expect(snapshots[1].compatibility).toEqual(snapshots[0].compatibility);
-    expect(runtimeChecks).toBe(1);
+    expect(runtimeChecks).toBe(0);
     await settings.project(paths.dir);
-    expect(runtimeChecks).toBe(1);
+    expect(runtimeChecks).toBe(0);
     replaceSettings(paths.dir, "selection", 1, { ...choice, profile: "interactive" });
     expect((await settings.project(paths.dir)).compatibility).toEqual([]);
-    expect(runtimeChecks).toBe(1);
+    expect(runtimeChecks).toBe(0);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -98,70 +93,6 @@ test("failed selection inspection produces safe feedback instead of forwarding r
     expect(JSON.stringify(result)).not.toContain("synthetic-private-stderr");
     expect(result.conversationSettings.error).toContain("inspection");
   } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("a pending selection preview does not hold record reads or replace a changed selection", async () => {
-  const root = mkdtempSync(join(tmpdir(), "lucid-selection-pending-"));
-  const { paths } = createConversationRecord(root, "pending", { workingDirectory: root });
-  const choice = {
-    harness: "codex" as const,
-    model: "selected",
-    effort: "medium",
-    profile: "headless-turn" as const,
-  };
-  replaceSettings(paths.dir, "pending", 0, choice);
-  const release = Promise.withResolvers<void>();
-  const started = Promise.withResolvers<void>();
-  const unused = (): never => {
-    throw new Error("No task dispatch");
-  };
-  let probes = 0;
-  const runner: HarnessRunner = {
-    capabilities: unused,
-    countContext: unused,
-    openSession: unused,
-    streamTurn: unused,
-    inspect: async (_harness, selection) => {
-      if (selection?.runtime) {
-        probes++;
-        started.resolve();
-        await release.promise;
-        throw new Error("synthetic-private-stderr");
-      }
-      return {
-        name: "codex",
-        session: true,
-        verifiedAgainst: "1.0.0",
-        vocabulary: { models: ["selected"], efforts: ["medium"], extensible: false },
-      };
-    },
-  };
-  const settings = createHubSettings(root, undefined, runner);
-  try {
-    let returned = false;
-    const pending = settings.project(paths.dir).then((value) => {
-      returned = true;
-      return value;
-    });
-    await started.promise;
-    await new Promise((resolve) => setImmediate(resolve));
-    const readableBeforeRelease = returned;
-    release.resolve();
-    await pending;
-    expect(readableBeforeRelease).toBe(true);
-    await new Promise((resolve) => setImmediate(resolve));
-    const settled = await settings.project(paths.dir);
-    expect(settled.compatibility).toMatchObject([
-      { code: "inspection-unavailable", severity: "warning" },
-    ]);
-    expect(JSON.stringify(settled)).not.toContain("synthetic-private-stderr");
-    replaceSettings(paths.dir, "pending", 1, { ...choice, profile: "interactive" });
-    expect((await settings.project(paths.dir)).compatibility).toEqual([]);
-    expect(probes).toBe(1);
-  } finally {
-    release.resolve();
     rmSync(root, { recursive: true, force: true });
   }
 });

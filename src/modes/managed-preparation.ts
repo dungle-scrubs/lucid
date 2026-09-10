@@ -1,10 +1,8 @@
 import {
   diagnosticMessage,
   failureDiagnostic,
-  selectionDiagnostic,
   selectionProblem,
 } from "../harness/compatibility.js";
-import { verifiedExecutable } from "../harness/inspection-facts.js";
 import type { HarnessRunner } from "../harness/runner.js";
 import { composeAnnotationPrompt } from "../protocol/annotations.js";
 import { composeArtifactPrompt } from "../protocol/artifacts.js";
@@ -264,24 +262,6 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
             diagnostic,
           );
         });
-      const admitted =
-        verifiedExecutable(facts.runtime?.executable, facts.verifiedAgainst) !== null;
-      const diagnostic = selectionDiagnostic(
-        facts,
-        driver,
-        runner.installation,
-        "execution-check",
-        admitted,
-      );
-      if (!admitted)
-        throw new HubError(
-          diagnostic ? diagnosticMessage(diagnostic) : "The selected executable is unverified.",
-          "E-HUB-03",
-          400,
-          ["Review settings"],
-          diagnostic ?? undefined,
-        );
-      if (diagnostic) runner.reportCompatibility?.(diagnostic);
       if (resume !== undefined && facts.runtime?.resume.status !== "supported")
         throw new HubError(
           "Native resume compatibility is unverified for this selection.",

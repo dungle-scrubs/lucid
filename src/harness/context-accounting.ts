@@ -1,6 +1,6 @@
 import { EventKind } from "../protocol/events.js";
 import { decodeHarnessLine } from "./events.js";
-import { verifiedExecutable } from "./inspection-facts.js";
+import { inspectedExecutable } from "./inspection-facts.js";
 import type { HarnessDeps, HcnProcess } from "./process.js";
 import { flag, terminateHcn } from "./process.js";
 import type { ContextCount, ContextCountFailure, ContextCountOptions } from "./runner.js";
@@ -52,7 +52,7 @@ function readCount(raw: string, options: ContextCountOptions): ContextCount {
       reasons.find((reason) => reason === accounting.reason) ?? "unknown-accounting-failure",
     );
   }
-  const executable = verifiedExecutable(value.executable, value.verifiedAgainst);
+  const executable = inspectedExecutable(value.executable);
   if (
     typeof accounting.model === "string" &&
     options.model !== undefined &&
@@ -62,7 +62,7 @@ function readCount(raw: string, options: ContextCountOptions): ContextCount {
   if (
     accounting.status !== "available" ||
     accounting.method !== "native-context-estimate" ||
-    executable === null ||
+    executable.path === null ||
     typeof accounting.model !== "string" ||
     accounting.model.length === 0 ||
     !positive(accounting.inputLimitTokens) ||
@@ -76,7 +76,7 @@ function readCount(raw: string, options: ContextCountOptions): ContextCount {
   }
   return {
     status: "available",
-    executable: { path: executable.path, version: executable.version },
+    executable: { path: executable.path },
     method: "native-context-estimate",
     model: accounting.model,
     totalTokens: accounting.totalTokens,

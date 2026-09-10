@@ -7,7 +7,9 @@ import { runCli } from "../../src/cli/dispatch.js";
 import { conversations } from "../../src/cli/record-addressing.js";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
 import type { HarnessRunner } from "../../src/harness/runner.js";
-import { HCN_MIN_VERSION } from "../../src/harness/version.js";
+
+const SYNTHETIC_HCN_IDENTITY = "synthetic";
+
 import { EventKind, INPUT_QUEUE_MAX } from "../../src/protocol/events.js";
 import type { Frame } from "../../src/protocol/index.js";
 import { encodeFrame } from "../../src/protocol/index.js";
@@ -924,7 +926,7 @@ test("chat applies an artifact patch and tells the next input what the record ho
       kind: "session",
       sessionId: "chat-session",
       harness: "claude",
-      hcn: HCN_MIN_VERSION,
+      hcn: SYNTHETIC_HCN_IDENTITY,
       escalateQuestions: true,
     });
     yield "revise";

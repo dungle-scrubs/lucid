@@ -2,7 +2,9 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HCN_MIN_VERSION } from "../../src/harness/version.js";
+
+const SYNTHETIC_HCN_IDENTITY = "synthetic";
+
 import { encodeAnnotationBatch } from "../../src/protocol/annotations.js";
 import { readRecordMetadata } from "../../src/store/record-identity.js";
 import { createConversationRecord, openConversation } from "../../src/store/store.js";
@@ -16,7 +18,7 @@ test("independent worker processes serialize ownership and complete isolated nam
     executable,
     `#!/usr/bin/env bun\nimport {appendFileSync} from 'node:fs';
 const args=process.argv.slice(2);
-if(args[0]==='--version'){console.log('${HCN_MIN_VERSION}');process.exit(0);}
+if(args[0]==='--version'){console.log('${SYNTHETIC_HCN_IDENTITY}');process.exit(0);}
 if(args[0]==='inspect'){console.log(JSON.stringify({name:'claude',sessionMode:{},verifiedAgainst:'fake',vocabulary:{models:['concrete-opus'],efforts:['high'],extensible:false}}));process.exit(0);}
 appendFileSync(${JSON.stringify(trace)},JSON.stringify({args,cwd:process.cwd()})+'\\n');
 console.log(JSON.stringify({kind:'message',role:'assistant',text:'Stable generated title'}));console.log(JSON.stringify({kind:'done',cause:'clean',exitCode:0}));

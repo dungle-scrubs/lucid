@@ -39,7 +39,7 @@ test("context accounting uses hcn stdin and retains measured native occupancy", 
     status: "available",
     method: "native-context-estimate",
     model: "claude-opus-5",
-    executable: { path: "/selected/claude", version: "2.1.263" },
+    executable: { path: "/selected/claude" },
     totalTokens: 920000,
     inputLimitTokens: 967000,
   });

@@ -1,25 +1,15 @@
 export interface HcnInstallation {
-  readonly detected: string | null;
   readonly lookupRoot: string | null;
-  readonly minimum: string;
   readonly path: string | null;
-  readonly pin: string;
   readonly source: string | null;
 }
 
 export interface CompatibilityDiagnostic {
-  readonly code:
-    | "hcn-version-too-old"
-    | "hcn-version-drift"
-    | "harness-version-unverified"
-    | "inspection-unavailable"
-    | "selection-unsupported";
+  readonly v: 1;
+  readonly code: "inspection-unavailable" | "selection-unsupported";
   readonly harness: {
-    readonly admissionVerified: string | null;
-    readonly detected: string | null;
     readonly name: string | null;
     readonly path: string | null;
-    readonly verified: string | null;
   } | null;
   readonly hcn: HcnInstallation;
   readonly message: string;
@@ -66,36 +56,22 @@ export function parseCompatibilityDiagnostic(value: unknown): CompatibilityDiagn
   const hcn = value.hcn;
   const harness = value.harness;
   if (
-    ![
-      "hcn-version-too-old",
-      "hcn-version-drift",
-      "harness-version-unverified",
-      "inspection-unavailable",
-      "selection-unsupported",
-    ].includes(String(value.code)) ||
+    value.v !== 1 ||
+    !["inspection-unavailable", "selection-unsupported"].includes(String(value.code)) ||
     !["runtime-start", "selection-check", "execution-check", "session-handshake"].includes(
       String(value.origin),
     ) ||
     !["runtime", "selection"].includes(String(value.scope)) ||
     !["warning", "error"].includes(String(value.severity)) ||
     ![value.message, value.remedy, value.operation, value.observedAt].every(text) ||
-    !text(hcn.pin) ||
-    !text(hcn.minimum) ||
-    ![hcn.detected, hcn.path, hcn.source, hcn.lookupRoot].every(fact) ||
-    (harness !== null &&
-      (!object(harness) ||
-        ![
-          harness.name,
-          harness.path,
-          harness.detected,
-          harness.verified,
-          harness.admissionVerified,
-        ].every(fact)))
+    ![hcn.path, hcn.source, hcn.lookupRoot].every(fact) ||
+    (harness !== null && (!object(harness) || ![harness.name, harness.path].every(fact)))
   )
     return undefined;
   const cleanFact = (value: unknown): string | null =>
     typeof value === "string" ? compatibilityText(value).slice(0, 1024) : null;
   return {
+    v: 1,
     code: value.code as CompatibilityDiagnostic["code"],
     origin: value.origin as CompatibilityDiagnostic["origin"],
     scope: value.scope as CompatibilityDiagnostic["scope"],
@@ -105,9 +81,6 @@ export function parseCompatibilityDiagnostic(value: unknown): CompatibilityDiagn
     operation: compatibilityText(String(value.operation)),
     observedAt: compatibilityText(String(value.observedAt)),
     hcn: {
-      pin: compatibilityText(hcn.pin),
-      minimum: compatibilityText(hcn.minimum),
-      detected: cleanFact(hcn.detected),
       path: cleanFact(hcn.path),
       source: cleanFact(hcn.source),
       lookupRoot: cleanFact(hcn.lookupRoot),
@@ -118,9 +91,6 @@ export function parseCompatibilityDiagnostic(value: unknown): CompatibilityDiagn
         : {
             name: cleanFact(harness.name),
             path: cleanFact(harness.path),
-            detected: cleanFact(harness.detected),
-            verified: cleanFact(harness.verified),
-            admissionVerified: cleanFact(harness.admissionVerified),
           },
   };
 }

@@ -8,7 +8,7 @@ import { createConversationHost } from "../../src/store/conversation-host.js";
 import { replaceSettings } from "../../src/store/settings.js";
 import { createConversationRecord } from "../../src/store/store.js";
 
-test("recovery keeps its TTL and interactive conversion while explaining its own version refusal", async () => {
+test("recovery ignores version differences and preserves its TTL and interactive conversion", async () => {
   const root = mkdtempSync(join(tmpdir(), "lucid-recovery-compatibility-"));
   const { paths } = createConversationRecord(root, "recovery", { workingDirectory: root });
   replaceSettings(paths.dir, "recovery", 0, {
@@ -56,9 +56,8 @@ test("recovery keeps its TTL and interactive conversion while explaining its own
   );
   try {
     const failed = await recovery(paths.dir, host.state());
-    expect(failed.actions).toEqual([]);
-    expect(failed.reason).toContain("1.1.0");
-    expect(failed.reason).toContain("1.0.0");
+    expect(failed.actions).toEqual(["retry", "continue-fresh"]);
+    expect(failed.reason).toBeNull();
     version = "1.0.0";
     now = 1499;
     expect(await recovery(paths.dir, host.state())).toEqual(failed);

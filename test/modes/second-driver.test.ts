@@ -24,7 +24,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
-import { HCN_MIN_VERSION } from "../../src/harness/version.js";
+
+const SYNTHETIC_HCN_IDENTITY = "synthetic";
+
 import { createHeadlessHost } from "../../src/modes/host.js";
 import type { Frame } from "../../src/protocol/frames.js";
 import { createTurnIds } from "../../src/protocol/turn-id.js";
@@ -71,7 +73,7 @@ const record = () => {
         kind: "session",
         sessionId: SID,
         harness: "claude",
-        hcn: HCN_MIN_VERSION,
+        hcn: SYNTHETIC_HCN_IDENTITY,
         escalateQuestions: true,
       });
       await settle();

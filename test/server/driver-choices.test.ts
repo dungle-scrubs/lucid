@@ -18,7 +18,6 @@ import { createConversationRecord } from "../../src/store/store.js";
 const facts = (over: Partial<HarnessFacts> = {}): HarnessFacts => ({
   name: "x",
   session: false,
-  verifiedAgainst: "1.0.0",
   ...over,
 });
 

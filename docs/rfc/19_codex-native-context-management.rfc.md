@@ -8,6 +8,10 @@ date: 2026-09-08
 version: 2
 ---
 
+> Runtime version admission clauses in this proposal are superseded by the
+> HCN operation authority contract in [operation feedback](../compatibility.md).
+> Dependency pins and fixture capture remain build concerns.
+
 # RFC-19: Codex native context management
 
 ## Abstract

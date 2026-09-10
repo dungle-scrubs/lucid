@@ -1,4 +1,8 @@
-import { compatibilityMessage, compatibilityText } from "./compatibility.js";
+import {
+  compatibilityMessage,
+  compatibilityText,
+  parseCompatibilityDiagnostic,
+} from "./compatibility.js";
 import { recoveryPolicy } from "./execution.js";
 import { supportsManagedInput } from "./frames.js";
 import type { ChannelState } from "./reducer.js";
@@ -41,24 +45,27 @@ export function executionViews(
             ...base,
             status: "held",
             code: "E-HUB-03",
-            reason: "Upgrade the attached source or wait for it to exit. Your prompt is saved.",
+            reason:
+              "The attached source cannot accept this prompt. Wait for it to exit. Your prompt is saved.",
           };
         return {
           ...base,
           status: "pending",
           reason: "Your prompt is saved and waiting for an available worker.",
         };
-      case "held":
+      case "held": {
+        const diagnostic = parseCompatibilityDiagnostic(execution.hold.compatibility);
         return {
           ...base,
           status: "held",
           code: execution.hold.code,
-          reason: execution.hold.compatibility
-            ? compatibilityMessage(execution.hold.compatibility)
+          reason: diagnostic
+            ? compatibilityMessage(diagnostic)
             : execution.hold.code === "E-HUB-03"
-              ? "This attempt could not start with the selected driver. Historical inspection details are unavailable. Check the selected installation and settings, restart Lucid after repair, and try again."
+              ? "This attempt could not start with the selected driver. Historical inspection details are unavailable. Check the selected settings and try again."
               : compatibilityText(execution.hold.reason),
         };
+      }
       case "attempt-started":
         return {
           ...base,
@@ -77,8 +84,10 @@ export function executionViews(
           status: beforeStart ? "held" : outcome.kind === "uncertain" ? "uncertain" : "failed",
           code: outcome.failure.code,
           reason:
-            outcome.failure.evidence === "harness-refusal"
-              ? "HCN refused this historical attempt. Inspection details are unavailable. Check the selected installation and settings, restart Lucid after repair, and try again."
+            outcome.failure.evidence === "harness-refusal" ||
+            outcome.failure.code === "E-HUB-03" ||
+            outcome.failure.code === "E-HUB-05"
+              ? "HCN refused this historical attempt. Inspection details are unavailable. Check the selected settings and try again."
               : compatibilityText(outcome.failure.reason),
         };
       }

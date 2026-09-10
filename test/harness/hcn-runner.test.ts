@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { decodeHarnessLine } from "../../src/harness/events.js";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
 import { nodeSpawnHcn } from "../../src/harness/node-deps.js";
-import { HarnessRefusal, HarnessVersionError } from "../../src/harness/runner.js";
-import { HCN_MIN_VERSION } from "../../src/harness/version.js";
+import { HarnessRefusal } from "../../src/harness/runner.js";
+
+const SYNTHETIC_HCN_IDENTITY = "synthetic";
+
 import { FakeHcnProcess, fakeSpawner, fixtureEvents } from "./fakes.js";
 
 const BIN = "/fake/hcn";
@@ -112,7 +114,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: HCN_MIN_VERSION,
+      hcn: SYNTHETIC_HCN_IDENTITY,
       escalateQuestions: true,
     });
     const session = await opening;
@@ -158,7 +160,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: HCN_MIN_VERSION,
+      hcn: SYNTHETIC_HCN_IDENTITY,
       escalateQuestions: true,
     });
     const session = await opening;
@@ -177,7 +179,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: HCN_MIN_VERSION,
+      hcn: SYNTHETIC_HCN_IDENTITY,
       escalateQuestions: true,
     });
     const session = await opening;
@@ -207,7 +209,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: HCN_MIN_VERSION,
+      hcn: SYNTHETIC_HCN_IDENTITY,
       escalateQuestions: true,
     });
     const session = await opening;
@@ -228,7 +230,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: HCN_MIN_VERSION,
+      hcn: SYNTHETIC_HCN_IDENTITY,
       escalateQuestions: true,
     });
     const session = await opening;
@@ -255,7 +257,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: HCN_MIN_VERSION,
+      hcn: SYNTHETIC_HCN_IDENTITY,
       escalateQuestions: true,
     });
     const session = await opening;
@@ -272,7 +274,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: HCN_MIN_VERSION,
+      hcn: SYNTHETIC_HCN_IDENTITY,
       escalateQuestions: true,
     });
     const session = await opening;
@@ -307,7 +309,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "pi",
-      hcn: HCN_MIN_VERSION,
+      hcn: SYNTHETIC_HCN_IDENTITY,
       escalateQuestions: true,
     });
     await opening;
@@ -379,7 +381,7 @@ describe("inspection, which never spawns a harness", () => {
       JSON.stringify({ name: "claude", sessionMode: { flags: [] }, verifiedAgainst: "2.1.233" }),
     );
     r.proc.exit(0);
-    expect(await pending).toEqual({ name: "claude", session: true, verifiedAgainst: "2.1.233" });
+    expect(await pending).toEqual({ name: "claude", session: true });
   });
 
   test("a harness with no session mode reports session false", async () => {
@@ -414,7 +416,6 @@ describe("inspection, which never spawns a harness", () => {
     expect(await pending).toEqual({
       name: "pi",
       session: true,
-      verifiedAgainst: "0.84.2",
       vocabulary: {
         aliases: { glm: "zai/glm-5.2" },
         // models as the dump lists them - the canonical ids the aliases
@@ -484,7 +485,7 @@ describe("inspection, which never spawns a harness", () => {
 
 describe("review fixes: what the cross-family review found", () => {
   const sid2 = "479c05c6-0c2b-416a-9700-2b04cf8ecf24";
-  const open = async (r: ReturnType<typeof rig>, hcn = HCN_MIN_VERSION) => {
+  const open = async (r: ReturnType<typeof rig>, hcn = SYNTHETIC_HCN_IDENTITY) => {
     const opening = r.runner.openSession({ harness: "claude", sessionId: sid2 });
     r.proc.emit({
       kind: "session",
@@ -496,26 +497,17 @@ describe("review fixes: what the cross-family review found", () => {
     return opening;
   };
 
-  test("an hcn below the floor is refused by what the stream reports, not just the binary", async () => {
-    const r = rig();
-    // The binary was version-checked at resolution, but a stream can still
-    // report an older protocol. That is the claim this checks.
-    await expect(open(r, "0.5.3")).rejects.toBeInstanceOf(HarnessVersionError);
-    expect(r.proc.inputEnded).toBe(true);
-    expect(r.proc.signals).toEqual(["SIGTERM"]);
-  });
-
-  test("a handshake refusal keeps its installation and the handshake's version observation", async () => {
-    const r = rig();
-    const opening = open(r, "0.6.3");
-    await expect(opening).rejects.toMatchObject({
-      diagnostic: {
-        origin: "session-handshake",
-        code: "hcn-version-too-old",
-        hcn: { detected: "0.6.3", minimum: HCN_MIN_VERSION, path: BIN },
-      },
-    });
-  });
+  test.each(["0.0.1", "999.0.0", "unknown", ""])(
+    "session admission ignores HCN version metadata: %s",
+    async (version) => {
+      const r = rig();
+      const session = await open(r, version);
+      expect(r.proc.signals).toEqual([]);
+      expect(typeof session.send).toBe("function");
+      r.proc.exit(0);
+      await session.close();
+    },
+  );
 
   test("an event with no turn open is held for the next turn, never dropped", async () => {
     const r = rig();
@@ -671,7 +663,7 @@ describe("a turn that carries a failure still delivers its events", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: HCN_MIN_VERSION,
+      hcn: SYNTHETIC_HCN_IDENTITY,
       escalateQuestions: true,
     });
     const session = await opening;
@@ -730,7 +722,12 @@ test("closing an opened session through its signal allows the graceful close rep
     sessionId: "graceful",
     signal: controller.signal,
   });
-  r.proc.emit({ kind: "session", sessionId: "graceful", harness: "claude", hcn: HCN_MIN_VERSION });
+  r.proc.emit({
+    kind: "session",
+    sessionId: "graceful",
+    harness: "claude",
+    hcn: SYNTHETIC_HCN_IDENTITY,
+  });
   const session = await opening;
   try {
     controller.abort();
@@ -864,50 +861,54 @@ test("settings inspection validates argv, propagates refusal, and reuses descrip
   expect(r.spawner.calls).toHaveLength(3);
 });
 
-test("native resume inspection validates rendering in the saved folder and preserves unknown compatibility", async () => {
-  const facts = new FakeHcnProcess();
-  const checked = new FakeHcnProcess();
-  const r = rig([facts, checked]);
-  const initial = r.runner.inspect("claude");
-  facts.emitRaw(JSON.stringify({ name: "claude", sessionMode: {}, verifiedAgainst: "2.1.233" }));
-  facts.exit(0);
-  await initial;
-  const query = r.runner.inspect("claude", {
-    model: "concrete-opus",
-    effort: "high",
-    runtime: { cwd: "/saved/nested", resume: "native-id", profile: "headless-turn" },
-  });
-  checked.emitRaw(
-    JSON.stringify({
-      v: 1,
-      argv: ["claude", "--resume", "native-id"],
-      executable: { path: "/selected/claude", version: "2.9.0" },
-      resume: { status: "unknown", reason: "Unverified version" },
-    }),
-  );
-  checked.exit(0);
-  expect((await query).runtime).toMatchObject({
-    executable: { path: "/selected/claude", version: "2.9.0" },
-    resume: { status: "unknown" },
-  });
-  expect(r.spawner.calls[1]?.argv).toEqual([
-    BIN,
-    "inspect",
-    "claude",
-    "--runtime",
-    "--prompt",
-    "Validate settings",
-    "--model",
-    "concrete-opus",
-    "--effort",
-    "high",
-    "--resume",
-    "native-id",
-    "--mode",
-    "headless-turn",
-  ]);
-  expect(r.spawner.calls[1]?.opts.cwd).toBe("/saved/nested");
-});
+test.each(["supported", "unknown"] as const)(
+  "native resume inspection trusts HCN status %s despite version metadata",
+  async (status) => {
+    const facts = new FakeHcnProcess();
+    const checked = new FakeHcnProcess();
+    const r = rig([facts, checked]);
+    const initial = r.runner.inspect("claude");
+    facts.emitRaw(JSON.stringify({ name: "claude", sessionMode: {}, verifiedAgainst: "2.1.233" }));
+    facts.exit(0);
+    await initial;
+    const query = r.runner.inspect("claude", {
+      model: "concrete-opus",
+      effort: "high",
+      runtime: { cwd: "/saved/nested", resume: "native-id", profile: "headless-turn" },
+    });
+    checked.emitRaw(
+      JSON.stringify({
+        v: 1,
+        argv: ["claude", "--resume", "native-id"],
+        executable: { path: "/selected/claude", version: "2.9.0" },
+        verifiedAgainst: "0.0.1",
+        resume: { status, reason: null },
+      }),
+    );
+    checked.exit(0);
+    expect((await query).runtime).toMatchObject({
+      executable: { path: "/selected/claude" },
+      resume: { status },
+    });
+    expect(r.spawner.calls[1]?.argv).toEqual([
+      BIN,
+      "inspect",
+      "claude",
+      "--runtime",
+      "--prompt",
+      "Validate settings",
+      "--model",
+      "concrete-opus",
+      "--effort",
+      "high",
+      "--resume",
+      "native-id",
+      "--mode",
+      "headless-turn",
+    ]);
+    expect(r.spawner.calls[1]?.opts.cwd).toBe("/saved/nested");
+  },
+);
 
 test("isolated naming asks hcn to enforce isolation, bounds runtime, and refuses resume", async () => {
   const r = rig();
@@ -1007,7 +1008,7 @@ test("failed descriptor inspection does not poison a later explicit inspection",
   const retried = runner.inspect("claude");
   second.emit({ sessionMode: null, verifiedAgainst: "test" });
   second.exit(0);
-  expect(await retried).toMatchObject({ session: false, verifiedAgainst: "test" });
+  expect(await retried).toMatchObject({ session: false });
   expect(spawner.calls).toHaveLength(2);
 });
 

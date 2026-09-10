@@ -108,8 +108,9 @@ does not import the normalizer, and it holds no descriptor.
 - **The dependency is pinned exactly** (`@dungle-scrubs/harness-cli-normalizer`),
   because `test/fixtures/hcn/*.ndjson` are recordings of one hcn version.
   Bumping it is a deliberate commit that re-captures them with
-  `bun scripts/capture-hcn-fixtures.ts`. `HCN_MIN_VERSION` in
-  `src/harness/version.ts` is the floor a running binary must meet.
+  `bun scripts/capture-hcn-fixtures.ts`. The pin is a build input only.
+  Lucid does not probe, compare, or gate on HCN or harness versions; it
+  consumes HCN operation results and reports operation failures.
 - **Never hand-write a fixture.** They are evidence. A test that needs a
   sequence no recording shows composes it inline and says so.
 - **Do not re-derive hcn's behaviour.** Its flags, event kinds, failure

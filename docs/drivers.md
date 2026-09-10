@@ -52,10 +52,10 @@ Capability claims retain their provenance:
 
 Binary resolution happens once: `LUCID_HCN`, then the repository's
 `node_modules/.bin/hcn`, then PATH. The chosen binary is logged. The exact
-package pin and recorded fixtures move together; the runtime floor
-remains a separate admission check. See [AGENTS](../AGENTS.md) and
-[compatibility feedback](compatibility.md) for version identity, retained
-observations, selected-installation repair, and unchanged recovery rules.
+package pin and recorded fixtures move together as build inputs. Runtime
+admission uses HCN operation results without comparing versions. See
+[AGENTS](../AGENTS.md) and [operation feedback](compatibility.md) for HCN
+authority, operation errors, and recovery rules.
 
 ## Comparison delivery
 
@@ -276,19 +276,16 @@ preparation APIs. Accepted input authorizes work; opening a page does not.
 
 `HarnessRunner.countContext` asks the selected hcn executable to account for
 the complete prepared prompt, including native session occupancy when resuming.
-The result names the measured model and verified executable. A changed model,
+The result names the measured model and executable path. A changed model,
 unknown budget, malformed response, or failed probe holds preparation. No
 model capacity table or text-to-token estimate lives in Lucid. Accounting
 uses the same cwd, saved choices, resume ID, and isolation as the intended
 operation. Its bounded process has cancellation, output limits, and forced
 cleanup. Structured refusal codes survive; raw process diagnostics do not.
-This hcn mechanism is detected separately from mode support. HCN 0.6.4
-introduced native-resume verification and context accounting.
-Lucid currently pins HCN 0.6.5.
-Its verified accounting adapter currently supports Claude headless-turn.
-Selections without accounting or declared native management stay held; an unsupported
-adapter asks for changed settings, while an unverified installation can be
-rechecked after repair. Lucid never substitutes an estimated budget.
+This HCN mechanism is detected separately from mode support. HCN decides
+which selections support accounting. Selections without accounting or declared
+native management stay held using HCN's operation result. Lucid never compares
+executable versions or substitutes an estimated budget.
 
 Both headless profiles accept a pre-dispatch preparation callback. It supplies
 the complete prepared prompt, including protocol teaching and current
@@ -307,10 +304,9 @@ existing delivery path; they are not prepared queued dispatches.
 
 Managed headless turns may use native context management when hcn declares
 `nativeContextManagement: { kind: "auto-compaction", modes: ["headless-turn"] }`
-and the selected executable exactly matches the verified adapter. This route
+for the requested mode. This route
 renders the complete captured context, keeps the offered source copy, and
-records accounting as null. It does not run a local count or summary. Codex
-0.153.4 declares this capability; its preflight count remains unavailable.
+records accounting as null. It does not run a local count or summary. HCN decides which harnesses declare this capability.
 Native resume and the prepared-execution fence still apply. Selected model flags
 are validated and passed through hcn; observed model agreement is not measured
 on this route. Native compaction handles thread growth and can still reject an
@@ -336,7 +332,7 @@ The preparer retains up to 16 first-pass derived summaries in memory. Further
 compression for a larger pending request does not replace that fuller cache.
 Cache keys include
 source content, source coverage, selected harness/model/effort/provider, and
-the verified executable. Changed pending text can reuse unchanged older
+the executable path. Changed pending text can reuse unchanged older
 history, but the complete resulting prompt is always recounted. The result
 includes summary notice data; the controller must display it and revalidate
 its dispatch snapshot. This module does not authorize or launch the pending
@@ -349,7 +345,7 @@ not alter the record. The browser records a notice when a turn uses a summary.
 
 All one-turn prompts cross the Lucid-to-hcn boundary over stdin, including
 ordinary task prompts. The native harness transport still belongs to hcn;
-hcn 0.6.4 sends large Claude prompts over stdin. Isolated text collection waits for process cleanup before
+HCN selects the native prompt transport. Isolated text collection waits for process cleanup before
 returning to the temporary-directory owner. Blank title validation remains
 with the naming store so its repair attempt is preserved.
 

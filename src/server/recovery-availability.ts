@@ -1,10 +1,8 @@
 import {
   diagnosticMessage,
   failureDiagnostic,
-  selectionDiagnostic,
   selectionProblem,
 } from "../harness/compatibility.js";
-import { verifiedExecutable } from "../harness/inspection-facts.js";
 import type { HarnessRunner } from "../harness/runner.js";
 import { ownerPresence, terminalPresence } from "../process-owner.js";
 import type { ChannelState } from "../protocol/reducer.js";
@@ -66,21 +64,17 @@ export function createRecoveryAvailability(
         });
       try {
         const fresh = await inspect(undefined);
-        if (
-          !verifiedExecutable(fresh.runtime?.executable, fresh.verifiedAgainst) ||
-          (profile === "headless-session" && !fresh.session)
-        )
+        if (profile === "headless-session" && !fresh.session)
           return {
             actions: [],
             reason: diagnosticMessage(
-              selectionDiagnostic(fresh, choice, runner().installation, "execution-check", false) ??
-                selectionProblem(
-                  choice,
-                  runner().installation,
-                  "selection-unsupported",
-                  "the selected mode cannot be verified",
-                  "execution-check",
-                ),
+              selectionProblem(
+                choice,
+                runner().installation,
+                "selection-unsupported",
+                "HCN reports that the selected mode is unsupported",
+                "execution-check",
+              ),
             ),
           };
         if (resume === undefined) return { actions: ["retry", "continue-fresh"], reason: null };
@@ -95,19 +89,8 @@ export function createRecoveryAvailability(
           recallError = error;
           return null;
         });
-        const supported =
-          recalled !== null &&
-          verifiedExecutable(recalled.runtime?.executable, recalled.verifiedAgainst) &&
-          recalled.runtime?.resume.status === "supported";
-        const diagnostic = recalled
-          ? selectionDiagnostic(
-              recalled,
-              choice,
-              runner().installation,
-              "execution-check",
-              verifiedExecutable(recalled.runtime?.executable, recalled.verifiedAgainst) !== null,
-            )
-          : failureDiagnostic(recallError);
+        const supported = recalled !== null && recalled.runtime?.resume.status === "supported";
+        const diagnostic = failureDiagnostic(recallError);
         return {
           actions: supported ? ["retry", "continue-fresh"] : ["continue-fresh"],
           reason: supported

@@ -183,9 +183,10 @@ current visibility per conversation in the tab's `sessionStorage`. Reloading res
 which takes precedence over the URL initializer. Invalid or unavailable storage
 falls back to the initializer. Toggles do not change URLs or conversation records.
 
-The header's Show chat / Hide chat button is available in all
-five header branches, including empty, unsaved, historical, comparison, and
-connection-error views. It exposes the expanded state and controlled panel.
+The theme control and Show chat / Hide chat button stay together at the
+upper right, in that order, whether the chat is open or closed. This single
+control group remains available in empty, unsaved, historical, comparison,
+and connection-error views. The chat button exposes the expanded state and controlled panel.
 Closing moves focus to that button, makes the mounted panel inert and hidden
 from accessibility tools, and removes the divider from keyboard access.
 

@@ -1868,10 +1868,10 @@ const App = (): React.ReactElement => {
     conversationId,
   );
   const headerControls = (
-    <>
-      {conversationPanel.control}
+    <span className="header-controls">
       <ThemeControls />
-    </>
+      {conversationPanel.control}
+    </span>
   );
   /** Sent notes, by `artifactId@version` — the version each was made
    * against. */
@@ -3695,7 +3695,6 @@ const App = (): React.ReactElement => {
                             {displayName(allArtifacts[0] as CatalogEntry)}
                           </span>
                         )}
-                        {headerControls}
                       </div>
                       <div className="doc-ground">
                         <div className="empty-panel">
@@ -3757,7 +3756,6 @@ const App = (): React.ReactElement => {
                         </a>
                         <span className="doc-head-sep" aria-hidden="true" />
                         <span className="none-name">No document</span>
-                        {headerControls}
                       </div>
                       <div className="doc-ground">
                         <div className="empty-panel">
@@ -3795,7 +3793,6 @@ const App = (): React.ReactElement => {
                           >
                             Reload
                           </button>
-                          {headerControls}
                         </div>
                       ) : edited ? (
                         <div className="doc-head saving-bar">
@@ -3827,7 +3824,6 @@ const App = (): React.ReactElement => {
                             {saving ? "Saving…" : `Save as v${nextVersion}`}
                           </button>
                           {touchAnnotationControl}
-                          {headerControls}
                         </div>
                       ) : (
                         <div className="doc-head">
@@ -3962,7 +3958,6 @@ const App = (): React.ReactElement => {
                             ) : (
                               touchAnnotationControl
                             )}
-                            {headerControls}
                           </span>
                         </div>
                       )}
@@ -4244,6 +4239,8 @@ const App = (): React.ReactElement => {
                   )}
                 </div>
 
+                {headerControls}
+
                 {/* An `hr`, because that is what a separator is. It carries its
               width so a reader that cannot see the drag is still told what
               the arrow keys just did. */}
@@ -4278,9 +4275,7 @@ const App = (): React.ReactElement => {
                   }
                 >
                   <div className="pane conversation" {...conversationPanel.panelProps}>
-                    <div className="conversation-appearance">
-                      <ThemeControls />
-                    </div>
+                    <div className="conversation-header-space" aria-hidden="true" />
                     <Thread
                       pending={notes}
                       onSendNotes={() => void sendNotes()}

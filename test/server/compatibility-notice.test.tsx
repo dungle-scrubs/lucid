@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { JSDOM } from "jsdom";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
-import { hcnDiagnostic } from "../../src/harness/compatibility.js";
+import { installationProblem } from "../../src/harness/compatibility.js";
 import { CompatibilityNotice } from "../../src/server/client/compatibility-notice.js";
 
 test("compatibility details remain accessible beside a closed panel and polling does not announce again", async () => {
@@ -18,10 +18,7 @@ test("compatibility details remain accessible beside a closed panel and polling 
   }
   const container = dom.window.document.getElementById("root") as HTMLElement;
   const root = createRoot(container);
-  const diagnostic = hcnDiagnostic({
-    detected: "0.6.3",
-    minimum: "0.6.5",
-    pin: "0.6.5",
+  const diagnostic = installationProblem({
     path: "/selected/hcn",
     source: "env",
     lookupRoot: null,
@@ -57,6 +54,7 @@ test("compatibility details remain accessible beside a closed panel and polling 
     expect(mutations).toBe(0);
     expect(dom.window.document.activeElement).toBe(summary);
     expect(region.textContent).toContain("/selected/hcn");
+    expect(region.textContent).not.toMatch(/version|pins|minimum|update/i);
     expect(region.querySelector("button")).toBeNull();
     observer.disconnect();
   } finally {

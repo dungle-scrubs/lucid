@@ -13,7 +13,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import tailwind from "bun-plugin-tailwind";
 import { managedWorkerEnvironment } from "../../src/cli/managed-worker.js";
-import { HCN_MIN_VERSION } from "../../src/harness/version.js";
+
+const SYNTHETIC_HCN_IDENTITY = "synthetic";
+
 import { createConversationHost, viewSnapshot } from "../../src/store/conversation-host.js";
 import { presenceHeld } from "../../src/store/presence.js";
 import { replaceSettings } from "../../src/store/settings.js";
@@ -49,7 +51,7 @@ function workerFixture(hang = false) {
 const args=process.argv.slice(2); const get=(flag)=>args[args.indexOf(flag)+1];
 const output=(value)=>console.log(JSON.stringify(value));
 const executable={path:'/fake/native',version:'test'};
-if(args.includes('--version')) console.log('${HCN_MIN_VERSION}');
+if(args.includes('--version')) console.log('${SYNTHETIC_HCN_IDENTITY}');
 else if(args[0]==='inspect') {
  if(args.includes('--context')) { await Bun.stdin.text(); output({v:1,harness:'claude',mode:get('--mode'),verifiedAgainst:'test',executable,accounting:{status:'available',method:'native-context-estimate',model:'selected',inputLimitTokens:10000,contextWindowTokens:20000,totalTokens:1000}}); }
  else if(args.includes('--argv') || args.includes('--runtime')) output({v:1,argv:['/fake/native'],verifiedAgainst:'test',executable,resume:{status:'supported',reason:null}});

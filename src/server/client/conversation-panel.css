@@ -50,14 +50,30 @@
   display: none;
 }
 
-.doc-head button.conversation-toggle {
+.header-controls {
+  position: absolute;
+  inset-block-start: 14px;
+  inset-inline-end: 18px;
+  z-index: 2;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 11px;
+  block-size: 34px;
+}
+
+.header-controls > .theme-controls {
+  margin-inline-start: 0;
+}
+
+.header-controls button.conversation-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
   inline-size: 30px;
   block-size: 30px;
-  margin-inline-start: auto;
+  margin-inline-start: 0;
   padding: 4px;
   border: 0;
   border-radius: 0;
@@ -66,11 +82,11 @@
   cursor: pointer;
 }
 
-.doc-head button.conversation-toggle:hover {
+.header-controls button.conversation-toggle:hover {
   color: var(--color-text);
 }
 
-.doc-head button.conversation-toggle:focus-visible {
+.header-controls button.conversation-toggle:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
@@ -83,12 +99,8 @@
   margin-inline-start: auto;
 }
 
-.doc-actions .modes,
-.doc-head .doc-actions button.conversation-toggle {
+.doc-actions .modes {
   margin: 0;
-}
-.doc-head.dead button.conversation-toggle {
-  color: var(--color-accent-2-800);
 }
 
 @media (width > 900px) {

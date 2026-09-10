@@ -3,7 +3,9 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
-import { HCN_MIN_VERSION } from "../../src/harness/version.js";
+
+const SYNTHETIC_HCN_IDENTITY = "synthetic";
+
 import { type HeadlessDeps, openHeadlessSession, openHeadlessTurns } from "../../src/modes/host.js";
 import type { Frame } from "../../src/protocol/index.js";
 import {
@@ -95,7 +97,7 @@ const rig = (
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: HCN_MIN_VERSION,
+      hcn: SYNTHETIC_HCN_IDENTITY,
       escalateQuestions: true,
     });
   }
