@@ -520,53 +520,67 @@ test("summary provenance survives preparation while the full source remains avai
   }
 });
 
-test("resume skips unsupported historical events already covered by that native session", async () => {
-  const f = setup();
-  const preparation = createManagedPreparation({
-    host: f.host,
-    runner: f.runner,
-    driver,
-    cwd: f.root,
-    offerContext: f.offerContext,
-  });
-  try {
-    const event = (n: number, payload: Record<string, unknown>) =>
-      expect(
-        f.host.handleFrame(
-          JSON.stringify({
-            kind: "event",
-            epoch: f.host.state().epoch,
-            n,
-            turnId: "previous",
-            event: payload,
-          }),
-        ).verdict,
-      ).toBe("accepted");
-    event(1, { kind: "identity", sessionId: "native-a", authority: "harness-minted" });
-    event(2, { kind: "future-evidence", text: "Already known in native history" });
-    expect(
-      f.host.offerConversationContext({
-        harness: "claude",
-        sessionId: "native-a",
-        turnId: "previous",
-        context: { digest: "a".repeat(64), from: 0, through: f.host.state().seq + 1 },
-      }).verdict,
-    ).toBe("accepted");
-    event(3, { kind: "done", cause: "clean", exitCode: 0 });
-    expect(f.host.confirmConversationContext("previous").verdict).toBe("accepted");
-    const result = await preparation.prepare({
-      ...input,
-      native: { kind: "resume", sessionId: "native-a" },
-      signal: new AbortController().signal,
+test.each([false, true])(
+  "resume skips historical events covered by that native session, native management %s",
+  async (nativeManagement) => {
+    const f = setup();
+    const preparation = createManagedPreparation({
+      host: f.host,
+      runner: {
+        ...f.runner,
+        inspect: async () => ({
+          ...(await f.runner.inspect("claude")),
+          ...(nativeManagement
+            ? { nativeContextManagement: "native-session-auto-compaction" as const }
+            : {}),
+        }),
+      },
+      driver,
+      cwd: f.root,
+      offerContext: f.offerContext,
     });
-    expect(result.kind).toBe("ready");
-    expect(f.counts[0]?.resume).toBe("native-a");
-    expect(f.counts[0]?.prompt).not.toContain("future-evidence");
-  } finally {
-    preparation.close();
-    f.close();
-  }
-});
+    try {
+      const event = (n: number, payload: Record<string, unknown>) =>
+        expect(
+          f.host.handleFrame(
+            JSON.stringify({
+              kind: "event",
+              epoch: f.host.state().epoch,
+              n,
+              turnId: "previous",
+              event: payload,
+            }),
+          ).verdict,
+        ).toBe("accepted");
+      event(1, { kind: "identity", sessionId: "native-a", authority: "harness-minted" });
+      event(2, { kind: "future-evidence", text: "Already known in native history" });
+      expect(
+        f.host.offerConversationContext({
+          harness: "claude",
+          sessionId: "native-a",
+          turnId: "previous",
+          context: { digest: "a".repeat(64), from: 0, through: f.host.state().seq + 1 },
+        }).verdict,
+      ).toBe("accepted");
+      event(3, { kind: "done", cause: "clean", exitCode: 0 });
+      expect(f.host.confirmConversationContext("previous").verdict).toBe("accepted");
+      const result = await preparation.prepare({
+        ...input,
+        native: { kind: "resume", sessionId: "native-a" },
+        signal: new AbortController().signal,
+      });
+      expect(result.kind).toBe("ready");
+      expect(f.counts).toHaveLength(nativeManagement ? 0 : 1);
+      if (!nativeManagement) expect(f.counts[0]?.resume).toBe("native-a");
+      if (result.kind === "ready")
+        expect(result.native).toEqual({ kind: "resume", sessionId: "native-a" });
+      if (result.kind === "ready") expect(result.prompt).not.toContain("future-evidence");
+    } finally {
+      preparation.close();
+      f.close();
+    }
+  },
+);
 
 test("closing preparation cancels its pending accounting and removes the copy", async () => {
   const f = setup();
@@ -831,16 +845,81 @@ test("managed comparison suppression survives automatic attachment and releases 
   }
 });
 
-test.each(["headless-turn", "headless-session"] as const)(
-  "native management skips accounting only in the declared mode: %s",
-  async (profile) => {
+test.each([false, true])(
+  "Claude native context routing preserves imported history: %s",
+  async (hasHistory) => {
+    const f = setup();
+    const runner: HarnessRunner = {
+      ...f.runner,
+      inspect: async () => ({
+        ...(await f.runner.inspect("claude")),
+        nativeContextManagement: "native-session-auto-compaction",
+      }),
+      countContext: async (request) => {
+        f.counts.push(request);
+        return { status: "unavailable", reason: "protocol" };
+      },
+    };
+    const preparation = createManagedPreparation({
+      host: f.host,
+      runner,
+      driver,
+      cwd: f.root,
+      offerContext: f.offerContext,
+    });
+    try {
+      if (hasHistory)
+        expect(
+          f.host.handleFrame(
+            JSON.stringify({
+              kind: "event",
+              epoch: f.host.state().epoch,
+              n: 1,
+              turnId: "previous",
+              event: { kind: "message", role: "assistant", text: "Retain this imported history" },
+            }),
+          ).verdict,
+        ).toBe("accepted");
+      const result = await preparation.prepare({ ...input, signal: new AbortController().signal });
+      expect(result.kind).toBe(hasHistory ? "held" : "ready");
+      expect(f.counts).toHaveLength(hasHistory ? 1 : 0);
+      if (hasHistory) {
+        expect(f.counts[0]?.prompt).toContain("Retain this imported history");
+        expect(f.host.state().executions.request).toMatchObject({
+          kind: "held",
+          attempt: 0,
+          hold: { code: "E-HUB-06", actions: ["retry"] },
+        });
+      } else {
+        if (result.kind !== "ready") throw new Error("Unexpected hold");
+        expect(result.accounting).toBeNull();
+        expect(result.summary).toBeNull();
+        expect(result.prompt).toContain("Complete current document");
+        expect(result.prompt).toContain("Update the document");
+        expect(existsSync(preparation.offeredPath(input.turnId) ?? "")).toBe(true);
+      }
+    } finally {
+      preparation.close();
+      f.close();
+    }
+  },
+);
+
+test.each([
+  ["headless-turn", "auto-compaction"],
+  ["headless-session", "auto-compaction"],
+  ["headless-turn", "native-session-auto-compaction"],
+  ["headless-session", "native-session-auto-compaction"],
+] as const)(
+  "native management skips accounting only in the declared mode: %s %s",
+  async (profile, management) => {
     const f = setup(profile);
     const selected = { ...driver, profile };
     const runner: HarnessRunner = {
       ...f.runner,
       inspect: async () => ({
         ...(await f.runner.inspect("claude")),
-        nativeContextManagement: true,
+        nativeContextManagement: management,
       }),
       countContext: async (request) => {
         if (profile === "headless-turn") throw new Error("Native management must not probe");
@@ -885,9 +964,14 @@ test.each(["headless-turn", "headless-session"] as const)(
   },
 );
 
-test.each(["settings-changed", "cancelled"] as const)(
-  "native management retains the dispatch fence: %s",
-  async (condition) => {
+test.each([
+  ["settings-changed", "auto-compaction"],
+  ["cancelled", "auto-compaction"],
+  ["settings-changed", "native-session-auto-compaction"],
+  ["cancelled", "native-session-auto-compaction"],
+] as const)(
+  "native management retains the dispatch fence: %s %s",
+  async (condition, management) => {
     const f = setup();
     const abort = new AbortController();
     const runner: HarnessRunner = {
@@ -899,7 +983,7 @@ test.each(["settings-changed", "cancelled"] as const)(
         if (condition === "cancelled") abort.abort();
         return {
           ...facts,
-          nativeContextManagement: true,
+          nativeContextManagement: management,
         };
       },
       countContext: async () => {
@@ -923,6 +1007,236 @@ test.each(["settings-changed", "cancelled"] as const)(
           hold: { code: "E-HUB-06" },
         });
       for (const path of f.offeredPaths) expect(existsSync(path)).toBe(false);
+    } finally {
+      preparation.close();
+      f.close();
+    }
+  },
+);
+
+test.each(["unverified-adapter", "capacity"] as const)(
+  "integrating native management retains an existing hold until Retry: %s",
+  async (failure) => {
+    const f = setup();
+    let integrated = false;
+    const runner: HarnessRunner = {
+      ...f.runner,
+      inspect: async () => ({
+        ...(await f.runner.inspect("claude")),
+        ...(integrated
+          ? { nativeContextManagement: "native-session-auto-compaction" as const }
+          : {}),
+      }),
+      countContext: async (request) => {
+        const measured = await f.runner.countContext(request);
+        return failure === "unverified-adapter"
+          ? { status: "unavailable", reason: "unverified-adapter" }
+          : {
+              ...measured,
+              status: "available",
+              executable: { path: "/fake/harness" },
+              method: "native-context-estimate",
+              model: "selected",
+              inputLimitTokens: 967000,
+              totalTokens: 970000,
+            };
+      },
+    };
+    let preparation = createManagedPreparation({ host: f.host, runner, driver, cwd: f.root });
+    const request = { ...input, signal: new AbortController().signal };
+    try {
+      expect((await preparation.prepare(request)).kind).toBe("held");
+      expect(f.host.state().executions.request).toMatchObject({
+        kind: "held",
+        attempt: 0,
+        hold: { code: failure === "capacity" ? "E-HUB-06" : "E-HUB-03" },
+      });
+      const before = f.counts.length;
+      preparation.close();
+      integrated = true;
+      preparation = createManagedPreparation({ host: f.host, runner, driver, cwd: f.root });
+      expect((await preparation.prepare(request)).kind).toBe("held");
+      expect(f.counts).toHaveLength(before);
+      expect(
+        f.host.writeExecution({
+          kind: "retry-authorized",
+          inputId: "request",
+          attempt: 0,
+          actionId: "retry-integrated",
+          acknowledgeEffects: false,
+        }).verdict,
+      ).toBe("accepted");
+      const result = await preparation.prepare(request);
+      expect(result.kind).toBe("ready");
+      if (result.kind !== "ready") throw new Error("Retry held");
+      expect(result.accounting).toBeNull();
+      expect(f.counts).toHaveLength(before);
+      expect(f.host.state().executions.request).toMatchObject({
+        kind: "attempt-started",
+        attempt: 1,
+        inputId: "request",
+      });
+      expect(f.host.transcript().inputs.map((entry) => entry.id)).toEqual(["request"]);
+    } finally {
+      preparation.close();
+      f.close();
+    }
+  },
+);
+
+test.each(["queued-note", "failed-attempt", "held-input"] as const)(
+  "full native sessions retain unconfirmed %s across Retry and later input",
+  async (tail) => {
+    const f = setup();
+    let n = 0;
+    const event = (value: Record<string, unknown>, turnId = "prior") =>
+      expect(
+        f.host.handleFrame(
+          JSON.stringify({
+            kind: "event",
+            epoch: f.host.state().epoch,
+            n: ++n,
+            turnId,
+            event: value,
+          }),
+        ).verdict,
+      ).toBe("accepted");
+    const runner: HarnessRunner = {
+      ...f.runner,
+      inspect: async () => ({
+        ...(await f.runner.inspect("claude")),
+        nativeContextManagement: "native-session-auto-compaction",
+      }),
+      countContext: async (request) => {
+        f.counts.push(request);
+        return {
+          status: "available",
+          executable: { path: "/fake/harness" },
+          method: "native-context-estimate",
+          model: "selected",
+          inputLimitTokens: 967000,
+          totalTokens: 970000,
+        };
+      },
+    };
+    const preparation = createManagedPreparation({ host: f.host, runner, driver, cwd: f.root });
+    try {
+      event({ kind: "identity", sessionId: "native-a", authority: "harness-minted" });
+      expect(
+        f.host.offerConversationContext({
+          harness: "claude",
+          sessionId: "native-a",
+          turnId: "prior",
+          context: { digest: "a".repeat(64), from: 0, through: f.host.state().seq + 1 },
+        }).verdict,
+      ).toBe("accepted");
+      event({ kind: "done", cause: "clean", exitCode: 0 });
+      expect(f.host.confirmConversationContext("prior").verdict).toBe("accepted");
+      expect(
+        f.host.acceptInput(
+          { id: "tail", text: `Preserve ${tail} evidence`, mode: "queue" },
+          { managed: true },
+        ).verdict,
+      ).toBe("accepted");
+      if (tail === "held-input")
+        expect(
+          f.host.writeExecution({
+            kind: "held",
+            inputId: "tail",
+            attempt: 0,
+            hold: {
+              code: "E-HUB-06",
+              prerequisite: "capacity",
+              reason: "Context does not fit",
+              actions: ["retry"],
+            },
+          }).verdict,
+        ).toBe("accepted");
+      if (tail === "failed-attempt") {
+        expect(
+          f.host.writeExecution({
+            kind: "attempt-started",
+            inputId: "tail",
+            attempt: 1,
+            epoch: f.host.state().epoch,
+            turnId: "failed",
+            driver,
+            native: { kind: "resume", sessionId: "native-a" },
+            context: { digest: "b".repeat(64), from: 0, through: f.host.state().seq },
+          }).verdict,
+        ).toBe("accepted");
+        event(
+          { kind: "message", role: "assistant", text: "Partial output from the failed attempt" },
+          "failed",
+        );
+        event({ kind: "done", cause: "error", exitCode: 1 }, "failed");
+        expect(
+          f.host.writeExecution({
+            kind: "attempt-ended",
+            inputId: "tail",
+            attempt: 1,
+            turnId: "failed",
+            outcome: {
+              kind: "failed-after-start",
+              failure: { code: "native", evidence: "terminal-error", reason: "Synthetic failure" },
+            },
+          }).verdict,
+        ).toBe("accepted");
+      }
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0)
+          expect(
+            f.host.writeExecution({
+              kind: "retry-authorized",
+              inputId: "request",
+              attempt: 0,
+              actionId: `retry-${attempt}`,
+              acknowledgeEffects: false,
+            }).verdict,
+          ).toBe("accepted");
+        expect(
+          (
+            await preparation.prepare({
+              ...input,
+              native: { kind: "resume", sessionId: "native-a" },
+              turnId: `attempt-${attempt}`,
+              signal: new AbortController().signal,
+            })
+          ).kind,
+        ).toBe("held");
+        expect(f.host.state().executions.request).toMatchObject({
+          kind: "held",
+          attempt: 0,
+          hold: { code: "E-HUB-06", actions: ["retry"] },
+        });
+      }
+      expect(f.counts[0]?.prompt).toContain(`Preserve ${tail} evidence`);
+      expect(
+        f.host.acceptInput({ id: "later", text: "Continue", mode: "queue" }, { managed: true })
+          .verdict,
+      ).toBe("accepted");
+      expect(
+        (
+          await preparation.prepare({
+            ...input,
+            inputId: "later",
+            text: "Continue",
+            native: { kind: "resume", sessionId: "native-a" },
+            turnId: "later-turn",
+            signal: new AbortController().signal,
+          })
+        ).kind,
+      ).toBe("held");
+      expect(f.host.state().executions.later).toMatchObject({
+        kind: "held",
+        attempt: 0,
+        hold: { code: "E-HUB-06" },
+      });
+      expect(f.host.transcript().inputs.map((entry) => entry.id)).toEqual([
+        "request",
+        "tail",
+        "later",
+      ]);
     } finally {
       preparation.close();
       f.close();

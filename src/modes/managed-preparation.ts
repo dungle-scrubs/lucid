@@ -300,7 +300,10 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
           driver.profile,
         );
       const result =
-        facts.nativeContextManagement && driver.profile === "headless-turn"
+        driver.profile === "headless-turn" &&
+        (facts.nativeContextManagement === "auto-compaction" ||
+          (facts.nativeContextManagement === "native-session-auto-compaction" &&
+            captured.context.history.length === 0))
           ? { accounting: null, prompt: render(captured.context), summary: null }
           : await prepareContext({
               context: captured.context,

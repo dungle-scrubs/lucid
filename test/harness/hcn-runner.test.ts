@@ -333,6 +333,13 @@ describe("inspection, which never spawns a harness", () => {
   test.each([
     [{ kind: "auto-compaction", modes: ["headless-turn"] }, true],
     [{ kind: "auto-compaction", modes: ["headless-turn", "headless-session"] }, true],
+    [{ kind: "native-session-auto-compaction", modes: ["headless-turn"] }, true],
+    [{ kind: "native-session-auto-compaction", modes: ["headless-turn", "headless-turn"] }, false],
+    [
+      { kind: "native-session-auto-compaction", modes: ["headless-turn", "headless-session"] },
+      false,
+    ],
+    [{ kind: "native-session-auto-compaction", modes: ["headless-session"] }, false],
     [null, false],
     [undefined, false],
     [{ kind: "unknown", modes: ["headless-turn"] }, false],
@@ -354,7 +361,9 @@ describe("inspection, which never spawns a harness", () => {
         }),
       );
       r.proc.exit(0);
-      expect((await pending).nativeContextManagement).toBe(supported ? true : undefined);
+      expect((await pending).nativeContextManagement as string | undefined).toBe(
+        supported && declaration && "kind" in declaration ? declaration.kind : undefined,
+      );
     },
   );
 
