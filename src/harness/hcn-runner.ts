@@ -312,11 +312,10 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
     }
     const parsed = JSON.parse(out.join("\n")) as Record<string, unknown>;
     const vocabulary = vocabularyOf(parsed);
+    const contextManagement = nativeContextManagement(parsed.nativeContextManagement);
     return {
       name: String(parsed.name ?? harness),
-      ...(nativeContextManagement(parsed.nativeContextManagement)
-        ? { nativeContextManagement: true as const }
-        : {}),
+      ...(contextManagement ? { nativeContextManagement: contextManagement } : {}),
       ...(parsed.contextInspection !== null &&
       typeof parsed.contextInspection === "object" &&
       !Array.isArray(parsed.contextInspection)

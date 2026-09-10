@@ -47,9 +47,10 @@ export interface HarnessFacts {
   /** hcn declares an accounting mechanism. A count reports the selected
    * model and profile before it is usable. */
   readonly contextAccounting?: true;
-  /** Declared native compaction for headless-turn only. HCN owns
-   * support for the selected executable; resume uses its runtime result. */
-  readonly nativeContextManagement?: true;
+  /** Native compaction admitted for headless turns. The native-session kind
+   * requires preparation of history outside confirmed coverage. HCN owns
+   * executable support; resume uses its runtime result. */
+  readonly nativeContextManagement?: "auto-compaction" | "native-session-auto-compaction";
   readonly runtime?: {
     readonly executable: { readonly path: string | null };
     readonly resume: { readonly status: "supported" | "unknown"; readonly reason: string | null };

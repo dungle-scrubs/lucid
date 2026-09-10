@@ -304,7 +304,14 @@ existing delivery path; they are not prepared queued dispatches.
 
 Managed headless turns may use native context management when hcn declares
 `nativeContextManagement: { kind: "auto-compaction", modes: ["headless-turn"] }`
-for the requested mode. This route
+for the requested mode. The narrower declaration
+`{ kind: "native-session-auto-compaction", modes: ["headless-turn"] }`
+selects this route only when the locked capture contains no history to transfer.
+Its mode list must contain exactly one headless-turn entry. A fresh prompt or
+a resume with confirmed native coverage can qualify. Unconfirmed history from
+queued notes, earlier holds, failed attempts, or another harness uses bounded
+preparation instead. The existing auto-compaction declaration keeps its mode
+superset behavior. This route
 renders the complete captured context, keeps the offered source copy, and
 records accounting as null. It does not run a local count or summary. HCN decides which harnesses declare this capability.
 Native resume and the prepared-execution fence still apply. Selected model flags
@@ -339,7 +346,11 @@ its dispatch snapshot. This module does not authorize or launch the pending
 task. Unknown budgets, unavailable isolation, incomplete summaries, changed
 executables/models, and oversized mandatory content hold preparation.
 Unsupported or unverified adapters use E-HUB-03 settings remedies; other
-preparation failures use E-HUB-06.
+preparation failures use E-HUB-06. These holds preserve the original input.
+An old E-HUB-03 hold can be retried after repairing the failed operation;
+E-HUB-06 requires explicit Retry. Installing a new binary or reloading the page
+does not dispatch held work. A full native session with unconfirmed history
+can remain held on repeated attempts; this route adds no new recovery action.
 The offered full context copy remains canonical for retrieval; summaries do
 not alter the record. The browser records a notice when a turn uses a summary.
 

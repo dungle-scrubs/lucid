@@ -1,5 +1,11 @@
 # Active RFCs
 
+RFC 24 is implemented with HCN 0.6.6. The completed proposal and reviews
+are preserved in commit `48461c5`. Current contracts live in
+[drivers](../drivers.md#recorded-context-preparation) and
+[compatibility feedback](../compatibility.md).
+RFC 23 is already allocated to portable artifact files on a separate branch.
+
 RFC 22 is implemented. HCN owns executable compatibility; Lucid consumes
 operation results without runtime version policy. The current contract is
 [HCN operation feedback](../compatibility.md).
@@ -29,7 +35,7 @@ commit `000381b`; its current contract is in [the design reference](../design.md
 Current reading-view design is listed in the
 [documentation index](../README.md#browser-design).
 
-The highest allocated RFC number is **22**. The next RFC is **23**.
+The highest allocated RFC number is **24**. The next RFC is **25**.
 Never reset numbering because completed files have been removed. Before
 allocating, check this high-water mark, active filenames, and Git history;
 use one greater than the highest number allocated and update this mark.
