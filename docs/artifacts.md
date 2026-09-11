@@ -81,6 +81,12 @@ new target or discard queued work. A new version cannot replace a document
 with unsaved edits or pending annotations. Following can resume once that
 work is resolved.
 
+Reloading restores the artifact's reading position in the same browser tab.
+The browser stores a block and its viewport offset per conversation, artifact,
+and version. Restoration waits for the document's images and fonts to load.
+Positions from other versions are not applied on reload. If browser storage
+is unavailable, reading remains usable without reload restoration.
+
 A save records the document and control values, the human author, and the
 version it was based on. A save from version 4 arriving after version 5 is
 accepted as a new version, with `basedOn` and `supersededSince` explaining

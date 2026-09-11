@@ -1001,10 +1001,18 @@ const script = (artifactId: string, version: number, author: string): string => 
     // changed, so nothing here has to match anything.
     if (m.kind === "restore-place" && typeof m.index === "number") {
       var backTo = blocks()[m.index];
-      if (!backTo) return;
-      var want = typeof m.top === "number" ? m.top : 0;
-      var have = backTo.getBoundingClientRect().top;
-      window.scrollBy(0, have - want);
+      if (backTo) {
+        var want = typeof m.top === "number" ? m.top : 0;
+        var have = backTo.getBoundingClientRect().top;
+        window.scrollBy({ top: have - want, behavior: "instant" });
+      }
+      placeReady = true;
+      reportPlace();
+      return;
+    }
+    if (m.kind === "report-place") {
+      placeReady = true;
+      reportPlace();
       return;
     }
 
@@ -1233,7 +1241,9 @@ const script = (artifactId: string, version: number, author: string): string => 
   // replaces this document, so the page has to already hold the answer. It
   // cannot ask for it after the fact.
   var placeTimer = null;
+  var placeReady = false;
   var reportPlace = function () {
+    if (!placeReady) return;
     var list = blocks();
     for (var i = 0; i < list.length; i++) {
       var r = list[i].getBoundingClientRect();
@@ -1253,10 +1263,11 @@ const script = (artifactId: string, version: number, author: string): string => 
     }
   };
   window.addEventListener("scroll", function () {
+    // Save the latest position without waiting for the marks-below throttle.
+    reportPlace();
     if (placeTimer !== null) return;
     placeTimer = setTimeout(function () {
       placeTimer = null;
-      reportPlace();
       // The fold moved, so the marks-below count moved with it (3g).
       reportBelow();
     }, 150);
@@ -1264,12 +1275,20 @@ const script = (artifactId: string, version: number, author: string): string => 
   // The page cannot restore a place until the document exists to hold one,
   // and srcdoc loads on its own schedule. Saying so beats guessing at a
   // delay or resending until something sticks.
-  parent.postMessage(
-    { source: SOURCE, kind: "ready", artifactId: ARTIFACT, version: VERSION },
-    "*"
-  );
-  // Once at the start, so a reader who never scrolls still has a place.
-  setTimeout(reportPlace, 0);
+  var announceReady = function () {
+    var ready = function () {
+      parent.postMessage(
+        { source: SOURCE, kind: "ready", artifactId: ARTIFACT, version: VERSION },
+        "*"
+      );
+    };
+    // Images and fonts must establish layout before a saved offset is applied.
+    if (document.fonts) document.fonts.ready.then(ready);
+    else ready();
+  };
+  if (document.readyState === "complete") announceReady();
+  else window.addEventListener("load", announceReady, { once: true });
+  // The parent requests the initial place after deciding whether to restore.
   // And so the 3g pill knows where the fold sat when the frame opened.
   setTimeout(reportBelow, 0);
 

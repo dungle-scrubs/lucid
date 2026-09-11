@@ -104,6 +104,12 @@ import {
 import { LocationControl, type LocationState } from "./location-control.js";
 import { NoteAnchorHelp } from "./note-anchor-help.js";
 import { NotePopover } from "./note-popover.js";
+import {
+  readingPlaceKey,
+  readReadingPlace,
+  validReadingPlace,
+  writeReadingPlace,
+} from "./reading-place.js";
 import { formatRoute, parseRoute, type Route, sameRoute } from "./route.js";
 import { seamsForLost } from "./seams.js";
 import { SettingsForm } from "./settings-form.js";
@@ -1291,6 +1297,7 @@ const readRect = (raw: unknown): SelectionRect | null => {
 };
 
 const DocumentFrame = ({
+  conversationId,
   doc,
   onSelection,
   capture,
@@ -1316,6 +1323,7 @@ const DocumentFrame = ({
   mode,
   readOnly,
 }: {
+  conversationId: string;
   doc: Doc;
   onSelection: (ids: readonly string[], rect: SelectionRect | null) => void;
   /** Handed the frame's answer to a capture request. */
@@ -1450,10 +1458,20 @@ const DocumentFrame = ({
       // A fresh frame, holding the version that has just been taken up. If a
       // place was followed into it, this is the moment it can be given.
       if (m.kind === "ready") {
-        const want = pendingRestore.current;
+        const want =
+          pendingRestore.current ??
+          readReadingPlace(
+            () => window.sessionStorage,
+            readingPlaceKey(conversationId, doc.artifactId, doc.version),
+          );
         if (want !== null) {
           pendingRestore.current = null;
           restorePlace.current?.(want.index, want.top);
+        } else {
+          frame.contentWindow?.postMessage(
+            { source: FRAME_MESSAGE_SOURCE, kind: "report-place" },
+            "*",
+          );
         }
         // After the restore, never before it. What counts as already in view
         // is what the reader will be looking at, and until the place is put
@@ -1505,8 +1523,13 @@ const DocumentFrame = ({
       }
 
       if (m.kind === "place") {
-        if (typeof m.index !== "number" || typeof m.top !== "number") return;
+        if (!validReadingPlace(m)) return;
         place.current = { version: doc.version, index: m.index, top: m.top };
+        writeReadingPlace(
+          () => window.sessionStorage,
+          readingPlaceKey(conversationId, doc.artifactId, doc.version),
+          place.current,
+        );
         return;
       }
       if (m.kind === "dirty") {
@@ -1569,6 +1592,7 @@ const DocumentFrame = ({
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, [
+    conversationId,
     doc.artifactId,
     doc.version,
     onSelection,
@@ -4047,6 +4071,7 @@ const App = (): React.ReactElement => {
                               </div>
                             )}
                             <DocumentFrame
+                              conversationId={conversationId}
                               doc={doc}
                               onSelection={onSelected}
                               capture={capture}
