@@ -1,5 +1,5 @@
 import { EventKind } from "./events.js";
-import { type ContextBoundary, parseContextBoundary } from "./execution.js";
+import { type ContextBoundary, hasUnsettledExecution, parseContextBoundary } from "./execution.js";
 import type { HarnessName, ProtocolIssue } from "./frames.js";
 import { isWireId, isWireText } from "./frames.js";
 import { InputLedger } from "./ledgers/input.js";
@@ -42,6 +42,7 @@ export type ListenerDisabledReason = "expired" | "interrupted" | "owner-lost";
 
 export interface ListenerParticipation {
   readonly epoch: number;
+  readonly executorOwner: ProcessOwner;
   readonly expiresAt: number;
   readonly id: string;
   readonly registration: NativeBinding;
@@ -72,6 +73,11 @@ export interface NativeOutcome {
   readonly kind: "answer" | "question" | "refusal" | "failure";
   readonly text: string;
 }
+
+export type ConnectionControl =
+  | { readonly kind: "cancel-input"; readonly inputId: string }
+  | { readonly kind: "receipt"; readonly offerId: string }
+  | { readonly kind: "respond"; readonly offerId: string; readonly outcome: unknown };
 
 export function nativeOutcomeEvent(outcome: NativeOutcome): Record<string, unknown> {
   if (outcome.kind === "question") return { kind: EventKind.question, question: outcome.text };
@@ -288,12 +294,26 @@ export function parseConnectionFact(value: unknown): ConnectionFact | null {
   ) {
     const p = value.participation;
     const registration = parseNativeBinding(p.registration);
-    if (!registration || !connectionId(p.id) || !positive(p.epoch) || !positive(p.expiresAt))
+    const executorOwner = parseProcessOwner(p.executorOwner);
+    if (
+      !registration ||
+      !executorOwner ||
+      !path(executorOwner.executable) ||
+      !connectionId(p.id) ||
+      !positive(p.epoch) ||
+      !positive(p.expiresAt)
+    )
       return null;
     return {
       actionId: value.actionId,
       kind: value.kind,
-      participation: { epoch: p.epoch, expiresAt: p.expiresAt, id: p.id, registration },
+      participation: {
+        epoch: p.epoch,
+        executorOwner,
+        expiresAt: p.expiresAt,
+        id: p.id,
+        registration,
+      },
       source: value.source,
     };
   }
@@ -377,6 +397,15 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
   if (prior !== serialized) {
     const actions = { ...state.connection?.actions, [fact.actionId]: serialized };
     if (fact.kind === "bound") {
+      if (!state.connection && hasUnsettledExecution(state))
+        return refuseConnection(state, now, "execution-blocked");
+      const previousNative = state.harnessSessions[fact.binding.harness];
+      if (
+        !state.connection &&
+        (state.attachment !== null ||
+          (previousNative !== undefined && previousNative !== fact.binding.nativeSessionId))
+      )
+        return refuseConnection(state, now, "connection-conflict");
       if (
         state.connection &&
         JSON.stringify(state.connection.binding) !== JSON.stringify(fact.binding)
@@ -473,14 +502,7 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
         p.expiresAt - now > LISTENER_WAIT_MAX_MS
       )
         return refuseConnection(state, now, "connection-unverified");
-      if (
-        hasUnresolvedOffer(connection) ||
-        Object.values(state.executions).some(
-          (entry) =>
-            entry.kind === "attempt-started" ||
-            (entry.kind === "attempt-ended" && entry.outcome.kind === "uncertain"),
-        )
-      )
+      if (hasUnresolvedOffer(connection) || hasUnsettledExecution(state))
         return refuseConnection(state, now, "execution-blocked");
       next = {
         ...state,

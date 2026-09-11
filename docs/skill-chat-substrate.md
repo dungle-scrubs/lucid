@@ -251,6 +251,27 @@ receipt. It does not infer delivery from the response text.
 `input-already-dispatched` refuses cancellation after dispatch began. It
 preserves the offer and never stops the human-owned native session.
 
+`lucid connection receipt CONVERSATION --offer OFFER [--json]` records a
+receipt. `lucid connection respond CONVERSATION --offer OFFER --request FILE
+[--json]` records one outcome from a JSON object with `kind` (answer,
+question, refusal, failure) and plain-text `text`. Both commands derive the
+current native registration from process ancestry. They take no native-ID
+override and no executor lease. The host chooses action identity under the
+append lock, so repeated commands return the recorded result.
+
+`lucid connection cancel-input CONVERSATION --input INPUT [--json]` cancels
+unsent feedback in a bound conversation. Local record access authorizes
+cancellation; it needs no native registration. Each control command reports
+accepted or refused, and a refusal exits nonzero. Native lifecycle adapters
+and listener transports require their separate interface acceptance lanes.
+
+Listener readiness requires a verified native owner, the admitted listener
+process, an unexpired participation, and the existing executor lock. The
+host verifies the listener process against its own process identity. A
+temporary lock contender cannot stand in for a departed listener. Listener
+shutdown revokes readiness without recording native departure; only an
+explicit resume re-enables a disabled participation.
+
 Internal execution writes also report typed issues: `invalid-execution`
 for a malformed fact, `executor-required` without the executor lease,
 `execution-stale` for an outdated attempt or conflicting action identity,

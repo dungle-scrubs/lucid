@@ -37,6 +37,7 @@
  * `watch`'s paint step stays in `main.ts` and is injected as `onView`.
  */
 
+import type { ConnectionControl } from "../protocol/connection.js";
 import { type ChatOpts, chatConversation } from "./chat.js";
 import { type AnnounceResult, announce } from "./hooks/announce.js";
 import { readStdin } from "./hooks/delivery.js";
@@ -55,6 +56,7 @@ import { watchConversation } from "./watch.js";
 
 /** Injected seams — defaulted in production, faked in tests. */
 export interface DispatchDeps {
+  readonly nativeAuthority?: import("../store/native-registration.js").RegistrationAuthority;
   /** Record root override — defaults to `process.env.LUCID_ROOT`. One read, not three. */
   readonly rootDir?: string;
   /** Record addressing factory — injected so CliHost owns the single `effectiveRoot` → `Conversations` binding (2). */
@@ -91,6 +93,7 @@ export interface DispatchDeps {
 }
 
 export type DispatchResult =
+  | { readonly kind: "connection-control"; readonly verdict: "accepted" | "refused" }
   | { readonly kind: "connection-status" }
   | { readonly kind: "artifact-publish" }
   | { readonly kind: "hcn-supervisor" }
@@ -127,6 +130,34 @@ export const dispatch = async (
 
   // Help is terminal — no seams, no root, no flock.
   if (mapped.kind === "help") return { kind: "help", message: mapped.message };
+  if (mapped.kind === "connection-control") {
+    const { readResponseRequest, runConnectionControl } = await import("./connection-control.js");
+    const records = (deps.conversationsFactory ?? conversations)(deps.rootDir);
+    let control: ConnectionControl;
+    switch (mapped.operation) {
+      case "cancel-input":
+        control = { inputId: mapped.inputId, kind: "cancel-input" };
+        break;
+      case "receipt":
+        control = { kind: "receipt", offerId: mapped.offerId };
+        break;
+      case "respond":
+        control = {
+          kind: "respond",
+          offerId: mapped.offerId,
+          outcome: await readResponseRequest(mapped.request),
+        };
+        break;
+    }
+    const result = runConnectionControl(
+      records,
+      mapped.conversationId,
+      control,
+      deps.nativeAuthority,
+    );
+    (deps.onOutput ?? console.log)(mapped.json ? JSON.stringify(result) : result.message);
+    return { kind: "connection-control", verdict: result.verdict };
+  }
   if (mapped.kind === "connection-status") {
     const { readConnection } = await import("../store/connection-view.js");
     const records = (deps.conversationsFactory ?? conversations)(deps.rootDir);

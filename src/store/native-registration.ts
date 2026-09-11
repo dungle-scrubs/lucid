@@ -65,6 +65,17 @@ const failure = (reason: string, message: string): RegistrationFailure => ({
   reason,
 });
 
+function probeAuthority(
+  probe: (owner: ProcessOwner) => boolean | undefined,
+  owner: ProcessOwner,
+): boolean | undefined {
+  try {
+    return probe(owner);
+  } catch {
+    return undefined;
+  }
+}
+
 /** The registration lock precedes any record append lock acquired by the callback. */
 function withRegistrations<TValue>(
   root: string,
@@ -139,8 +150,8 @@ export function registerNativeSession(
       "The native lifecycle callback has an unsupported identity or working folder.",
     );
   if (
-    authority.callerOwns(registration.owner) !== true ||
-    authority.ownerPresence(registration.owner) !== true
+    probeAuthority(authority.callerOwns, registration.owner) !== true ||
+    probeAuthority(authority.ownerPresence, registration.owner) !== true
   )
     return failure("owner-unknown", "The native owner could not be corroborated.");
   const result = withRegistrations(root, (dir): RegistrationResult<NativeBinding> => {
@@ -177,12 +188,7 @@ export function withNativeRegistration<TValue>(
         .flatMap((name) => {
           const path = join(dir, name);
           const registration = readRegistration(path);
-          let alive: boolean | undefined;
-          try {
-            alive = authority.ownerPresence(registration.owner);
-          } catch {
-            /* Unavailable inspection never authorizes cleanup. */
-          }
+          const alive = probeAuthority(authority.ownerPresence, registration.owner);
           if (alive !== false) return [registration];
           unlinkSync(path);
           return [];
@@ -196,7 +202,7 @@ export function withNativeRegistration<TValue>(
     const matches: NativeBinding[] = [];
     let unknown = false;
     for (const registration of registrations) {
-      const owns = authority.callerOwns(registration.owner);
+      const owns = probeAuthority(authority.callerOwns, registration.owner);
       if (owns === undefined) unknown = true;
       if (owns === true) matches.push(registration);
     }
@@ -212,14 +218,14 @@ export function withNativeRegistration<TValue>(
     if (!registration)
       return failure(
         "registration-missing",
-        "Artifact published; connection needs setup. Interactive mode needs a connected session.",
+        "No verified native registration matches this process. Set up the native integration and reconnect.",
       );
     if (reference !== undefined && registration.registrationId !== reference)
       return failure(
         "stale-registration",
         "The native registration changed. Reconnect from the intended session.",
       );
-    if (authority.ownerPresence(registration.owner) !== true)
+    if (probeAuthority(authority.ownerPresence, registration.owner) !== true)
       return failure("owner-unknown", "The native owner could not be corroborated.");
     try {
       return { ok: true, value: operation(registration) };
@@ -227,10 +233,10 @@ export function withNativeRegistration<TValue>(
       const reason = classifyStoreFailure(cause) ?? "record-write-failed";
       const message =
         reason === "record-busy"
-          ? "The artifact is published, but its conversation is busy. Retry connection after the current write finishes."
+          ? "The conversation is busy. Retry the connection operation after the current write finishes."
           : reason === "record-unreadable"
-            ? "The artifact is published, but its conversation history could not be read. Connection remains unverified."
-            : "The artifact is published, but its connection could not be saved. Check access to the conversation and retry connection.";
+            ? "The conversation history could not be read. Connection remains unverified."
+            : "The connection operation could not be saved. Check access to the conversation before retrying.";
       return failure(reason, message);
     }
   });

@@ -29,7 +29,8 @@ const run = async (): Promise<void> => {
   const onAbort = (): void => ac.abort();
   process.on("SIGINT", onAbort);
   process.on("SIGTERM", onAbort);
-  await runCli(argv, { signal: ac.signal, wakeNamingFn: requestNaming });
+  const result = await runCli(argv, { signal: ac.signal, wakeNamingFn: requestNaming });
+  if (result.kind === "connection-control" && result.verdict === "refused") process.exitCode = 1;
 };
 
 run().catch((e) => {

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { hasUnresolvedOffer } from "../protocol/connection.js";
 import type { ExecutionHold } from "../protocol/execution.js";
+import { hasUnsettledExecution } from "../protocol/execution.js";
 import type { ChannelState } from "../protocol/reducer.js";
 import { preferenceState } from "./driver-preference.js";
 import { readRecordMetadata } from "./record-identity.js";
@@ -48,15 +49,7 @@ export function nativeInputCandidates(
   state: ChannelState,
   heads: ReadonlyMap<string, number>,
 ): readonly string[] {
-  if (
-    !state.connection ||
-    hasUnresolvedOffer(state.connection) ||
-    Object.values(state.executions).some(
-      (entry) =>
-        entry.kind === "attempt-started" ||
-        (entry.kind === "attempt-ended" && entry.outcome.kind === "uncertain"),
-    )
-  )
+  if (!state.connection || hasUnresolvedOffer(state.connection) || hasUnsettledExecution(state))
     return [];
   const managed = new Set(eligibleExecutions(dir, state, heads));
   return state.inputs

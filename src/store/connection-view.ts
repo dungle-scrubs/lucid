@@ -2,6 +2,7 @@ import { ownerPresence } from "../process-owner.js";
 import type { NativeInterface } from "../protocol/connection.js";
 import { currentListener, nativeOwners } from "../protocol/connection.js";
 import type { ProcessOwner } from "../protocol/process-owner.js";
+import { sameProcessOwner } from "../protocol/process-owner.js";
 import type { ChannelState } from "../protocol/reducer.js";
 import { viewConversation } from "./conversation-host.js";
 import type { DriverPreference } from "./driver-preference.js";
@@ -57,22 +58,41 @@ export function observeConnection(
   const binding = state.connection?.binding;
   let alive: boolean | undefined;
   let conflict = false;
+  const observations = nativeOwners(state).map(({ owner }) => {
+    let present: boolean | undefined;
+    try {
+      present = owner ? probe(owner) : undefined;
+    } catch {
+      /* Failed ownership inspection remains unknown. */
+    }
+    return { owner, present };
+  });
+  const present = (owner: ProcessOwner | undefined): boolean | undefined => {
+    if (!owner) return undefined;
+    const observed = observations.find((entry) => sameProcessOwner(entry.owner, owner));
+    if (observed) return observed.present;
+    let value: boolean | undefined;
+    try {
+      value = probe(owner);
+    } catch {
+      /* Listener process inspection follows the same unknown rule. */
+    }
+    observations.push({ owner, present: value });
+    return value;
+  };
   if (binding) {
-    const observations = nativeOwners(state).map(({ owner }) => {
-      try {
-        return owner ? probe(owner) : undefined;
-      } catch {
-        return undefined;
-      }
-    });
-    conflict = observations.filter((value) => value === true).length > 1;
-    alive = observations.includes(undefined) || conflict ? undefined : observations.includes(true);
+    const values = observations.map((entry) => entry.present);
+    conflict = values.filter((value) => value === true).length > 1;
+    alive = values.includes(undefined) || conflict ? undefined : values.includes(true);
   }
   const pending = Object.values(state.connection?.offers ?? {}).find(
     (offer) => offer.kind !== "finished",
   );
+  const pendingOwner = pending
+    ? state.connection?.participations[pending.offer.participationId]?.registration.owner
+    : undefined;
   if (pending?.kind === "sending")
-    return alive === true
+    return alive === true && present(pendingOwner) === true
       ? {
           message: "Sending feedback. Waiting for the interactive session to confirm receipt.",
           reason: null,
@@ -85,7 +105,7 @@ export function observeConnection(
           state: "delivery-uncertain",
         };
   if (pending?.kind === "received")
-    return alive === true
+    return alive === true && present(pendingOwner) === true
       ? {
           message: "Feedback received. Waiting for the interactive session to record its response.",
           reason: null,
@@ -109,15 +129,36 @@ export function observeConnection(
     alive === true &&
     !state.connection?.disabledReason &&
     listener &&
+    present(listener.registration.owner) === true &&
     listener.epoch === state.epoch &&
-    listener.expiresAt > now &&
-    executorPresent === true
-  )
-    return {
-      message: "Interactive session connected and listening.",
-      reason: null,
-      state: "listening",
-    };
+    listener.expiresAt > now
+  ) {
+    const listenerPresent = present(listener.executorOwner);
+    if (listenerPresent === undefined)
+      return {
+        message: "The interactive session is open, but Lucid cannot verify its listener process.",
+        reason: "listener-process-unverified",
+        state: "owner-unknown",
+      };
+    if (!listenerPresent)
+      return {
+        message: "Your interactive session is still open. Tell it to resume listening.",
+        reason: "listener-process-gone",
+        state: "not-listening",
+      };
+    if (executorPresent === undefined)
+      return {
+        message: "The interactive session is open, but Lucid cannot verify its listener lock.",
+        reason: "executor-unverified",
+        state: "owner-unknown",
+      };
+    if (executorPresent)
+      return {
+        message: "Interactive session connected and listening.",
+        reason: null,
+        state: "listening",
+      };
+  }
   return !binding
     ? {
         message:

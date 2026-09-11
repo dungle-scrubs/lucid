@@ -14,6 +14,28 @@ import { validConversationId } from "../store/errors.js";
  */
 
 export type MappedCommand =
+  | {
+      readonly kind: "connection-control";
+      readonly conversationId: string;
+      readonly json: boolean;
+      readonly operation: "cancel-input";
+      readonly inputId: string;
+    }
+  | {
+      readonly kind: "connection-control";
+      readonly conversationId: string;
+      readonly json: boolean;
+      readonly operation: "receipt";
+      readonly offerId: string;
+    }
+  | {
+      readonly kind: "connection-control";
+      readonly conversationId: string;
+      readonly json: boolean;
+      readonly operation: "respond";
+      readonly offerId: string;
+      readonly request: string;
+    }
   | { readonly kind: "connection-status"; readonly conversationId: string; readonly json: boolean }
   | { readonly kind: "artifact-publish"; readonly request: string; readonly json: boolean }
   | { readonly kind: "hcn-supervisor"; readonly argv: readonly string[] }
@@ -62,9 +84,56 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
       const help = {
         kind: "help",
         message:
-          "usage: lucid connection status CONVERSATION [--json]\nRead the current native connection and ownership evidence. This does not send feedback or start a process.",
+          "usage: lucid connection status CONVERSATION [--json]\nRead current native connection and ownership evidence.\nlucid connection receipt CONVERSATION --offer OFFER [--json]\nRecord receipt from the verified native session that received the offer.\nlucid connection respond CONVERSATION --offer OFFER --request FILE [--json]\nRecord one answer, question, refusal, or failure after receipt. FILE contains {kind,text}. Repeating the same result is safe. lucid connection cancel-input CONVERSATION --input INPUT [--json]\nCancel saved feedback only before dispatch begins.\nThese commands do not start a native process.",
       } as const;
       const id = rest[1];
+      if (rest[0] === "receipt" || rest[0] === "respond" || rest[0] === "cancel-input") {
+        if (!id || !validConversationId(id)) return help;
+        let offerId: string | undefined;
+        let request: string | undefined;
+        let json = false;
+        for (let index = 2; index < rest.length; index++) {
+          const flag = rest[index];
+          if (flag === "--json" && !json) json = true;
+          else if (
+            flag === (rest[0] === "cancel-input" ? "--input" : "--offer") &&
+            offerId === undefined
+          ) {
+            offerId = rest[++index];
+            if (!offerId || offerId.startsWith("--")) return help;
+          } else if (flag === "--request" && request === undefined && rest[0] === "respond") {
+            request = rest[++index];
+            if (!request || request.startsWith("--")) return help;
+          } else return help;
+        }
+        if (!offerId) return help;
+        if (rest[0] === "cancel-input")
+          return {
+            conversationId: id,
+            inputId: offerId,
+            json,
+            kind: "connection-control",
+            operation: "cancel-input",
+          };
+        if (rest[0] === "respond")
+          return request
+            ? {
+                conversationId: id,
+                json,
+                kind: "connection-control",
+                offerId,
+                operation: "respond",
+                request,
+              }
+            : help;
+        return {
+          conversationId: id,
+          json,
+          kind: "connection-control",
+          offerId,
+          operation: "receipt",
+        };
+      }
       if (
         rest[0] !== "status" ||
         !id ||

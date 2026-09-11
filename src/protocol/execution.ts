@@ -106,6 +106,14 @@ export type ExecutionState = ExecutionBase &
       }
   );
 
+export function hasUnsettledExecution(state: ChannelState): boolean {
+  return Object.values(state.executions).some(
+    (entry) =>
+      entry.kind === "attempt-started" ||
+      (entry.kind === "attempt-ended" && entry.outcome.kind === "uncertain"),
+  );
+}
+
 export function recoveryPolicy(execution: ExecutionState): {
   readonly actions: readonly ("retry" | "continue-fresh")[];
   readonly acknowledgeEffects: boolean;
@@ -426,14 +434,7 @@ export function reduceExecution(
     )
       return reject();
     // A conversation with an unresolved external attempt cannot run later work.
-    if (
-      Object.values(state.executions).some(
-        (e) =>
-          e.kind === "attempt-started" ||
-          (e.kind === "attempt-ended" && e.outcome.kind === "uncertain"),
-      )
-    )
-      return reject("execution-blocked");
+    if (hasUnsettledExecution(state)) return reject("execution-blocked");
     const authorization = current.kind === "held" ? current.authorization : current.kind;
     if (authorization === "fresh-authorized" && fact.native.kind !== "fresh") return reject();
     return accept({ ...fact, actions: current.actions, ...(previous ? { previous } : {}) });

@@ -1,11 +1,19 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { dispatch } from "../../src/cli/dispatch.js";
+import { conversations } from "../../src/cli/record-addressing.js";
+import { readProcessOwner } from "../../src/process-owner.js";
 import type { ConnectionFact, NativeBinding } from "../../src/protocol/connection.js";
 import type { ProcessOwner } from "../../src/protocol/process-owner.js";
-import { readConnection } from "../../src/store/connection-view.js";
-import { createConversationHost, openWriter } from "../../src/store/conversation-host.js";
+import { observeConnection, readConnection } from "../../src/store/connection-view.js";
+import {
+  createConversationHost,
+  openWriter,
+  viewConversation,
+} from "../../src/store/conversation-host.js";
+import { registerNativeSession } from "../../src/store/native-registration.js";
 import { acquirePresence, type PresenceHandle } from "../../src/store/presence.js";
 import { createConversationRecord } from "../../src/store/store.js";
 import { attach } from "../protocol/helpers.js";
@@ -51,7 +59,18 @@ function prepareOffer(
   };
 }
 
-function boundFixture(): BoundFixture {
+function returningRegistration(binding: NativeBinding): NativeBinding {
+  return {
+    ...binding,
+    generation: crypto.randomUUID(),
+    registrationId: crypto.randomUUID(),
+    owner: { ...binding.owner, pid: 456 },
+  };
+}
+
+function boundFixture(bind = true): BoundFixture {
+  const executorOwner = readProcessOwner(process.pid);
+  if (!executorOwner) throw new Error("Cannot verify this test process");
   const root = mkdtempSync(join(tmpdir(), "lucid-listener-"));
   const { paths } = createConversationRecord(root, "feedback", { workingDirectory: root });
   const controls: {
@@ -94,13 +113,14 @@ function boundFixture(): BoundFixture {
     }
   };
   try {
-    expect(
-      host.writeConnection({
-        actionId: crypto.randomUUID(),
-        binding: controls.registration,
-        kind: "bound",
-      }).verdict,
-    ).toBe("accepted");
+    if (bind)
+      expect(
+        host.writeConnection({
+          actionId: crypto.randomUUID(),
+          binding: controls.registration,
+          kind: "bound",
+        }).verdict,
+      ).toBe("accepted");
   } catch (cause) {
     close();
     throw cause;
@@ -117,6 +137,7 @@ function boundFixture(): BoundFixture {
       source: "explicit",
       participation: {
         epoch: host.state().epoch + 1,
+        executorOwner,
         expiresAt: controls.now + 45_000,
         id: crypto.randomUUID(),
         registration: controls.registration,
@@ -167,12 +188,7 @@ test("a returning listener waits until every other native owner is confirmed gon
   const f = boundFixture();
   try {
     const binding = f.controls.registration;
-    f.controls.registration = {
-      ...binding,
-      generation: crypto.randomUUID(),
-      registrationId: crypto.randomUUID(),
-      owner: { ...binding.owner, pid: 456 },
-    };
+    f.controls.registration = returningRegistration(binding);
     let previousOwner: boolean | undefined = true;
     f.controls.probe = (owner) => (owner.pid === 123 ? previousOwner : true);
     f.acquire();
@@ -498,12 +514,7 @@ test("status probes every native owner once and cannot hide uncertainty or compe
   const f = boundFixture();
   try {
     const original = f.controls.registration;
-    f.controls.registration = {
-      ...original,
-      generation: crypto.randomUUID(),
-      registrationId: crypto.randomUUID(),
-      owner: { ...original.owner, pid: 456 },
-    };
+    f.controls.registration = returningRegistration(original);
     let previous: boolean | undefined = false;
     const observed: number[] = [];
     f.controls.probe = (owner) => {
@@ -577,6 +588,432 @@ test("a failed native ownership probe returns an unverified connection without g
     if (result.verdict === "refused") expect(result.issue).toBe("connection-unverified");
     expect(f.host.state().seq).toBe(before);
     expect(f.status().state).toBe("owner-unknown");
+  } finally {
+    f.close();
+  }
+});
+
+test("publication cannot bind a record while a legacy driver is attached", () => {
+  const f = boundFixture(false);
+  try {
+    f.acquire();
+    expect(
+      f.host.handleFrame(
+        JSON.stringify(
+          attach({
+            conversationId: "feedback",
+            harness: "codex",
+            profile: "headless-turn",
+            secret: f.host.state().secret,
+          }),
+        ),
+      ).verdict,
+    ).toBe("accepted");
+    const result = f.host.writeConnection({
+      actionId: crypto.randomUUID(),
+      binding: f.controls.registration,
+      kind: "bound",
+    });
+    expect(result.verdict).toBe("refused");
+    if (result.verdict === "refused") expect(result.issue).toBe("connection-conflict");
+    expect(f.host.state().connection).toBeNull();
+    expect(f.host.state().attachment?.profile).toBe("headless-turn");
+  } finally {
+    f.close();
+  }
+});
+
+test("first binding preserves a record's known native identity after the legacy driver detaches", () => {
+  const f = boundFixture(false);
+  try {
+    f.acquire();
+    expect(
+      f.host.handleFrame(
+        JSON.stringify(
+          attach({
+            conversationId: "feedback",
+            harness: "codex",
+            profile: "headless-turn",
+            secret: f.host.state().secret,
+          }),
+        ),
+      ).verdict,
+    ).toBe("accepted");
+    expect(
+      f.host.handleFrame(
+        JSON.stringify({
+          kind: "event",
+          epoch: 1,
+          n: 1,
+          turnId: "legacy-turn",
+          event: { kind: "identity", sessionId: "original-native", authority: "harness-minted" },
+        }),
+      ).verdict,
+    ).toBe("accepted");
+    expect(
+      f.host.handleFrame(JSON.stringify({ kind: "detach", epoch: 1, reason: "shutdown" })).verdict,
+    ).toBe("accepted");
+    const different = f.host.writeConnection({
+      actionId: crypto.randomUUID(),
+      binding: f.controls.registration,
+      kind: "bound",
+    });
+    expect(different.verdict).toBe("refused");
+    if (different.verdict === "refused") expect(different.issue).toBe("connection-conflict");
+    expect(f.host.state().connection).toBeNull();
+    f.controls.registration = { ...f.controls.registration, nativeSessionId: "original-native" };
+    expect(
+      f.host.writeConnection({
+        actionId: crypto.randomUUID(),
+        binding: f.controls.registration,
+        kind: "bound",
+      }).verdict,
+    ).toBe("accepted");
+    expect(f.host.state().nativeSessions.codex?.sessionId).toBe("original-native");
+  } finally {
+    f.close();
+  }
+});
+
+test("a live historical owner cannot stand in for the owner of the current listener or offer", () => {
+  const f = boundFixture();
+  try {
+    const original = f.controls.registration;
+    f.controls.registration = returningRegistration(original);
+    let originalAlive = false;
+    let currentAlive = true;
+    f.controls.probe = (owner) => (owner.pid === original.owner.pid ? originalAlive : currentAlive);
+    f.acquire();
+    const listener = f.enableFact();
+    expect(f.host.writeConnection(listener).verdict).toBe("accepted");
+    originalAlive = true;
+    currentAlive = false;
+    expect(f.status().state).toBe("not-listening");
+    originalAlive = false;
+    currentAlive = true;
+    expect(
+      f.host.acceptInput({ id: "owned-feedback", text: "Review this", mode: "queue" }).verdict,
+    ).toBe("accepted");
+    const prepared = prepareOffer(f.host, listener.participation.id, "owned-feedback");
+    expect(f.host.writeConnection(prepared).verdict).toBe("accepted");
+    f.controls.lease?.release();
+    originalAlive = true;
+    currentAlive = false;
+    expect(f.status().state).toBe("delivery-uncertain");
+  } finally {
+    f.close();
+  }
+});
+
+test("an unreadable executor lock reports unknown readiness without assuming the session closed", () => {
+  const f = boundFixture();
+  try {
+    f.acquire();
+    expect(f.host.writeConnection(f.enableFact()).verdict).toBe("accepted");
+    expect(
+      observeConnection(f.host.state(), {
+        executorPresent: undefined,
+        now: f.controls.now,
+        ownerPresence: f.controls.probe,
+      }),
+    ).toMatchObject({ reason: "executor-unverified", state: "owner-unknown" });
+    expect(f.host.state().connection?.listenerId).not.toBeNull();
+  } finally {
+    f.close();
+  }
+});
+
+test("listener readiness requires the admitted listener process, not only a live native owner and any held lock", () => {
+  const f = boundFixture();
+  try {
+    f.acquire();
+    const ownProcess = readProcessOwner(process.pid);
+    if (!ownProcess) throw new Error("Cannot verify this test process");
+    const fact = f.enableFact();
+    const forged = f.host.writeConnection({
+      ...fact,
+      participation: { ...fact.participation, executorOwner: f.controls.registration.owner },
+    });
+    expect(forged.verdict).toBe("refused");
+    if (forged.verdict === "refused") expect(forged.issue).toBe("connection-unverified");
+    expect(
+      f.host.writeConnection({
+        ...fact,
+        participation: { ...fact.participation, executorOwner: ownProcess },
+      }).verdict,
+    ).toBe("accepted");
+    expect(f.status().state).toBe("listening");
+    f.controls.probe = (owner) => owner.pid === f.controls.registration.owner.pid;
+    expect(f.status()).toMatchObject({ reason: "listener-process-gone", state: "not-listening" });
+    expect(f.controls.lease?.held()).toBe(true);
+  } finally {
+    f.close();
+  }
+});
+
+test("first binding cannot bypass an unsettled managed attempt after its attachment ends", () => {
+  const f = boundFixture(false);
+  try {
+    f.acquire();
+    expect(
+      f.host.acceptInput(
+        { id: "legacy-work", text: "Finish this", mode: "queue" },
+        { managed: true },
+      ).verdict,
+    ).toBe("accepted");
+    expect(
+      f.host.handleFrame(
+        JSON.stringify(
+          attach({
+            conversationId: "feedback",
+            harness: "codex",
+            profile: "headless-turn",
+            attachmentOrigin: "automatic",
+            capabilities: ["managed-input-v1"],
+            secret: f.host.state().secret,
+          }),
+        ),
+      ).verdict,
+    ).toBe("accepted");
+    expect(
+      f.host.writeExecution({
+        epoch: f.host.state().epoch,
+        kind: "attempt-started",
+        inputId: "legacy-work",
+        attempt: 1,
+        turnId: "legacy-turn",
+        driver: { harness: "codex", model: "test-model", effort: "high", profile: "headless-turn" },
+        native: { kind: "fresh" },
+        context: { digest: "a".repeat(64), from: 0, through: 1 },
+      }).verdict,
+    ).toBe("accepted");
+    expect(
+      f.host.handleFrame(
+        JSON.stringify({ kind: "detach", epoch: f.host.state().epoch, reason: "shutdown" }),
+      ).verdict,
+    ).toBe("accepted");
+    const binding = {
+      actionId: crypto.randomUUID(),
+      binding: f.controls.registration,
+      kind: "bound",
+    };
+    const refusal1 = f.host.writeConnection(binding);
+    expect(refusal1.verdict).toBe("refused");
+    if (refusal1.verdict === "refused") expect(refusal1.issue).toBe("execution-blocked");
+    expect(
+      f.host.writeExecution({
+        kind: "attempt-ended",
+        inputId: "legacy-work",
+        attempt: 1,
+        turnId: "legacy-turn",
+        outcome: {
+          kind: "uncertain",
+          failure: {
+            code: "E-HUB-07",
+            evidence: "process-lost",
+            reason: "The native process outcome is unknown.",
+          },
+        },
+      }).verdict,
+    ).toBe("accepted");
+    const refusal2 = f.host.writeConnection(binding);
+    expect(refusal2.verdict).toBe("refused");
+    if (refusal2.verdict === "refused") expect(refusal2.issue).toBe("execution-blocked");
+    expect(f.host.state().connection).toBeNull();
+  } finally {
+    f.close();
+  }
+});
+
+test("receipt and response controls resolve their action identities atomically for repeated command writers", () => {
+  const f = boundFixture();
+  const writer = openWriter(f.paths.dir, {
+    connectionAuthority: () => f.controls.registration,
+    ownerPresence: (owner) => f.controls.probe(owner),
+  });
+  try {
+    f.acquire();
+    const listener = f.enableFact();
+    expect(f.host.writeConnection(listener).verdict).toBe("accepted");
+    expect(
+      f.host.acceptInput({ id: "command-feedback", mode: "queue", text: "Reply once" }).verdict,
+    ).toBe("accepted");
+    const prepared = prepareOffer(f.host, listener.participation.id, "command-feedback");
+    expect(f.host.writeConnection(prepared).verdict).toBe("accepted");
+    f.controls.lease?.release();
+    const receipt = { kind: "receipt" as const, offerId: prepared.offer.id };
+    expect(f.host.controlConnection(receipt).verdict).toBe("accepted");
+    const seq = f.host.state().seq;
+    expect(writer.controlConnection(receipt).verdict).toBe("accepted");
+    expect(writer.state().seq).toBe(seq);
+    const outcome = {
+      kind: "respond" as const,
+      offerId: prepared.offer.id,
+      outcome: { kind: "answer", text: "Here is the result." },
+    };
+    expect(writer.controlConnection(outcome).verdict).toBe("accepted");
+    const finishedSeq = writer.state().seq;
+    expect(f.host.controlConnection(outcome).verdict).toBe("accepted");
+    expect(f.host.state().seq).toBe(finishedSeq);
+    expect(
+      f.host.transcript().events.filter((entry) => entry.turnId === prepared.offer.turnId),
+    ).toHaveLength(1);
+    const changed = f.host.controlConnection({
+      ...outcome,
+      outcome: { kind: "answer", text: "A different result" },
+    });
+    expect(changed.verdict).toBe("refused");
+    if (changed.verdict === "refused") expect(changed.issue).toBe("connection-conflict");
+  } finally {
+    writer.close();
+    f.close();
+  }
+});
+
+test("native control commands preserve one offer and require current registered ancestry and lifecycle", async () => {
+  const f = boundFixture(false);
+  try {
+    const root = f.controls.registration.workingDirectory;
+    const authority = { callerOwns: () => true, ownerPresence: () => true };
+    const registered = registerNativeSession(root, f.controls.registration, authority);
+    if (!registered.ok) throw new Error(registered.reason);
+    f.controls.registration = registered.registration;
+    expect(
+      f.host.writeConnection({
+        actionId: crypto.randomUUID(),
+        binding: registered.registration,
+        kind: "bound",
+      }).verdict,
+    ).toBe("accepted");
+    f.acquire();
+    const listener = f.enableFact();
+    expect(f.host.writeConnection(listener).verdict).toBe("accepted");
+    expect(
+      f.host.acceptInput({ id: "cli-feedback", mode: "queue", text: "Reply from this session" })
+        .verdict,
+    ).toBe("accepted");
+    const prepared = prepareOffer(f.host, listener.participation.id, "cli-feedback");
+    expect(f.host.writeConnection(prepared).verdict).toBe("accepted");
+    f.controls.lease?.release();
+    const output: { verdict: string; reason?: string }[] = [];
+    const deps = {
+      rootDir: root,
+      nativeAuthority: authority,
+      onOutput: (line: string) => output.push(JSON.parse(line)),
+    };
+    const responsePath = join(root, "response.json");
+    writeFileSync(
+      responsePath,
+      JSON.stringify({ kind: "answer", text: "The session recorded its response." }),
+    );
+    const respond = [
+      "connection",
+      "respond",
+      "feedback",
+      "--offer",
+      prepared.offer.id,
+      "--request",
+      responsePath,
+      "--json",
+    ];
+    expect((await dispatch(respond, deps)).kind).toBe("connection-control");
+    expect(output.at(-1)).toMatchObject({ verdict: "refused", reason: "receipt-required" });
+    const receipt = ["connection", "receipt", "feedback", "--offer", prepared.offer.id, "--json"];
+    await dispatch(receipt, deps);
+    expect(output.at(-1)?.verdict).toBe("accepted");
+    await dispatch(receipt, deps);
+    await dispatch(respond, deps);
+    expect(output.at(-1)?.verdict).toBe("accepted");
+    const seq = viewConversation(f.paths.dir).state.seq;
+    await dispatch(respond, deps);
+    expect(viewConversation(f.paths.dir).state.seq).toBe(seq);
+    expect(
+      viewConversation(f.paths.dir).transcript.events.filter(
+        (entry) => entry.turnId === prepared.offer.turnId,
+      ),
+    ).toHaveLength(1);
+    expect(registerNativeSession(root, f.controls.registration, authority).ok).toBe(true);
+    await dispatch(receipt, deps);
+    expect(output.at(-1)).toMatchObject({ verdict: "refused", reason: "connection-unverified" });
+    expect(conversations(root).list().identities.size).toBe(1);
+  } finally {
+    f.close();
+  }
+});
+
+test("control commands report failed caller verification without appending or claiming publication", async () => {
+  const f = boundFixture();
+  try {
+    const root = f.controls.registration.workingDirectory;
+    const ownerPresence = () => true;
+    expect(
+      registerNativeSession(root, f.controls.registration, {
+        callerOwns: () => true,
+        ownerPresence,
+      }).ok,
+    ).toBe(true);
+    const output: { message: string; verdict: string; reason: string }[] = [];
+    const argv = ["connection", "receipt", "feedback", "--offer", crypto.randomUUID(), "--json"];
+    const nativeAuthority = { callerOwns: (): boolean | undefined => false, ownerPresence };
+    const deps = {
+      rootDir: root,
+      nativeAuthority,
+      onOutput: (line: string) => output.push(JSON.parse(line)),
+    };
+    const seq = f.host.state().seq;
+    await dispatch(argv, deps);
+    expect(output.at(-1)).toMatchObject({ verdict: "refused", reason: "registration-missing" });
+    expect(output.at(-1)?.message.toLowerCase()).not.toContain("artifact published");
+    nativeAuthority.callerOwns = () => {
+      throw new Error("Ancestry inspection unavailable");
+    };
+    await dispatch(argv, deps);
+    expect(output.at(-1)).toMatchObject({ verdict: "refused", reason: "owner-unknown" });
+    expect(viewConversation(f.paths.dir).state.seq).toBe(seq);
+  } finally {
+    f.close();
+  }
+});
+
+test("the cancellation command needs no native authority and remains limited to unsent inputs", async () => {
+  const f = boundFixture();
+  try {
+    expect(f.host.acceptInput({ id: "withdraw", text: "Cancel this", mode: "queue" }).verdict).toBe(
+      "accepted",
+    );
+    expect(f.host.acceptInput({ id: "offered", text: "Keep this", mode: "queue" }).verdict).toBe(
+      "accepted",
+    );
+    f.acquire();
+    const listener = f.enableFact();
+    expect(f.host.writeConnection(listener).verdict).toBe("accepted");
+    const output: { verdict: string; reason: string | null }[] = [];
+    const noNativeProbe = () => {
+      throw new Error("Cancellation must not require native authority");
+    };
+    const deps = {
+      rootDir: f.controls.registration.workingDirectory,
+      nativeAuthority: { callerOwns: noNativeProbe, ownerPresence: noNativeProbe },
+      onOutput: (line: string) => output.push(JSON.parse(line)),
+    };
+    const cancel = ["connection", "cancel-input", "feedback", "--input", "withdraw", "--json"];
+    expect((await dispatch(cancel, deps)).kind).toBe("connection-control");
+    expect(output.at(-1)?.verdict).toBe("accepted");
+    const seq = viewConversation(f.paths.dir).state.seq;
+    await dispatch(cancel, deps);
+    expect(viewConversation(f.paths.dir).state.seq).toBe(seq);
+    expect(
+      viewConversation(f.paths.dir).transcript.inputs.find((entry) => entry.id === "withdraw")
+        ?.status,
+    ).toBe("cancelled");
+    const prepared = prepareOffer(f.host, listener.participation.id, "offered");
+    expect(f.host.writeConnection(prepared).verdict).toBe("accepted");
+    await dispatch(
+      ["connection", "cancel-input", "feedback", "--input", "offered", "--json"],
+      deps,
+    );
+    expect(output.at(-1)).toMatchObject({ verdict: "refused", reason: "input-already-dispatched" });
+    expect(f.controls.lease?.held()).toBe(true);
   } finally {
     f.close();
   }
