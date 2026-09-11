@@ -4,7 +4,7 @@ Research for [Decide how artifact creation connects the originating session](htt
 
 ## Finding
 
-**Observed:** a synchronous Stop hook can wait for external feedback and continue the same native conversation in both Muse's TUI and Codex's TUI. This path does not require an external sender to inject a new message into an idle session. Its user-visible cost is an active turn with a running hook while it waits. The user has been asked whether that behavior is acceptable; it is not yet an adopted connection contract.
+**Observed:** a synchronous Stop hook can wait for external feedback and continue the same native conversation in both Muse's TUI and Codex's TUI. This path does not require an external sender to inject a new message into an idle session. Its user-visible cost is an active turn with a running hook while it waits. The user subsequently accepted that waiting behavior. The connection design uses this path where the native integration supports it.
 
 The tests used a synthetic feedback file as the browser-side stand-in. They did not connect a Lucid record or browser. Muse used its echo provider. Codex used a deterministic response server bound to loopback, with the desktop application's bundled executable running as a terminal CLI. No reviewer model or Anthropic model was invoked.
 
