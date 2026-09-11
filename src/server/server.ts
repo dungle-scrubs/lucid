@@ -771,14 +771,14 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           const dir = dirForRequest(id);
           if (!existsSync(join(dir, "log.ndjson"))) return json({ error: "no-such-record" }, 404);
           const { html, basedOn } = b;
-          return withWriter(dir, id, (host) => {
+          return withWriter(dir, id, async (host) => {
             // The next version in the single ordered list. There is no
             // branching: a save based on a version the agent has since
             // replaced still appends at the end, recording what it was
             // working from. The agent reconciles; lucid does not merge.
             const current = host.artifactHeads().get(artifactId) ?? 0;
             if (current === 0) return json({ error: "no-such-artifact" }, 404);
-            const result = host.writeArtifact({
+            const result = await host.writeArtifact({
               artifactId,
               version: current + 1,
               author: "human",
@@ -878,7 +878,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           const dir = dirForRequest(id);
           if (!existsSync(join(dir, "log.ndjson"))) return json({ error: "no-such-record" }, 404);
           const { version } = b;
-          return withWriter(dir, id, (host) => {
+          return withWriter(dir, id, async (host) => {
             const current = host.artifactHeads().get(artifactId) ?? 0;
             if (current === 0) return json({ error: "unknown-artifact" }, 404);
             // Restoring what is already current would append a copy that
@@ -886,7 +886,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             if (version === current) return json({ error: "restore-of-current" }, 409);
             const from = host.readArtifact(artifactId, version);
             if (from === null) return json({ error: "version-unreadable" }, 404);
-            const result = host.writeArtifact({
+            const result = await host.writeArtifact({
               artifactId,
               version: current + 1,
               author: "human",

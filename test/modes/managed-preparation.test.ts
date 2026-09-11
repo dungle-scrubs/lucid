@@ -18,7 +18,7 @@ const driver = {
   effort: "high",
   profile: "headless-turn",
 } as const;
-function setup(profile: "headless-turn" | "headless-session" = "headless-turn") {
+async function setup(profile: "headless-turn" | "headless-session" = "headless-turn") {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "lucid-managed-preparation-")));
   const record = createConversationRecord(root, "managed", { workingDirectory: root });
   let lease = true;
@@ -46,7 +46,7 @@ function setup(profile: "headless-turn" | "headless-session" = "headless-turn") 
       attachmentOrigin: "automatic",
     }),
   );
-  host.writeArtifact({
+  await host.writeArtifact({
     artifactId: "doc",
     version: 1,
     author: "user",
@@ -116,7 +116,7 @@ const input = {
 } as const;
 
 test("fresh work trusts HCN operation results despite differing version metadata", async () => {
-  const f = setup();
+  const f = await setup();
   const runner: HarnessRunner = {
     ...f.runner,
     inspect: async () => ({
@@ -150,7 +150,7 @@ test("fresh work trusts HCN operation results despite differing version metadata
 });
 
 test("managed preparation records the counted context before task dispatch and owns its offered copy", async () => {
-  const f = setup();
+  const f = await setup();
   const preparation = createManagedPreparation({
     host: f.host,
     offerContext: f.offerContext,
@@ -188,7 +188,7 @@ test("managed preparation records the counted context before task dispatch and o
 });
 
 test("a settings change during accounting holds the original input without consuming an attempt", async () => {
-  const f = setup();
+  const f = await setup();
   const count = f.runner.countContext;
   const runner = {
     ...f.runner,
@@ -222,7 +222,7 @@ test("a settings change during accounting holds the original input without consu
 });
 
 test("unknown context accounting persists an actionable hold without dispatch", async () => {
-  const f = setup();
+  const f = await setup();
   const runner: HarnessRunner = {
     ...f.runner,
     countContext: async () => ({ status: "unavailable", reason: "unsupported-adapter" }),
@@ -250,7 +250,7 @@ test("unknown context accounting persists an actionable hold without dispatch", 
 });
 
 test("cancellation during accounting consumes no attempt and removes the offered copy", async () => {
-  const f = setup();
+  const f = await setup();
   const abort = new AbortController();
   const count = f.runner.countContext;
   const runner: HarnessRunner = {
@@ -279,7 +279,7 @@ test("cancellation during accounting consumes no attempt and removes the offered
 });
 
 test("an unverified native identity cannot become a fresh fallback", async () => {
-  const f = setup();
+  const f = await setup();
   const preparation = createManagedPreparation({
     host: f.host,
     offerContext: f.offerContext,
@@ -308,7 +308,7 @@ test("an unverified native identity cannot become a fresh fallback", async () =>
 });
 
 test("an unreadable recorded event becomes a context hold before any accounting", async () => {
-  const f = setup();
+  const f = await setup();
   const preparation = createManagedPreparation({
     host: f.host,
     offerContext: f.offerContext,
@@ -345,7 +345,7 @@ test("an unreadable recorded event becomes a context hold before any accounting"
 
 test("a verified native session is retained, and explicit fresh recovery can replace it", async () => {
   for (const fresh of [false, true]) {
-    const f = setup();
+    const f = await setup();
     const preparation = createManagedPreparation({
       host: f.host,
       runner: f.runner,
@@ -403,7 +403,7 @@ test("a verified native session is retained, and explicit fresh recovery can rep
 });
 
 test("cleanup failure retains each owned copy for a later cleanup attempt", async () => {
-  const f = setup();
+  const f = await setup();
   const runner: HarnessRunner = {
     ...f.runner,
     countContext: async () => ({ status: "unavailable", reason: "transport" }),
@@ -452,7 +452,7 @@ test("cleanup failure retains each owned copy for a later cleanup attempt", asyn
 });
 
 test("summary provenance survives preparation while the full source remains available", async () => {
-  const f = setup();
+  const f = await setup();
   const counted = f.runner.countContext;
   const runner: HarnessRunner = {
     ...f.runner,
@@ -521,7 +521,7 @@ test("summary provenance survives preparation while the full source remains avai
 });
 
 test("resume skips unsupported historical events already covered by that native session", async () => {
-  const f = setup();
+  const f = await setup();
   const preparation = createManagedPreparation({
     host: f.host,
     runner: f.runner,
@@ -569,7 +569,7 @@ test("resume skips unsupported historical events already covered by that native 
 });
 
 test("closing preparation cancels its pending accounting and removes the copy", async () => {
-  const f = setup();
+  const f = await setup();
   let counting!: () => void;
   const entered = new Promise<void>((resolve) => {
     counting = resolve;
@@ -610,7 +610,7 @@ test("closing preparation cancels its pending accounting and removes the copy", 
 });
 
 test("failed harness inspection is a settings hold, not a lost task", async () => {
-  const f = setup();
+  const f = await setup();
   const runner: HarnessRunner = {
     ...f.runner,
     inspect: async () => {
@@ -641,7 +641,7 @@ test("failed harness inspection is a settings hold, not a lost task", async () =
 });
 
 test("a lost executor lease surfaces the refused hold write", async () => {
-  const f = setup();
+  const f = await setup();
   const runner: HarnessRunner = {
     ...f.runner,
     countContext: async () => {
@@ -669,7 +669,7 @@ test("a lost executor lease surfaces the refused hold write", async () => {
 });
 
 test("duplicate turn reservations cannot replace an active offered copy", async () => {
-  const f = setup();
+  const f = await setup();
   let counting!: () => void;
   let continueCount!: () => void;
   const entered = new Promise<void>((resolve) => {
@@ -718,7 +718,7 @@ test("duplicate turn reservations cannot replace an active offered copy", async 
 });
 
 test("cancellation during the attempt append records that dispatch was not called", async () => {
-  const f = setup();
+  const f = await setup();
   let preparation: ReturnType<typeof createManagedPreparation>;
   const host = {
     ...f.host,
@@ -752,10 +752,10 @@ test("cancellation during the attempt append records that dispatch was not calle
 });
 
 test("managed comparison suppression survives automatic attachment and releases only on newer content or a new explicit intent", async () => {
-  const f = setup();
+  const f = await setup();
   const { encodeAnnotationBatch } = await import("../../src/protocol/annotations.js");
   const { readContentSource } = await import("../../src/protocol/content-comparison.js");
-  f.host.writeArtifact({
+  await f.host.writeArtifact({
     artifactId: "doc",
     version: 2,
     author: "human",
@@ -810,7 +810,7 @@ test("managed comparison suppression survives automatic attachment and releases 
     preparation = createManagedPreparation({ host, runner: f.runner, driver, cwd: f.root });
     expect((await preparation.prepare(request)).kind).toBe("held");
     expect(f.counts).toHaveLength(0);
-    f.host.writeArtifact({
+    await f.host.writeArtifact({
       artifactId: "doc",
       version: 3,
       author: "human",
@@ -834,7 +834,7 @@ test("managed comparison suppression survives automatic attachment and releases 
 test.each(["headless-turn", "headless-session"] as const)(
   "native management skips accounting only in the declared mode: %s",
   async (profile) => {
-    const f = setup(profile);
+    const f = await setup(profile);
     const selected = { ...driver, profile };
     const runner: HarnessRunner = {
       ...f.runner,
@@ -888,7 +888,7 @@ test.each(["headless-turn", "headless-session"] as const)(
 test.each(["settings-changed", "cancelled"] as const)(
   "native management retains the dispatch fence: %s",
   async (condition) => {
-    const f = setup();
+    const f = await setup();
     const abort = new AbortController();
     const runner: HarnessRunner = {
       ...f.runner,

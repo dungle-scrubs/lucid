@@ -1,6 +1,7 @@
 import * as React from "react";
 import type { Passage, WordPart } from "../../protocol/content-comparison.js";
 import { compareContent } from "../../protocol/content-comparison.js";
+import { ARTIFACT_SANDBOX } from "./artifact-links.js";
 import type { ComparisonDraft } from "./comparison-draft.js";
 import { draftForPassage, draftIsOnPassage } from "./comparison-draft.js";
 import { FRAME_MESSAGE_SOURCE, instrumentArtifact } from "./instrument.js";
@@ -405,7 +406,7 @@ function InspectionFrame(props: {
     <iframe
       title={`${artifactId} saved v${inspection.version}`}
       style={{ colorScheme }}
-      sandbox="allow-scripts"
+      sandbox={ARTIFACT_SANDBOX}
       onLoad={(event) =>
         event.currentTarget.contentWindow?.postMessage(
           { source: FRAME_MESSAGE_SOURCE, kind: "mode", mode: "annotate", readOnly: true },

@@ -270,7 +270,7 @@ describe("repeat-safe browser admission", () => {
           ),
         ).toMatchObject({ verdict: "accepted" });
       }
-      host.writeArtifact({
+      await host.writeArtifact({
         artifactId: "doc",
         author: "human",
         bytes: "newer",

@@ -39,7 +39,7 @@ const restore = (version: number, artifact = ART) =>
 const read = (version: number) => api(`/api/conversations/${CONV}/artifacts/${ART}/${version}`);
 
 /** Three versions, the middle one carrying control values. */
-const seed = (): void => {
+const seed = async (): Promise<void> => {
   const host = createConversationHost(join(root, CONV), {
     now: () => Date.now(),
     presence: () => undefined,
@@ -49,7 +49,7 @@ const seed = (): void => {
   });
   try {
     for (const v of [1, 2, 3]) {
-      host.writeArtifact({
+      await host.writeArtifact({
         artifactId: ART,
         version: v,
         author: v === 2 ? "human" : "agent",
@@ -68,7 +68,7 @@ beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), "lucid-restore-"));
   createConversationRecord(root, CONV);
   server = await startServe({ rootDir: root, port: 0 });
-  seed();
+  await seed();
 });
 
 afterEach(async () => {

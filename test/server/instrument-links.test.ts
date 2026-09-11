@@ -9,7 +9,16 @@ const document = instrumentArtifact(
 );
 
 describe("links remain links while annotating", () => {
-  test.each(["link", "label", "hover", "selection", "controls"])("%s", (scenario) => {
+  test.each([
+    "link",
+    "label",
+    "hover",
+    "selection",
+    "controls",
+    "navigation",
+    "dynamic",
+    "snapshot",
+  ])("%s", (scenario) => {
     // jsdom's script VM requires Node. Bun rejects the Window proxy as a
     // global prototype, so run this DOM oracle in its supported runtime.
     const result = spawnSync(

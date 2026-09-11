@@ -6,6 +6,7 @@ import { JSDOM } from "jsdom";
 // browser check covers native event trust, default navigation, and text drag.
 const listeners = new Map();
 const dom = new JSDOM(readFileSync(0, "utf8"), {
+  url: "http://127.0.0.1:17454/c/example",
   beforeParse(window) {
     const add = window.document.addEventListener.bind(window.document);
     window.document.addEventListener = (type, listener, options) => {
@@ -51,6 +52,59 @@ try {
     }),
   );
   switch (process.argv[2]) {
+    case "navigation": {
+      assert.equal(element("link").href, "about:srcdoc#destination");
+      assert.equal(element("link").target, "_self");
+      const external = dom.window.document.createElement("a");
+      external.href = "https://example.com/source";
+      const area = dom.window.document.createElement("area");
+      area.id = "image-map-link";
+      area.href = "https://example.com/map";
+      dom.window.document.body.append(area);
+      assert.equal(fire("click", "image-map-link").defaultPrevented, false);
+      assert.equal(area.target, "_blank");
+      external.target = "_self";
+      dom.window.document.body.append(external);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(external.target, "_blank");
+      assert.ok(external.relList.contains("noopener"));
+      assert.ok(external.relList.contains("noreferrer"));
+      break;
+    }
+    case "dynamic": {
+      const link = element("link");
+      link.href = "https://example.com/changed";
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(link.target, "_blank");
+      link.setAttribute("href", "#destination");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(link.href, "about:srcdoc#destination");
+      assert.equal(link.target, "_self");
+      break;
+    }
+    case "snapshot": {
+      const snapshot = new Promise((resolve) => {
+        dom.window.addEventListener("message", (event) => {
+          if (event.data.kind === "snapshot-taken") resolve(event.data);
+        });
+      });
+      dom.window.dispatchEvent(
+        new dom.window.MessageEvent("message", {
+          data: { source: "lucid-artifact", kind: "snapshot" },
+          source: dom.window,
+        }),
+      );
+      const saved = await snapshot;
+      const copy = new JSDOM(saved.html);
+      assert.equal(
+        copy.window.document.getElementById("link").getAttribute("href"),
+        "#destination",
+      );
+      assert.equal(copy.window.document.getElementById("link").hasAttribute("target"), false);
+      assert.equal(saved.html.includes("about:srcdoc"), false);
+      copy.window.close();
+      break;
+    }
     case "link":
     case "label":
       for (const modifiers of [{}, { metaKey: true }, { ctrlKey: true }]) {

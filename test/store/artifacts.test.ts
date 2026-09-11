@@ -14,7 +14,7 @@ const freshRoot = (): string => mkdtempSync(join(tmpdir(), "lucid-artifact-"));
 const recordDir = (root: string, id: string): string => join(root, id);
 
 describe("artifact versions (RFC-06 storage)", () => {
-  test("an artifact version is its own log entry, carrying id, version, author, contentType, hash, bytes", () => {
+  test("an artifact version is its own log entry, carrying id, version, author, contentType, hash, bytes", async () => {
     const root = freshRoot();
     createConversationRecord(root, "conv-1");
     const host = openConversation(recordDir(root, "conv-1"), {
@@ -24,7 +24,7 @@ describe("artifact versions (RFC-06 storage)", () => {
       onEffect: () => {},
       onRecord: () => {},
     });
-    const res = host.writeArtifact({
+    const res = await host.writeArtifact({
       artifactId: "doc-1",
       version: 1,
       author: "agent",
@@ -53,7 +53,7 @@ describe("artifact versions (RFC-06 storage)", () => {
     host.close();
   });
 
-  test("folding a record does not pull artifact bytes into state or transcript", () => {
+  test("folding a record does not pull artifact bytes into state or transcript", async () => {
     const root = freshRoot();
     createConversationRecord(root, "conv-1");
     const host = openConversation(recordDir(root, "conv-1"), {
@@ -64,7 +64,7 @@ describe("artifact versions (RFC-06 storage)", () => {
       onRecord: () => {},
     });
     const before = host.state();
-    host.writeArtifact({
+    await host.writeArtifact({
       artifactId: "doc-1",
       version: 1,
       author: "agent",
@@ -83,7 +83,7 @@ describe("artifact versions (RFC-06 storage)", () => {
     host.close();
   });
 
-  test("reading a version is a seek, not a fold — index built during fold at open", () => {
+  test("reading a version is a seek, not a fold — index built during fold at open", async () => {
     const root = freshRoot();
     createConversationRecord(root, "conv-1");
     const host = openConversation(recordDir(root, "conv-1"), {
@@ -93,21 +93,21 @@ describe("artifact versions (RFC-06 storage)", () => {
       onEffect: () => {},
       onRecord: () => {},
     });
-    host.writeArtifact({
+    await host.writeArtifact({
       artifactId: "doc-1",
       version: 1,
       author: "agent",
       contentType: "text/html",
       bytes: "v1",
     });
-    host.writeArtifact({
+    await host.writeArtifact({
       artifactId: "doc-1",
       version: 2,
       author: "agent",
       contentType: "text/html",
       bytes: "v2",
     });
-    host.writeArtifact({
+    await host.writeArtifact({
       artifactId: "doc-1",
       version: 3,
       author: "human",
@@ -126,7 +126,7 @@ describe("artifact versions (RFC-06 storage)", () => {
     host.close();
   });
 
-  test("reopening a record returns the same versions, unchanged", () => {
+  test("reopening a record returns the same versions, unchanged", async () => {
     const root = freshRoot();
     createConversationRecord(root, "conv-1");
     const host = openConversation(recordDir(root, "conv-1"), {
@@ -136,21 +136,21 @@ describe("artifact versions (RFC-06 storage)", () => {
       onEffect: () => {},
       onRecord: () => {},
     });
-    host.writeArtifact({
+    await host.writeArtifact({
       artifactId: "doc-1",
       version: 1,
       author: "agent",
       contentType: "text/html",
       bytes: "first",
     });
-    host.writeArtifact({
+    await host.writeArtifact({
       artifactId: "doc-1",
       version: 2,
       author: "agent",
       contentType: "text/html",
       bytes: "second",
     });
-    host.writeArtifact({
+    await host.writeArtifact({
       artifactId: "doc-1",
       version: 3,
       author: "human",
@@ -179,7 +179,7 @@ describe("artifact versions (RFC-06 storage)", () => {
     host2.close();
   });
 
-  test("nothing is ever rewritten — every version is a new entry, duplicate version keeps first", () => {
+  test("nothing is ever rewritten — every version is a new entry, duplicate version keeps first", async () => {
     const root = freshRoot();
     createConversationRecord(root, "conv-1");
     const host = openConversation(recordDir(root, "conv-1"), {
@@ -189,7 +189,7 @@ describe("artifact versions (RFC-06 storage)", () => {
       onEffect: () => {},
       onRecord: () => {},
     });
-    host.writeArtifact({
+    await host.writeArtifact({
       artifactId: "doc-1",
       version: 1,
       author: "agent",
@@ -198,7 +198,7 @@ describe("artifact versions (RFC-06 storage)", () => {
     });
     const rawBefore = readFileSync(join(root, "conv-1", "log.ndjson"), "utf8");
     // Attempt to write same (id, version) with different bytes — should keep first
-    host.writeArtifact({
+    await host.writeArtifact({
       artifactId: "doc-1",
       version: 1,
       author: "agent",
@@ -210,7 +210,7 @@ describe("artifact versions (RFC-06 storage)", () => {
     expect(rawAfter).toBe(rawBefore);
     expect(host.readArtifact("doc-1", 1)?.bytes).toBe("original");
     // New version appends
-    host.writeArtifact({
+    await host.writeArtifact({
       artifactId: "doc-1",
       version: 2,
       author: "agent",
@@ -222,7 +222,7 @@ describe("artifact versions (RFC-06 storage)", () => {
     host.close();
   });
 
-  test("a version over the size limit is refused, and the record still opens", () => {
+  test("a version over the size limit is refused, and the record still opens", async () => {
     const root = freshRoot();
     createConversationRecord(root, "conv-1");
     const host = openConversation(recordDir(root, "conv-1"), {
@@ -233,7 +233,7 @@ describe("artifact versions (RFC-06 storage)", () => {
       onRecord: () => {},
     });
     const big = "x".repeat(1_000_001);
-    const res = host.writeArtifact({
+    const res = await host.writeArtifact({
       artifactId: "doc-1",
       version: 1,
       author: "agent",
@@ -359,7 +359,7 @@ describe("artifact versions (RFC-06 storage)", () => {
     host3.close();
   });
 
-  test("write three versions, close, reopen, read version two (ticket proof)", () => {
+  test("write three versions, close, reopen, read version two (ticket proof)", async () => {
     const root = freshRoot();
     createConversationRecord(root, "conv-proof");
     const host = openConversation(recordDir(root, "conv-proof"), {
@@ -369,21 +369,21 @@ describe("artifact versions (RFC-06 storage)", () => {
       onEffect: () => {},
       onRecord: () => {},
     });
-    host.writeArtifact({
+    await host.writeArtifact({
       artifactId: "proof-doc",
       version: 1,
       author: "agent",
       contentType: "text/html",
       bytes: "<p>one</p>",
     });
-    host.writeArtifact({
+    await host.writeArtifact({
       artifactId: "proof-doc",
       version: 2,
       author: "agent",
       contentType: "text/html",
       bytes: "<p>two</p>",
     });
-    host.writeArtifact({
+    await host.writeArtifact({
       artifactId: "proof-doc",
       version: 3,
       author: "human",
@@ -407,7 +407,7 @@ describe("artifact versions (RFC-06 storage)", () => {
     host2.close();
   });
 
-  test("a version that already exists is idempotent for the same bytes and refused for different ones", () => {
+  test("a version that already exists is idempotent for the same bytes and refused for different ones", async () => {
     // The first cut returned the existing version with verdict "accepted"
     // whatever the caller passed, which discards their content and reports
     // success. If lucid ever computes the next version wrongly, that loses
@@ -421,8 +421,8 @@ describe("artifact versions (RFC-06 storage)", () => {
       onEffect: () => {},
       onRecord: () => {},
     });
-    const write = (version: number, bytes: string) =>
-      host.writeArtifact({
+    const write = async (version: number, bytes: string) =>
+      await host.writeArtifact({
         artifactId: "a1",
         version,
         author: "agent",
@@ -430,22 +430,22 @@ describe("artifact versions (RFC-06 storage)", () => {
         bytes,
       });
 
-    expect(write(1, "<p>one</p>").verdict).toBe("accepted");
+    expect((await write(1, "<p>one</p>")).verdict).toBe("accepted");
 
     // Same bytes again: accepted, so a retry after a crash between the write
     // and its acknowledgement does not force a new version number.
-    const again = write(1, "<p>one</p>");
+    const again = await write(1, "<p>one</p>");
     expect(again.verdict).toBe("accepted");
 
     // Different bytes: refused, and the stored version is untouched.
-    const clash = write(1, "<p>something else</p>");
+    const clash = await write(1, "<p>something else</p>");
     expect(clash.verdict).toBe("refused");
     if (clash.verdict === "refused") expect(clash.issue).toBe("artifact-version-exists");
     expect(host.readArtifact("a1", 1)?.bytes).toBe("<p>one</p>");
   });
 });
 
-test("artifact heads and headers retain version placement across reopening", () => {
+test("artifact heads and headers retain version placement across reopening", async () => {
   const root = freshRoot();
   createConversationRecord(root, "headers");
   const open = () =>
@@ -457,7 +457,7 @@ test("artifact heads and headers retain version placement across reopening", () 
       onRecord: () => {},
     });
   const host = open();
-  host.writeArtifact({
+  await host.writeArtifact({
     artifactId: "doc",
     version: 1,
     author: "agent",
@@ -466,7 +466,7 @@ test("artifact heads and headers retain version placement across reopening", () 
   });
   host.enqueueInput({ id: "input", text: "change", mode: "queue" });
   const afterSeq = host.state().seq;
-  host.writeArtifact({
+  await host.writeArtifact({
     artifactId: "doc",
     version: 2,
     author: "human",
@@ -484,12 +484,12 @@ test("artifact heads and headers retain version placement across reopening", () 
   reopened.close();
 });
 
-test("artifact writes use the host clock", () => {
+test("artifact writes use the host clock", async () => {
   const root = freshRoot();
   createConversationRecord(root, "clock");
   const host = openWriter(join(root, "clock"), { now: () => 1234 });
   try {
-    host.writeArtifact({
+    await host.writeArtifact({
       artifactId: "doc",
       version: 1,
       author: "agent",
@@ -515,7 +515,7 @@ test("indexed artifact reads are lock-free; a stale index reports its fallback t
     onRecord: () => {},
     onLockEvent: (e) => lockEvents.push(e),
   });
-  host.writeArtifact({
+  await host.writeArtifact({
     artifactId: "doc",
     version: 1,
     author: "agent",
@@ -612,19 +612,19 @@ test("headers preserve the first accepted version and exclude oversized versions
   expect(folded.artifactVersions.get("doc")?.has(2)).toBe(false);
 });
 
-test("the catalog builds from fold headers without reading version lines again", () => {
+test("the catalog builds from fold headers without reading version lines again", async () => {
   const root = freshRoot();
   createConversationRecord(root, "catalog-headers");
   const dir = join(root, "catalog-headers");
   const host = openWriter(dir);
-  host.writeArtifact({
+  await host.writeArtifact({
     artifactId: "doc",
     version: 1,
     author: "agent",
     contentType: "text/html",
     bytes: "one",
   });
-  host.writeArtifact({
+  await host.writeArtifact({
     artifactId: "doc",
     version: 2,
     author: "human",

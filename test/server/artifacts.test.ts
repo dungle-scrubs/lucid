@@ -32,7 +32,7 @@ const api = (path: string): Promise<Response> =>
 
 /** Write a version the way the emission path does, then close — the server
  * is a separate reader and must find it on disk, not in anyone's memory. */
-const writeVersion = (version: number, bytes: string): void => {
+const writeVersion = async (version: number, bytes: string): Promise<void> => {
   const host = createConversationHost(join(root, CONV), {
     now: () => Date.now(),
     presence: () => undefined,
@@ -41,7 +41,7 @@ const writeVersion = (version: number, bytes: string): void => {
     onRecord: () => {},
   });
   try {
-    const r = host.writeArtifact({
+    const r = await host.writeArtifact({
       artifactId: "doc-1",
       version,
       author: "agent",
@@ -73,8 +73,8 @@ describe("documents travel on their own channel", () => {
   });
 
   test("the catalog names versions and carries no document bytes", async () => {
-    writeVersion(1, DOC);
-    writeVersion(2, "<h1>revised</h1>");
+    await writeVersion(1, DOC);
+    await writeVersion(2, "<h1>revised</h1>");
     const body = await (await api(`/api/conversations/${CONV}/artifacts`)).text();
     expect(body).not.toContain("a document");
     expect(body).not.toContain("revised");
@@ -88,8 +88,8 @@ describe("documents travel on their own channel", () => {
   });
 
   test("the conversation endpoint never carries a document, however many exist", async () => {
-    writeVersion(1, DOC);
-    writeVersion(2, "<h1>revised</h1>");
+    await writeVersion(1, DOC);
+    await writeVersion(2, "<h1>revised</h1>");
     const body = await (await api(`/api/conversations/${CONV}`)).text();
     expect(body).not.toContain("a document");
     expect(body).not.toContain("revised");
@@ -98,7 +98,7 @@ describe("documents travel on their own channel", () => {
 
 describe("one version per request, read by seeking", () => {
   test("a version comes back with its bytes and its content type", async () => {
-    writeVersion(1, DOC);
+    await writeVersion(1, DOC);
     const res = await api(`/api/conversations/${CONV}/artifacts/doc-1/1`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
@@ -116,16 +116,16 @@ describe("one version per request, read by seeking", () => {
   });
 
   test("one request brings back one version, never the set", async () => {
-    writeVersion(1, DOC);
-    writeVersion(2, "<h1>revised</h1>");
+    await writeVersion(1, DOC);
+    await writeVersion(2, "<h1>revised</h1>");
     const body = await (await api(`/api/conversations/${CONV}/artifacts/doc-1/2`)).text();
     expect(body).toContain("revised");
     expect(body).not.toContain("a document");
   });
 
   test("an older version is still readable after a newer one lands", async () => {
-    writeVersion(1, DOC);
-    writeVersion(2, "<h1>revised</h1>");
+    await writeVersion(1, DOC);
+    await writeVersion(2, "<h1>revised</h1>");
     const first = (await (await api(`/api/conversations/${CONV}/artifacts/doc-1/1`)).json()) as {
       bytes: string;
     };
@@ -133,7 +133,7 @@ describe("one version per request, read by seeking", () => {
   });
 
   test("a version that was never written is not found", async () => {
-    writeVersion(1, DOC);
+    await writeVersion(1, DOC);
     expect((await api(`/api/conversations/${CONV}/artifacts/doc-1/9`)).status).toBe(404);
     expect((await api(`/api/conversations/${CONV}/artifacts/nope/1`)).status).toBe(404);
   });
@@ -143,7 +143,7 @@ describe("one version per request, read by seeking", () => {
   });
 
   test("the document channel needs the token like everything else", async () => {
-    writeVersion(1, DOC);
+    await writeVersion(1, DOC);
     const noToken = await fetch(`${server.url}/api/conversations/${CONV}/artifacts`);
     expect(noToken.status).toBe(401);
     const foreign = await fetch(`${server.url}/api/conversations/${CONV}/artifacts/doc-1/1`, {
@@ -208,8 +208,8 @@ describe("marks live on the version they were made against", () => {
     (notes[key] ?? []).flatMap((n) => n.spots.map((sp) => sp.id));
 
   test("a note is reported against its own version and no other", async () => {
-    writeVersion(1, DOC);
-    writeVersion(2, "<h1>revised</h1>");
+    await writeVersion(1, DOC);
+    await writeVersion(2, "<h1>revised</h1>");
     annotate(1, ["e1", "e3"]);
     annotate(2, ["e7"]);
     const { notes } = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
@@ -220,8 +220,8 @@ describe("marks live on the version they were made against", () => {
   });
 
   test("nothing is re-anchored by the server: a version with no notes has none", async () => {
-    writeVersion(1, DOC);
-    writeVersion(2, "<h1>revised</h1>");
+    await writeVersion(1, DOC);
+    await writeVersion(2, "<h1>revised</h1>");
     annotate(1, ["e1"]);
     const { notes } = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
       notes: Record<string, unknown[]>;
@@ -231,7 +231,7 @@ describe("marks live on the version they were made against", () => {
   });
 
   test("every spot of a multi-spot note is carried", async () => {
-    writeVersion(1, DOC);
+    await writeVersion(1, DOC);
     annotate(1, ["e2", "e4", "e6"]);
     const { notes } = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
       notes: Record<string, { spots: { id: string }[] }[]>;
@@ -240,7 +240,7 @@ describe("marks live on the version they were made against", () => {
   });
 
   test("an ordinary message is not mistaken for a batch", async () => {
-    writeVersion(1, DOC);
+    await writeVersion(1, DOC);
     sendInput(CONV, { rootDir: root, text: "just something I typed" });
     const { notes } = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
       notes: Record<string, unknown[]>;
@@ -249,7 +249,7 @@ describe("marks live on the version they were made against", () => {
   });
 
   test("what a note said and pointed at survives the round trip", async () => {
-    writeVersion(1, DOC);
+    await writeVersion(1, DOC);
     sendInput(CONV, {
       rootDir: root,
       text: encodeAnnotationBatch({
@@ -289,9 +289,9 @@ describe("marks live on the version they were made against", () => {
   });
 
   test("every version stays readable, which is what makes a mark honest", async () => {
-    writeVersion(1, DOC);
-    writeVersion(2, "<h1>revised</h1>");
-    writeVersion(3, "<h1>revised again</h1>");
+    await writeVersion(1, DOC);
+    await writeVersion(2, "<h1>revised</h1>");
+    await writeVersion(3, "<h1>revised again</h1>");
     annotate(1, ["e1"]);
     for (const [v, want] of [
       [1, DOC],
@@ -317,7 +317,7 @@ describe("a save is a version, not an input", () => {
     });
 
   test("it produces a new version authored by the person, not the agent", async () => {
-    writeVersion(1, DOC);
+    await writeVersion(1, DOC);
     const res = await saveIt({ html: "<h1>mine now</h1>", basedOn: 1, values: {} });
     expect(res.status).toBe(200);
     expect(((await res.json()) as { version: number }).version).toBe(2);
@@ -333,7 +333,7 @@ describe("a save is a version, not an input", () => {
   });
 
   test("it starts no turn and is not an input", async () => {
-    writeVersion(1, DOC);
+    await writeVersion(1, DOC);
     const before = readFileSync(join(root, CONV, "log.ndjson"), "utf8");
     await saveIt({ html: "<h1>mine</h1>", basedOn: 1, values: {} });
     const after = readFileSync(join(root, CONV, "log.ndjson"), "utf8");
@@ -347,7 +347,7 @@ describe("a save is a version, not an input", () => {
   });
 
   test("the values of the controls travel beside the document", async () => {
-    writeVersion(1, DOC);
+    await writeVersion(1, DOC);
     await saveIt({
       html: "<h1>d</h1>",
       basedOn: 1,
@@ -362,8 +362,8 @@ describe("a save is a version, not an input", () => {
   });
 
   test("a save based on a version since replaced is accepted, and says so", async () => {
-    writeVersion(1, DOC);
-    writeVersion(2, "<h1>the agent moved on</h1>");
+    await writeVersion(1, DOC);
+    await writeVersion(2, "<h1>the agent moved on</h1>");
     const res = await saveIt({ html: "<h1>from v1</h1>", basedOn: 1, values: {} });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { version: number; supersededSince: boolean };
@@ -385,7 +385,7 @@ describe("a save is a version, not an input", () => {
   });
 
   test("a save too large to store is refused, and nothing is written", async () => {
-    writeVersion(1, DOC);
+    await writeVersion(1, DOC);
     const before = readFileSync(join(root, CONV, "log.ndjson"), "utf8");
     const res = await saveIt({ html: "x".repeat(1_000_001), basedOn: 1, values: {} });
     expect(res.status).toBe(413);
@@ -393,7 +393,7 @@ describe("a save is a version, not an input", () => {
   });
 
   test("a save needs a document and the version it was working from", async () => {
-    writeVersion(1, DOC);
+    await writeVersion(1, DOC);
     expect((await saveIt({ basedOn: 1 })).status).toBe(400);
     expect((await saveIt({ html: "<p>x</p>" })).status).toBe(400);
     expect((await saveIt({ html: "   ", basedOn: 1 })).status).toBe(400);
@@ -409,7 +409,7 @@ describe("a save is a version, not an input", () => {
   });
 
   test("saving needs the token, like everything else", async () => {
-    writeVersion(1, DOC);
+    await writeVersion(1, DOC);
     const res = await fetch(`${server.url}/api/conversations/${CONV}/artifacts/doc-1/save`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -419,7 +419,7 @@ describe("a save is a version, not an input", () => {
   });
 
   test("the catalog says who authored each version, without carrying one", async () => {
-    writeVersion(1, DOC);
+    await writeVersion(1, DOC);
     await saveIt({ html: "<h1>mine</h1>", basedOn: 1, values: {} });
     const body = await (await api(`/api/conversations/${CONV}/artifacts`)).text();
     expect(body).not.toContain("mine");
@@ -432,7 +432,7 @@ describe("a save is a version, not an input", () => {
 });
 
 test("save reports a busy record while version reads stay available", async () => {
-  writeVersion(1, DOC);
+  await writeVersion(1, DOC);
   const lock = new Flock(join(root, CONV, "log.ndjson.lock"), CONV).acquire();
   try {
     const version = await api(`/api/conversations/${CONV}/artifacts/doc-1/1`);
@@ -467,8 +467,8 @@ for (const route of ["save", "meta", "restore"] as const) {
     test.each(["lock-timeout", "corrupt-log", "fold-refused"] as const)(
       `${route} maps %s at ${boundary} and closes a constructed writer`,
       async (code) => {
-        writeVersion(1, DOC);
-        writeVersion(2, "second");
+        await writeVersion(1, DOC);
+        await writeVersion(2, "second");
         let closes = 0;
         const fail = (): never => {
           throw code === "lock-timeout"

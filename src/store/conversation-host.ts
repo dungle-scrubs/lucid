@@ -1,3 +1,4 @@
+import { ARTIFACT_BYTES_MAX } from "../protocol/frames.js";
 import { completeLegacyPreference, type DriverChoice } from "./driver-preference.js";
 /**
  * ConversationHost — the deep module that owns the durable store's
@@ -37,7 +38,11 @@ import { completeLegacyPreference, type DriverChoice } from "./driver-preference
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import type { WebLinkProbe } from "../links/check-web-link.js";
+import { validateArtifactLinks } from "../links/validate-artifact-links.js";
 import { ownerPresence, terminalPresence } from "../process-owner.js";
+import type { ArtifactLinkRefusal } from "../protocol/artifact-links.js";
+import { linkRefusal } from "../protocol/artifact-links.js";
 import {
   type ContextFact,
   type ContextOfferRequest,
@@ -107,6 +112,7 @@ export type {
 } from "./log.js";
 
 export interface HostDeps {
+  readonly probeArtifactLink?: WebLinkProbe;
   readonly ownerPresence?: (
     owner: import("../protocol/process-owner.js").ProcessOwner,
   ) => boolean | undefined;
@@ -286,9 +292,12 @@ export interface ConversationHost {
     readonly bytes: string;
     readonly basedOn?: number;
     readonly values?: Readonly<Record<string, string>>;
-  }):
+    readonly signal?: AbortSignal;
+  }): Promise<
     | { verdict: "accepted"; version: import("./log.js").ArtifactVersion }
-    | { verdict: "refused"; issue: "artifact-too-large" | "artifact-version-exists" };
+    | { verdict: "refused"; issue: "artifact-too-large" | "artifact-version-exists" }
+    | ArtifactLinkRefusal
+  >;
 }
 
 export const createConversationHost = (dir: string, deps: HostDeps): ConversationHost => {
@@ -370,18 +379,22 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     | { verdict: "accepted"; hash: string }
     | { verdict: "refused"; issue: "attachment-too-large" | "attachment-invalid" } =>
     log.writeAttachment(params);
-  const writeArtifact = (params: {
-    readonly artifactId: string;
-    readonly version: number;
-    readonly author: string;
-    readonly contentType: string;
-    readonly bytes: string;
-    readonly basedOn?: number;
-    readonly values?: Readonly<Record<string, string>>;
-  }):
-    | { verdict: "accepted"; version: import("./log.js").ArtifactVersion }
-    | { verdict: "refused"; issue: "artifact-too-large" | "artifact-version-exists" } =>
-    log.writeArtifact(params);
+  const artifactLifetime = new AbortController();
+  const writeArtifact: ConversationHost["writeArtifact"] = async (params) => {
+    const { signal: callerSignal, ...entry } = params;
+    const signal = callerSignal
+      ? AbortSignal.any([callerSignal, artifactLifetime.signal])
+      : artifactLifetime.signal;
+    if (signal.aborted) return linkRefusal("artifact-link-unverified", "", "admission cancelled");
+    if (entry.bytes.length > ARTIFACT_BYTES_MAX)
+      return { verdict: "refused", issue: "artifact-too-large" };
+    if (entry.author === "agent") {
+      const links = await validateArtifactLinks(entry.bytes, signal, deps.probeArtifactLink);
+      if (links) return links;
+    }
+    if (signal.aborted) return linkRefusal("artifact-link-unverified", "", "admission cancelled");
+    return log.writeArtifact(entry);
+  };
 
   const writeContext = (produce: (state: ChannelState) => ContextFact | null): ReduceResult => {
     const at = deps.now();
@@ -503,7 +516,10 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     writeArtifactMeta,
     writeAttachment,
     state: (): ChannelState => log.state(),
-    close: (): void => log.close(),
+    close: (): void => {
+      artifactLifetime.abort();
+      log.close();
+    },
     transcript: () => log.transcript(),
     status: (): ChannelStatus => snapshot().status,
     cursor,
@@ -821,9 +837,11 @@ export const openWriter = (
     now?: () => number;
     presence?: () => boolean | undefined;
     expectedConversationId?: string;
+    probeArtifactLink?: WebLinkProbe;
   } = {},
 ): ConversationHost =>
   createConversationHost(dir, {
+    probeArtifactLink: deps.probeArtifactLink,
     expectedConversationId: deps.expectedConversationId,
     now: deps.now ?? Date.now,
     presence: deps.presence ?? (() => undefined),

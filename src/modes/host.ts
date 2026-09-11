@@ -280,12 +280,12 @@ export { HeadlessError } from "./sequencer.js";
 // Artifact handling helper — owns version assignment and refusal recording.
 // Lucid assigns version, author, hash; agent chooses id and replaces.
 // See RFC-06 Emission.
-const handleArtifactMessage = (
+const handleArtifactMessage = async (
   text: string,
   turnId: string,
   deps: HeadlessDeps,
   ctx: HostContext,
-): void => {
+): Promise<void> => {
   const detections = detectArtifactBlocks(text);
   if (detections.length === 0) return;
   // Local map for versions assigned earlier in this same message, so two
@@ -367,19 +367,22 @@ const handleArtifactMessage = (
 
     if (current === 0) {
       // Unknown id — starts new artifact at v1, regardless of replaces.
-      const res = deps.host.writeArtifact({
+      const res = await deps.host.writeArtifact({
+        signal: ctx.artifactSignal,
         artifactId: header.id,
         version: 1,
         author: "agent",
         contentType: header.contentType,
         bytes,
       });
+      if (ctx.isStopped()) return;
       if (res.verdict === "accepted") {
         localVersions.set(header.id, 1);
       } else {
+        if (res.issue === "artifact-version-exists") ctx.owedBytes.add(header.id);
         ctx.sequencer.emit(turnId, {
           kind: EventKind.error,
-          message: `artifact ${header.id} not stored: ${res.issue}`,
+          message: `artifact ${header.id} not stored: ${res.issue}${"message" in res ? `: ${res.message}` : ""}`,
           terminal: false,
         });
       }
@@ -453,19 +456,22 @@ const handleArtifactMessage = (
       }
     }
     const next = current + 1;
-    const res = deps.host.writeArtifact({
+    const res = await deps.host.writeArtifact({
+      signal: ctx.artifactSignal,
       artifactId: header.id,
       version: next,
       author: "agent",
       contentType: header.contentType,
       bytes: document,
     });
+    if (ctx.isStopped()) return;
     if (res.verdict === "accepted") {
       localVersions.set(header.id, next);
     } else {
+      if (res.issue === "artifact-version-exists") ctx.owedBytes.add(header.id);
       ctx.sequencer.emit(turnId, {
         kind: EventKind.error,
-        message: `artifact ${header.id} v${next} not stored: ${res.issue}`,
+        message: `artifact ${header.id} v${next} not stored: ${res.issue}${"message" in res ? `: ${res.message}` : ""}`,
         terminal: false,
       });
     }
@@ -477,6 +483,7 @@ const handleArtifactMessage = (
 // ---------------------------------------------------------------------------
 
 interface HostContext {
+  readonly artifactSignal: AbortSignal;
   preparedNotice(message: string | undefined): void;
   handedOver(): void;
   isStopped(): boolean;
@@ -1243,6 +1250,7 @@ export const createHeadlessHost = (
   profile: "headless-session" | "headless-turn",
 ): SourceChannel => {
   let stopped = false;
+  const artifactLifetime = new AbortController();
   let notified = false;
   let strategy: StrategyHandle | undefined;
   let watchdog: ReturnType<typeof setInterval> | undefined;
@@ -1256,6 +1264,7 @@ export const createHeadlessHost = (
   const stop = (end: Extract<SourceEnd, { kind: "store-failed" }>): void => {
     if (stopped) return;
     stopped = true;
+    artifactLifetime.abort();
     clearInterval(watchdog);
     try {
       void strategy?.close().catch(() => {});
@@ -1324,6 +1333,7 @@ export const createHeadlessHost = (
   };
 
   const ctx: HostContext = {
+    artifactSignal: artifactLifetime.signal,
     preparedNotice: (message) => {
       if (message)
         sequencer.emit(currentTurnId, {
@@ -1460,6 +1470,8 @@ export const createHeadlessHost = (
       }
       for await (const event of turn) {
         if (stopped) return;
+        // Clear the harness watchdog before awaiting network admission.
+        harnessSpoke();
         // RFC-06 Emission: parse artifact fences out of message events and
         // store versions. Malformed/oversize/stale are refused with reason
         // recorded, turn still completes.
@@ -1467,13 +1479,9 @@ export const createHeadlessHost = (
           event.kind === EventKind.message &&
           typeof (event as { text?: unknown }).text === "string"
         ) {
-          handleArtifactMessage((event as { text: string }).text, turnId, deps, ctx);
+          await handleArtifactMessage((event as { text: string }).text, turnId, deps, ctx);
         }
         if (stopped) return;
-        // The harness said something, so it is answering. Every event goes
-        // through here, which is why the watch is cleared here rather than
-        // at each of the places one can be produced.
-        harnessSpoke();
         sequencer.emit(turnId, event);
         if (event.kind === EventKind.done && !advanced) {
           // A persistent session keeps this iterator open until the next
@@ -1649,6 +1657,7 @@ export const createHeadlessHost = (
       } finally {
         if (!stopped) {
           stopped = true;
+          artifactLifetime.abort();
           try {
             void strategy?.close().catch(() => {});
           } catch {}

@@ -18,6 +18,7 @@
  * old token gets 401 and stops; it does not retry against a server that
  * will never accept it.
  */
+
 import {
   AssistantRuntimeProvider,
   ComposerPrimitive,
@@ -57,6 +58,7 @@ import {
   selectorsForQuote,
   sha256Hex,
 } from "./anchor.js";
+import { ARTIFACT_SANDBOX } from "./artifact-links.js";
 import { useArtifactWidth } from "./artifact-width-control.js";
 import type { ComparisonDraft } from "./comparison-draft.js";
 import { comparisonDraftText, restoreComparisonDraft } from "./comparison-draft.js";
@@ -1260,16 +1262,16 @@ const CATALOG_POLL_MS = 2000;
 
 /** The document, in a frame the page cannot reach into.
  *
- * `srcdoc` hands the frame its bytes; the frame fetches nothing, so a
- * document that names an external image or script gets neither.
+ * `srcdoc` supplies the document bytes. Authored resources can still make
+ * network requests; this is an origin boundary, not a network firewall.
  *
  * The sandbox has no `allow-same-origin`, which is the whole point. With
  * it the parent could read into the frame — and the frame could read back
  * out, into a page holding a token with read and write on every record.
  * The document is written by an agent, so that reach is not one to grant.
  * Without it the frame is an opaque origin: nothing crosses in either
- * direction. `allow-scripts` alone is safe precisely because the origin is
- * opaque; the two together would not be.
+ * direction except through validated messages. Popup grants let web links
+ * open working tabs; normalized links have no opener or referrer.
  *
  * `key` is the version, so a new version replaces the frame rather than
  * mutating it. There is no in-place update path to get wrong. */
@@ -1706,7 +1708,7 @@ const DocumentFrame = ({
       className="doc-frame"
       style={{ colorScheme }}
       title={`${doc.artifactId} v${doc.version}`}
-      sandbox="allow-scripts"
+      sandbox={ARTIFACT_SANDBOX}
       srcDoc={frameSource}
     />
   );

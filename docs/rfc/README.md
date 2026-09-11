@@ -1,5 +1,9 @@
 # Active RFCs
 
+RFC 23 is implemented. Its proposal and cross-family review are preserved in
+commit `1e7bd70`. Current contracts live in [artifact links](../artifacts.md#link-navigation-and-validation)
+and [ADR 0008](../adr/0008-browser-and-agent-content-have-separate-authority.md).
+
 RFC 22 is implemented. HCN owns executable compatibility; Lucid consumes
 operation results without runtime version policy. The current contract is
 [HCN operation feedback](../compatibility.md).

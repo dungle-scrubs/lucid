@@ -681,7 +681,7 @@ test("failed-log shutdown retains presence through harness cleanup even when dia
   const root = mkdtempSync(join(tmpdir(), "runtime-failed-log-"));
   const { dir } = conversations(root).ensure("failed-log");
   const writer = openWriter(dir);
-  writer.writeArtifact({
+  await writer.writeArtifact({
     artifactId: "doc",
     version: 1,
     author: "human",

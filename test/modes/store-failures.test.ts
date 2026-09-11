@@ -18,7 +18,7 @@ const settle = async () => {
   for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
 };
 
-const rig = (
+const rig = async (
   failure: (operation: "read" | "write") => void,
   reporting: "accept" | "refuse" | "throw" = "accept",
   profile: "headless-session" | "headless-turn" = "headless-session",
@@ -26,7 +26,7 @@ const rig = (
   const root = mkdtempSync(join(tmpdir(), "lucid-read-failed-"));
   const { secret } = createConversationRecord(root, "conv");
   const host = openWriter(join(root, "conv"));
-  host.writeArtifact({
+  await host.writeArtifact({
     artifactId: "doc",
     version: 1,
     author: "agent",
@@ -80,7 +80,7 @@ const rig = (
 test.each(["headless-session", "headless-turn"] as const)(
   "an unreadable artifact stops %s without appending another event",
   async (profile) => {
-    const r = rig(
+    const r = await rig(
       () => {
         throw new StoreError("corrupt-log", "synthetic corruption");
       },
@@ -115,7 +115,7 @@ test.each([
 ] as const)(
   "%s: a busy read whose warning fails (%s) stops after one append attempt",
   async (profile, reporting) => {
-    const r = rig(
+    const r = await rig(
       () => {
         throw new LockError("lock-timeout", "test-lock", "busy");
       },
@@ -148,7 +148,7 @@ test.each([
 );
 
 test("a successfully recorded busy warning omits state and lets the input continue", async () => {
-  const r = rig(() => {
+  const r = await rig(() => {
     throw new LockError("lock-timeout", "test-lock", "busy");
   });
   try {
@@ -170,7 +170,7 @@ test("a successfully recorded busy warning omits state and lets the input contin
 
 test("a busy state read preserves bytes owed after an anchor refusal", async () => {
   let busy = false;
-  const r = rig(() => {
+  const r = await rig(() => {
     if (busy) throw new LockError("lock-timeout", "test-lock", "busy");
   });
   const input = (seq: number) =>
@@ -220,7 +220,7 @@ test.each(["headless-session", "headless-turn"] as const)(
   "%s stops when its patch base is unreadable",
   async (profile) => {
     let broken = false;
-    const r = rig(
+    const r = await rig(
       () => {
         if (broken) throw new StoreError("fold-refused", "synthetic refusal");
       },
@@ -268,7 +268,7 @@ test.each([
   new StoreError("append-failed", "synthetic write failure"),
   new LockError("lock-unavailable", "test-lock", "synthetic unavailable lock"),
 ])("an artifact write failure keeps its diagnostic classification: %s", async (failure) => {
-  const r = rig((operation) => {
+  const r = await rig((operation) => {
     if (operation === "write") throw failure;
   });
   try {

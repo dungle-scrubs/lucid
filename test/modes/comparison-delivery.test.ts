@@ -77,18 +77,18 @@ const flush = async (): Promise<void> => {
 };
 
 describe("comparison admission at the shared append boundary", () => {
-  test("fresh provenance and reviewed head are checked on every admission; accepted replay precedes both", () => {
+  test("fresh provenance and reviewed head are checked on every admission; accepted replay precedes both", async () => {
     const { dir } = record();
     const a = openWriter(dir),
       b = openWriter(dir);
     const v1 = artifact(1),
       v2 = artifact(2);
-    a.writeArtifact(v1);
-    a.writeArtifact(v2);
+    await a.writeArtifact(v1);
+    await a.writeArtifact(v2);
     const text = note(v1, v2);
     expect(b.submitInput({ id: "once", text })).toMatchObject({ verdict: "accepted" });
     const v3 = artifact(3);
-    a.writeArtifact(v3);
+    await a.writeArtifact(v3);
     expect(b.submitInput({ id: "once", text })).toMatchObject({ verdict: "accepted" });
     expect(b.submitInput({ id: "fresh", text })).toMatchObject({
       verdict: "refused",
@@ -106,11 +106,11 @@ describe("comparison admission at the shared append boundary", () => {
     a.close();
     b.close();
   });
-  test("source outside a refreshed pair remains valid, arbitrary element and hash claims do not", () => {
+  test("source outside a refreshed pair remains valid, arbitrary element and hash claims do not", async () => {
     const { dir } = record();
     const host = openWriter(dir);
     const versions = [artifact(1), artifact(2), artifact(3), artifact(4)];
-    for (const v of versions) host.writeArtifact(v);
+    for (const v of versions) await host.writeArtifact(v);
     const text = note(versions[1] as ArtifactVersion, versions[3] as ArtifactVersion);
     expect(host.submitInput({ id: "retained-source", text }).verdict).toBe("accepted");
     for (const [id, candidate] of [
@@ -127,13 +127,13 @@ describe("comparison admission at the shared append boundary", () => {
     expect(host.enqueueInput({ id: "wrong-mode", text, mode: "steer" }).verdict).toBe("refused");
     host.close();
   });
-  test("legacy inputs and unknown extension fields remain readable; known malformed extensions are refused", () => {
+  test("legacy inputs and unknown extension fields remain readable; known malformed extensions are refused", async () => {
     const { dir } = record();
     const host = openWriter(dir);
     const a = artifact(1),
       b = artifact(2);
-    host.writeArtifact(a);
-    host.writeArtifact(b);
+    await host.writeArtifact(a);
+    await host.writeArtifact(b);
     expect(host.submitInput({ id: "plain", text: 'What does "comparison" mean?' }).verdict).toBe(
       "accepted",
     );
@@ -248,8 +248,8 @@ for (const mode of ["session", "turn"] as const) {
     });
     const a = artifact(1),
       b = artifact(2);
-    host.writeArtifact(a);
-    host.writeArtifact(b);
+    await host.writeArtifact(a);
+    await host.writeArtifact(b);
     const proc = new FakeHcnProcess(),
       nextProc = new FakeHcnProcess();
     const spawner = fakeSpawner([proc, nextProc]);
@@ -311,7 +311,7 @@ for (const mode of ["session", "turn"] as const) {
       await flush();
       expect(attempts).toBe(1);
       const current = artifact(3, "<p>Current human additions must survive.</p>");
-      host.writeArtifact({ ...current, author: "human" });
+      await host.writeArtifact({ ...current, author: "human" });
       source.recordChanged?.();
       await flush();
       expect(attempts).toBe(1); // Recovery cannot interrupt the ordinary turn.
@@ -332,7 +332,7 @@ for (const mode of ["session", "turn"] as const) {
       }
       // A human save during generation makes the dispatch base stale. The
       // ordinary emission guard refuses it; a later full revision uses v4.
-      host.writeArtifact(artifact(4, "<p>Newest human addition.</p>"));
+      await host.writeArtifact(artifact(4, "<p>Newest human addition.</p>"));
       running.emit({
         kind: "message",
         role: "assistant",
@@ -375,8 +375,8 @@ for (const mode of ["session", "turn"] as const) {
     });
     const a = artifact(1),
       b = artifact(2);
-    host.writeArtifact(a);
-    host.writeArtifact(b);
+    await host.writeArtifact(a);
+    await host.writeArtifact(b);
     host.submitInput({ id: "first", text: note(a, b) });
     host.submitInput({ id: "second", text: note(a, b).replace("Bring back", "Consider") });
     let busy = true,
@@ -471,8 +471,8 @@ test("turn resume refusal preserves comparison input without an automatic fresh 
   });
   const a = artifact(1),
     b = artifact(2);
-  host.writeArtifact(a);
-  host.writeArtifact(b);
+  await host.writeArtifact(a);
+  await host.writeArtifact(b);
   const stale = new FakeHcnProcess(),
     fresh = new FakeHcnProcess();
   const spawn = fakeSpawner([stale, fresh]);
@@ -492,7 +492,7 @@ test("turn resume refusal preserves comparison input without an automatic fresh 
     host.submitInput({ id: "historical", text: note(a, b) });
     await flush();
     expect(stale.writes.join("")).toContain("Dispatch version: 2");
-    host.writeArtifact(artifact(3, "<p>Saved while resume was being attempted.</p>"));
+    await host.writeArtifact(artifact(3, "<p>Saved while resume was being attempted.</p>"));
     stale.emit({ kind: "failure", class: "rejected", message: "synthetic unknown session" });
     stale.exit(2);
     await flush();
@@ -506,13 +506,13 @@ test("turn resume refusal preserves comparison input without an automatic fresh 
   }
 });
 
-test("hooks: durable holds survive hook processes, newer content releases full context, new attachment permits same-head repair", () => {
+test("hooks: durable holds survive hook processes, newer content releases full context, new attachment permits same-head repair", async () => {
   const { dir, secret } = record();
   const host = openWriter(dir, { presence: () => true });
   const a = artifact(1),
     b = artifact(2);
-  host.writeArtifact(a);
-  host.writeArtifact(b);
+  await host.writeArtifact(a);
+  await host.writeArtifact(b);
   expect(
     host.handleFrame(
       JSON.stringify(attach({ conversationId: "comparison", secret, profile: "interactive" })),
@@ -563,7 +563,7 @@ test("hooks: durable holds survive hook processes, newer content releases full c
     expect(
       viewConversation(dir).transcript.events.filter((e) => e.event.code === "E-COMP-07"),
     ).toHaveLength(1);
-    host.writeArtifact(artifact(3));
+    await host.writeArtifact(artifact(3));
     expect(deliverFirstQueued(dir, { rung: "hooks", promptLimit: 10 })).toMatchObject({
       delivered: 0,
     });

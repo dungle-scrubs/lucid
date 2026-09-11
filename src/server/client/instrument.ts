@@ -30,8 +30,9 @@
  * the same file `app.css` self-hosts (digits, space, middle dot; the weight
  * axis survives). `unicode-range` keeps it from shadowing the full face on
  * the behaviour reference, which loads both. */
-import frameSerif from "./fonts/source-serif-4-frame.txt";
 
+import { installArtifactLinks } from "./artifact-links.js";
+import frameSerif from "./fonts/source-serif-4-frame.txt";
 import { flattenNewlines } from "./snapshot-dom.js";
 import { BLOCK_SELECTOR } from "./version-diff.js";
 
@@ -478,6 +479,7 @@ const script = (artifactId: string, version: number, author: string): string => 
   var AUTHOR_ATTR = ${JSON.stringify(AUTHOR_ATTR)};
   var AUTHOR = ${JSON.stringify(author)};
   var COUNT_ATTR = ${JSON.stringify(COUNT_ATTR)};
+  var restoreArtifactLinks = (${installArtifactLinks.toString()})();
 
   // An id per element, in document order. Assigned by lucid rather than
   // taken from the document: an agent-written id may be missing, repeated,
@@ -499,7 +501,7 @@ const script = (artifactId: string, version: number, author: string): string => 
     textCursor = null;
   };
   var linkAt = function (target) {
-    return target && target.nodeType === 1 ? target.closest("a[href]") : null;
+    return target && target.nodeType === 1 ? target.closest("a[href], area[href]") : null;
   };
 
   // Caret lookup can snap to nearby text even in padding or past a line's
@@ -665,6 +667,7 @@ const script = (artifactId: string, version: number, author: string): string => 
   // would read it, not as lucid rendered it.
   var clean = function () {
     var copy = document.documentElement.cloneNode(true);
+    restoreArtifactLinks(copy);
     var added = copy.querySelectorAll("[data-lucid]");
     for (var a = 0; a < added.length; a++) added[a].parentNode.removeChild(added[a]);
     var cursors = copy.querySelectorAll(".lucid-text-cursor");
