@@ -38,3 +38,27 @@ The evidence directory is local ignored run output. No daemon was started or sto
 ## What remains for the decision and later validation
 
 The connection decision must name the supported mechanism for each interface and how it obtains native ID, working folder, and originating-client evidence. A controlled live acceptance test must separately prove CLI and desktop delivery while idle/busy, listener loss while the client remains open, confirmed client exit, and native-history recall through HCN. This research does not establish those end-to-end claims. Unsupported or inaccessible interfaces require an explicit decision; they must not silently create a fresh session.
+
+## Native protocol follow-up, 2026-09-11
+
+Producer: the parent Codex session. No Anthropic model was invoked. These tests use synthetic conversations and an isolated server; no existing desktop conversation was read or messaged.
+
+**Observed:** the installed desktop is ChatGPT 26.901.51231 and bundles codex-cli 0.153.4 at /Applications/ChatGPT.app/Contents/Resources/codex. The separate terminal CLI is 0.154.0. Version sources: application Info.plist and each executable's --version. Schema generation was repeated with the bundled binary. It exposes thread queue, resume, loaded-list and unsubscribe operations too. The earlier CLI-only inspection was therefore insufficient to establish desktop behavior, although these particular operations exist in both builds.
+
+**Observed, bounded inspection:** the running desktop app's Codex child had anonymous socket pairs in lsof's Unix-socket listing, with no named control socket shown. This does not prove the app has no other integration, but it does not supply an external endpoint that Lucid can use. No attempt was made to seize its stdin, replace its transport, or attach to a user's thread.
+
+An isolated instance of the desktop's bundled server was launched over a temporary loopback WebSocket endpoint. A local HTTP stub supplied the model catalogue for a custom probe provider. All provider requests stayed on loopback; no external inference was performed. Clients used the documented initialization and generated request schema. [Official app-server protocol and transport documentation](https://learn.chatgpt.com/docs/app-server#protocol), retrieved 2026-09-11, describes WebSocket transport as experimental and unsupported for production workloads. A successful probe is not an upstream production-support guarantee.
+
+| Probe | Observed result | What it establishes |
+| --- | --- | --- |
+| Ephemeral thread | Queue operations refused; resume from a second client reported no rollout. | Ephemeral-thread support cannot stand in for the durable workflow. |
+| Durable synthetic thread | Returned a native ID, matching working folder and idle status. | Registration metadata can be obtained from an owned app-server operation. |
+| Resume before first durable activity | Second client initially received no-rollout-found. | New thread creation and availability of stored history have a timing boundary. Do not infer resumability from the initial ID alone. |
+| Submit from a second client to that exact ID | Queue addition succeeded and the owning client received a queue-change notification. A turn started automatically. | Queue addition is an execution-capable action. A successful add is not merely passive storage or a listener-health probe. |
+| Queue deletion after consumption | Returned success while the queue had already drained and a turn had started. | Delete success does not establish withdrawal of an input already dispatched. |
+| Reconnect after durable activity | Another client resumed the same native ID successfully. | Reconnect works inside this shared server instance. It does not establish access to the running desktop app's server. |
+| Unsubscribe every thread client | An independent inspection client still found the thread loaded. | Loaded-thread state does not prove that an interactive client remains subscribed. |
+
+Local ignored receipts: artifacts/evidence/interactive-artifact-wayfinder/codex-native-probe.mjs and codex-native-probe.json; the ephemeral negative control is codex-native-ephemeral-probe.json. Generated schema: codex-desktop-schema/. The probe uses a synthetic provider and ends its own server and clients. No model answer or busy-turn delivery was claimed. Initial attempts using Unix framing timed out; the final observations above use the documented direct WebSocket framing.
+
+**Still unverified:** supported external transport discovery for an already-running desktop conversation; per-thread originating-client ownership; an authenticated Lucid-listener acknowledgement; busy delivery and native-history recall through a real model. The connection contract must keep these distinct from the working shared-server primitive. It must not promise that codex queue can reach every desktop conversation just because the IDs have the same format.
