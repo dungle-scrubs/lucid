@@ -129,7 +129,10 @@ export function prepareNativeFeedback(
       if (attachmentState === "invalid") throw new Error("Attachment metadata is incomplete");
       // Extract references from recorded inputs: composed teaching contains an example annotation fence.
       // Only attachment paths are advertised; the generic sidecar retains the recorded context.
-      offered = offerProjectedContext(host.dir, captured.context, listener.registration.owner);
+      offered = offerProjectedContext(host.dir, captured.context, {
+        offerId,
+        owner: listener.registration.owner,
+      });
       if (offered.attachments.some((file) => file.path === null))
         throw new Error("Attachment bytes are missing");
     } catch {

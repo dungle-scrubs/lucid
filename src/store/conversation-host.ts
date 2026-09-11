@@ -1,4 +1,5 @@
 import { ARTIFACT_BYTES_MAX } from "../protocol/frames.js";
+import { closeFinishedNativeContextOffers, closeNativeContextOffers } from "./context-offer.js";
 import { completeLegacyPreference, type DriverChoice } from "./driver-preference.js";
 /**
  * ConversationHost — the deep module that owns the durable store's
@@ -328,6 +329,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     onAppendEvent: deps.onAppendEvent,
   });
 
+  closeFinishedNativeContextOffers(log.state().connection);
   const rec = log.recovery();
   deps.onRecord({
     verdict: "recovered",
@@ -459,7 +461,8 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     ) => { readonly fact: unknown } | { readonly issue: ProtocolIssue },
   ): ReduceResult => {
     const at = deps.now();
-    return transactDynamic((state) => {
+    let settled: { owner: NativeBinding["owner"]; offerId: string } | undefined;
+    const written = transactDynamic((state) => {
       const decision = produce(state);
       if ("issue" in decision)
         return { entry: null, frame: null, result: refuseConnection(state, at, decision.issue) };
@@ -557,6 +560,8 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
         return reduceConnection(state, fact, at);
       };
       const result = decide();
+      if (result.verdict === "accepted" && fact?.kind === "offer-outcome" && registration)
+        settled = { offerId: fact.offerId, owner: registration.owner };
       return {
         entry:
           fact && result.verdict === "accepted" && result.state !== state
@@ -566,6 +571,9 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
         result,
       };
     });
+    if (written.verdict === "accepted" && settled)
+      closeNativeContextOffers(settled.owner, settled.offerId);
+    return written;
   };
 
   return {

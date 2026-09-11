@@ -1921,3 +1921,137 @@ test("native file copies are removed when final transport encoding exceeds its l
     f.close();
   }
 });
+
+function preparedNativeFileFixture(): {
+  readonly bytes: Buffer<ArrayBuffer>;
+  readonly close: () => void;
+  readonly f: BoundFixture;
+  readonly offerId: string;
+  readonly path: string;
+} {
+  const f = boundFixture(false);
+  const owner = readProcessOwner(process.pid);
+  if (!owner) throw new Error("Missing native fixture owner");
+  let discard: (() => void) | undefined;
+  try {
+    f.controls.registration = { ...f.controls.registration, owner };
+    expect(
+      f.host.writeConnection({
+        actionId: crypto.randomUUID(),
+        binding: f.controls.registration,
+        kind: "bound",
+      }).verdict,
+    ).toBe("accepted");
+    f.acquire();
+    expect(f.host.writeConnection(f.enableFact()).verdict).toBe("accepted");
+    const bytes = Buffer.from("complete attachment");
+    const text = encodeAnnotationBatch({
+      artifactId: "flow",
+      version: 1,
+      notes: [
+        {
+          note: "Read before responding",
+          spots: [],
+          files: [
+            {
+              bytes: bytes.length,
+              contentType: "text/plain",
+              hash: putBlob(f.paths.dir, bytes),
+              name: "notes.txt",
+            },
+          ],
+        },
+      ],
+    });
+    expect(f.host.acceptInput({ id: "settled-file", mode: "queue", text }).verdict).toBe(
+      "accepted",
+    );
+    const result = prepareNativeFeedback(f.host, "settled-file", {
+      encode: (prompt) => prompt,
+      files: "local",
+      maxBytes: 100_000,
+    });
+    if (result.kind !== "ready") throw new Error(result.kind);
+    discard = result.discard;
+    const manifest = JSON.parse(
+      result.payload.split("\n\n").find((part) => part.startsWith('[{"entryId"')) ?? "null",
+    ) as { path: string }[];
+    const path = manifest[0]?.path ?? "";
+    expect(f.host.writeConnection(result.fact).verdict).toBe("accepted");
+    const offerId = result.fact.offer.id;
+    return {
+      f,
+      bytes,
+      path,
+      offerId,
+      close: () => {
+        discard?.();
+        f.close();
+      },
+    };
+  } catch (cause) {
+    discard?.();
+    f.close();
+    throw cause;
+  }
+}
+
+test("native file copies survive receipt and are removed only after their response is recorded", () => {
+  const { f, bytes, path, offerId, close } = preparedNativeFileFixture();
+  try {
+    const response = {
+      kind: "respond" as const,
+      offerId,
+      outcome: { kind: "answer" as const, text: "Read the complete attachment." },
+    };
+    expect(f.host.controlConnection(response).verdict).toBe("refused");
+    expect(existsSync(path)).toBe(true);
+    expect(f.host.controlConnection({ kind: "receipt", offerId }).verdict).toBe("accepted");
+    expect(readFileSync(path)).toEqual(bytes);
+    expect(f.host.controlConnection(response).verdict).toBe("accepted");
+    expect(existsSync(path)).toBe(false);
+    expect(f.host.controlConnection(response).verdict).toBe("accepted");
+    expect(viewConversation(f.paths.dir).state.connection?.offers[offerId]?.kind).toBe("finished");
+  } finally {
+    close();
+  }
+});
+
+test("a new host cleans native copies after a response was saved but post-append publication failed", () => {
+  const { f, path, offerId, close } = preparedNativeFileFixture();
+  try {
+    const response = {
+      kind: "respond" as const,
+      offerId,
+      outcome: { kind: "answer" as const, text: "Saved response" },
+    };
+    expect(f.host.controlConnection({ kind: "receipt", offerId }).verdict).toBe("accepted");
+    let failPublication = false;
+    const writer = createConversationHost(f.paths.dir, {
+      connectionAuthority: () => f.controls.registration,
+      executorLease: () => false,
+      now: () => f.controls.now,
+      onEffect: () => {},
+      onRecord: () => {
+        if (failPublication) throw new Error("Stopped after durable append");
+      },
+      ownerPresence: () => true,
+      presence: () => undefined,
+    });
+    try {
+      failPublication = true;
+      expect(() => writer.controlConnection(response)).toThrow("Stopped after durable append");
+      expect(viewConversation(f.paths.dir).state.connection?.offers[offerId]?.kind).toBe(
+        "finished",
+      );
+      expect(existsSync(path)).toBe(true);
+    } finally {
+      writer.close();
+    }
+    const recovery = openWriter(f.paths.dir);
+    recovery.close();
+    expect(existsSync(path)).toBe(false);
+  } finally {
+    close();
+  }
+});

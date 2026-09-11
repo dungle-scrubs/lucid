@@ -1,3 +1,4 @@
+import type { Stats } from "node:fs";
 import {
   closeSync,
   constants,
@@ -15,6 +16,7 @@ import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { ownerPresence, readProcessOwner } from "../process-owner.js";
 import { detectAnnotationBatch, filesOf } from "../protocol/annotations.js";
+import type { ConnectionState } from "../protocol/connection.js";
 import type { ProcessOwner } from "../protocol/process-owner.js";
 import { hashBlob } from "./blobs.js";
 import type { ConversationContext } from "./conversation-context.js";
@@ -27,15 +29,44 @@ export const CONTEXT_SLICE_MAX = 65_536;
 
 const ownerKey = (owner: ProcessOwner): string =>
   hashBlob(Buffer.from(JSON.stringify([owner.startedAt, owner.executable]))).slice(0, 32);
-const ownedName = /^lucid-context-offer-([1-9][0-9]*)-([a-f0-9]{32})-[A-Za-z0-9]+$/;
+const ownedName =
+  /^lucid-context-offer-([1-9][0-9]*)-([a-f0-9]{32})-(?:([a-f0-9]{64})-)?[A-Za-z0-9]+$/;
+
+function warnCleanup(): void {
+  process.emitWarning("A private context copy could not be removed", {
+    code: "LUCID_CONTEXT_CLEANUP",
+  });
+}
 
 function removeContextCopy(path: string): void {
   try {
     rmSync(path, { recursive: true, force: true });
   } catch {
-    process.emitWarning("A private context copy could not be removed", {
-      code: "LUCID_CONTEXT_CLEANUP",
-    });
+    warnCleanup();
+  }
+}
+
+function isPrivateDirectory(directory: Stats): boolean {
+  return directory.isDirectory() && !directory.isSymbolicLink() && (directory.mode & 0o077) === 0;
+}
+
+function sweepContextCopies(remove: (name: RegExpExecArray) => boolean): void {
+  try {
+    const root = realpathSync(tmpdir());
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      const match = ownedName.exec(entry.name);
+      if (!entry.isDirectory() || !match || !remove(match)) continue;
+      try {
+        const path = join(root, entry.name);
+        const directory = lstatSync(path);
+        if (isPrivateDirectory(directory) && directory.uid === process.getuid?.())
+          removeContextCopy(path);
+      } catch (error) {
+        if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) warnCleanup();
+      }
+    }
+  } catch {
+    warnCleanup();
   }
 }
 
@@ -43,29 +74,56 @@ function removeContextCopy(path: string): void {
  * before a sidecar or an attempt append therefore still leaves a reapable copy.
  * Unknown ownership and directories belonging to live processes are retained. */
 export function reapContextOffers(): void {
-  const root = realpathSync(tmpdir());
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    const match = ownedName.exec(entry.name);
-    if (!match || !entry.isDirectory()) continue;
+  sweepContextCopies((match) => {
     const owner = readProcessOwner(Number(match[1]));
-    if (owner === undefined || (owner !== null && ownerKey(owner) === match[2])) continue;
-    const path = join(root, entry.name);
-    try {
-      const directory = lstatSync(path);
-      if (
-        directory.isDirectory() &&
-        !directory.isSymbolicLink() &&
-        (directory.mode & 0o077) === 0 &&
-        directory.uid === process.getuid?.()
-      )
-        rmSync(path, { recursive: true, force: true });
-    } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
-        process.emitWarning("An orphaned context copy could not be removed", {
-          code: "LUCID_CONTEXT_CLEANUP",
-        });
-    }
+    return owner !== undefined && (owner === null || ownerKey(owner) !== match[2]);
+  });
+}
+
+export interface ContextOfferLifetime {
+  readonly offerId?: string;
+  readonly owner: ProcessOwner;
+}
+
+const scopeKey = (pid: number | string, key: string, offerHash?: string): string =>
+  `${pid}-${key}${offerHash === undefined ? "" : `-${offerHash}`}`;
+
+const contextScope = (owner: ProcessOwner, offerId?: string): string =>
+  scopeKey(
+    owner.pid,
+    ownerKey(owner),
+    offerId === undefined ? undefined : hashBlob(Buffer.from(offerId)),
+  );
+
+function closeContextScopes(scopes: ReadonlySet<string>): void {
+  if (scopes.size === 0) return;
+  sweepContextCopies((match) => {
+    // Legacy copies have no offer scope. Only owner-death reaping can remove them.
+    const [, pid, key, offerHash] = match;
+    return (
+      pid !== undefined &&
+      key !== undefined &&
+      offerHash !== undefined &&
+      scopes.has(scopeKey(pid, key, offerHash))
+    );
+  });
+}
+
+/** Called only after a matching native response is durably accepted. No caller path is accepted. */
+export function closeNativeContextOffers(owner: ProcessOwner, offerId: string): void {
+  closeContextScopes(new Set([contextScope(owner, offerId)]));
+}
+
+/** Durable terminal outcomes also recover cleanup lost between append and process exit. */
+export function closeFinishedNativeContextOffers(connection: ConnectionState | null): void {
+  if (!connection) return;
+  const scopes = new Set<string>();
+  for (const entry of Object.values(connection.offers)) {
+    if (entry.kind !== "finished") continue;
+    const owner = connection.participations[entry.offer.participationId]?.registration.owner;
+    if (owner) scopes.add(contextScope(owner, entry.offer.id));
   }
+  closeContextScopes(scopes);
 }
 
 export interface OfferedContext {
@@ -78,15 +136,15 @@ export interface OfferedContext {
 export function offerContext(
   recordDir: string,
   content: string | ((attachmentsDir: string) => string),
-  receivingOwner?: ProcessOwner,
+  lifetime?: ContextOfferLifetime,
 ): OfferedContext {
   reapContextOffers();
   const record = realpathSync(recordDir);
-  const owner = receivingOwner ?? readProcessOwner(process.pid);
+  const owner = lifetime?.owner ?? readProcessOwner(process.pid);
   if (!owner || ownerPresence(owner) !== true)
     throw new ContextPreparationError("The context copy's process owner could not be verified");
   const path = mkdtempSync(
-    join(realpathSync(tmpdir()), `lucid-context-offer-${owner.pid}-${ownerKey(owner)}-`),
+    join(realpathSync(tmpdir()), `lucid-context-offer-${contextScope(owner, lifetime?.offerId)}-`),
   );
   const within = relative(record, path);
   if (within === "" || (!within.startsWith(`..${sep}`) && within !== ".." && !isAbsolute(within))) {
@@ -125,7 +183,7 @@ export interface OfferedAttachment {
 export function offerProjectedContext(
   recordDir: string,
   context: ConversationContext,
-  receivingOwner?: ProcessOwner,
+  lifetime?: ContextOfferLifetime,
 ): OfferedContext & { readonly attachments: readonly OfferedAttachment[] } {
   const attachments: OfferedAttachment[] = [];
   const offered = offerContext(
@@ -163,7 +221,7 @@ export function offerProjectedContext(
       }
       return renderConversationContext(context, renderAttachmentReferences(attachments));
     },
-    receivingOwner,
+    lifetime,
   );
   return { ...offered, attachments };
 }
@@ -198,7 +256,7 @@ export function readOfferedContext(
   )
     throw new ContextPreparationError("Invalid offered context range or directory");
   const directory = lstatSync(path);
-  if (!directory.isDirectory() || directory.isSymbolicLink() || (directory.mode & 0o077) !== 0)
+  if (!isPrivateDirectory(directory))
     throw new ContextPreparationError(
       "The context directory must be a private, ordinary directory",
     );
