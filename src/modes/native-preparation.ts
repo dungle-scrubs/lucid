@@ -1,4 +1,8 @@
-import { composeAnnotationPrompt } from "../protocol/annotations.js";
+import {
+  ANNOTATION_FENCE,
+  composeAnnotationPrompt,
+  detectAnnotationBatch,
+} from "../protocol/annotations.js";
 import type { ConnectionFact, NativePreparationReason } from "../protocol/connection.js";
 import { currentListener } from "../protocol/connection.js";
 import { renderConversationContext } from "../store/conversation-context.js";
@@ -54,6 +58,25 @@ export function prepareNativeFeedback(
       kind: "held",
       message: "Connect the intended native session before delivering feedback.",
       reason: "listener-not-ready",
+    };
+  const hasFileContext = (entry: typeof captured.context.pending): boolean => {
+    if (entry.role !== "user" || !entry.text.includes(ANNOTATION_FENCE)) return false;
+    const batch = detectAnnotationBatch(entry.text);
+    return (
+      !!batch &&
+      !("malformed" in batch) &&
+      batch.notes.some(
+        (note) =>
+          Object.hasOwn(note, "files") && (!Array.isArray(note.files) || note.files.length > 0),
+      )
+    );
+  };
+  if (hasFileContext(captured.context.pending) || captured.context.history.some(hasFileContext))
+    return {
+      kind: "held",
+      message:
+        "This native transport cannot yet deliver the attached files in this input or its conversation history. The saved input is held intact.",
+      reason: "transport-unverified",
     };
   let comparisonHold: ComparisonHold | undefined;
   const comparison = createComparisonDelivery({

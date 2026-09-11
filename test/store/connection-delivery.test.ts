@@ -1693,3 +1693,98 @@ test("native preparation measures the complete encoded payload and holds oversiz
     f.close();
   }
 });
+
+test("native feedback with an attachment stays held before encoding or dispatch", () => {
+  const f = boundFixture();
+  try {
+    f.acquire();
+    expect(f.host.writeConnection(f.enableFact()).verdict).toBe("accepted");
+    const text = encodeAnnotationBatch({
+      artifactId: "flow",
+      version: 1,
+      notes: [
+        {
+          note: "Use the attached screenshot, including its labels.",
+          spots: [],
+          files: [
+            {
+              bytes: 4,
+              contentType: "image/png",
+              hash: "a".repeat(64),
+              name: "flow.png",
+              path: "/expired-copy/flow.png",
+            },
+          ],
+        },
+      ],
+    });
+    expect(
+      f.host.acceptInput({ id: "file-feedback", mode: "queue", text }, { managed: true }).verdict,
+    ).toBe("accepted");
+    const seq = f.host.state().seq;
+    let encodes = 0;
+    const result = prepareNativeFeedback(f.host, "file-feedback", {
+      encode: (prompt) => {
+        encodes += 1;
+        return prompt;
+      },
+      maxBytes: 100_000,
+    });
+    expect(result.kind).toBe("held");
+    if (result.kind === "held") {
+      expect(result.reason).toBe("transport-unverified");
+      expect(result.message).toContain("attached files");
+    }
+    expect(encodes).toBe(0);
+    const fresh = viewConversation(f.paths.dir);
+    expect(fresh.state.seq).toBe(seq);
+    expect(fresh.state.inputs.find((input) => input.id === "file-feedback")?.text).toBe(text);
+    expect(Object.values(fresh.state.connection?.offers ?? {})).toHaveLength(0);
+  } finally {
+    f.close();
+  }
+});
+
+test("uninterpretable native attachment references cannot bypass complete-context admission", () => {
+  const f = boundFixture();
+  try {
+    f.acquire();
+    expect(f.host.writeConnection(f.enableFact()).verdict).toBe("accepted");
+    const text = encodeAnnotationBatch({
+      artifactId: "flow",
+      version: 1,
+      notes: [
+        {
+          note: "Use the file",
+          spots: [],
+          files: [
+            {
+              bytes: 4,
+              contentType: "image/png",
+              hash: "invalid",
+              name: "flow.png",
+              path: "/unverified/flow.png",
+            },
+          ],
+        },
+      ],
+    });
+    expect(f.host.acceptInput({ id: "malformed-file", mode: "queue", text }).verdict).toBe(
+      "accepted",
+    );
+    let encodes = 0;
+    const result = prepareNativeFeedback(f.host, "malformed-file", {
+      encode: (prompt) => {
+        encodes += 1;
+        return prompt;
+      },
+      maxBytes: 100_000,
+    });
+    expect(result.kind).toBe("held");
+    expect(encodes).toBe(0);
+    expect(f.host.state().inputs.find((input) => input.id === "malformed-file")?.text).toBe(text);
+    expect(Object.values(f.host.state().connection?.offers ?? {})).toHaveLength(0);
+  } finally {
+    f.close();
+  }
+});
