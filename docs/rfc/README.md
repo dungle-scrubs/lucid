@@ -29,7 +29,7 @@ commit `000381b`; its current contract is in [the design reference](../design.md
 Current reading-view design is listed in the
 [documentation index](../README.md#browser-design).
 
-The highest allocated RFC number is **22**. The next RFC is **23**.
+The highest allocated RFC number is **23**. The next RFC is **24**.
 Never reset numbering because completed files have been removed. Before
 allocating, check this high-water mark, active filenames, and Git history;
 use one greater than the highest number allocated and update this mark.
