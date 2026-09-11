@@ -4,8 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dispatch } from "../../src/cli/dispatch.js";
 import { conversations } from "../../src/cli/record-addressing.js";
+import { listenNativeFeedback } from "../../src/modes/native-listener.js";
+import { prepareNativeFeedback } from "../../src/modes/native-preparation.js";
 import { readProcessOwner } from "../../src/process-owner.js";
+import { encodeAnnotationBatch } from "../../src/protocol/annotations.js";
 import type { ConnectionFact, NativeBinding } from "../../src/protocol/connection.js";
+import { readContentSource } from "../../src/protocol/content-comparison.js";
 import type { ProcessOwner } from "../../src/protocol/process-owner.js";
 import { observeConnection, readConnection } from "../../src/store/connection-view.js";
 import {
@@ -13,8 +17,11 @@ import {
   openWriter,
   viewConversation,
 } from "../../src/store/conversation-host.js";
-import { registerNativeSession } from "../../src/store/native-registration.js";
-import { acquirePresence, type PresenceHandle } from "../../src/store/presence.js";
+import {
+  type RegistrationAuthority,
+  registerNativeSession,
+} from "../../src/store/native-registration.js";
+import { acquirePresence, type PresenceHandle, presenceHeld } from "../../src/store/presence.js";
 import { createConversationRecord } from "../../src/store/store.js";
 import { attach } from "../protocol/helpers.js";
 
@@ -148,6 +155,24 @@ function boundFixture(bind = true): BoundFixture {
     status: () =>
       readConnection(paths.dir, { now: () => controls.now, ownerPresence: controls.probe }),
   };
+}
+
+function registerBinding(f: BoundFixture, authority: RegistrationAuthority): NativeBinding {
+  const registered = registerNativeSession(
+    f.controls.registration.workingDirectory,
+    f.controls.registration,
+    authority,
+  );
+  if (!registered.ok) throw new Error(registered.reason);
+  f.controls.registration = registered.registration;
+  expect(
+    f.host.writeConnection({
+      actionId: crypto.randomUUID(),
+      binding: registered.registration,
+      kind: "bound",
+    }).verdict,
+  ).toBe("accepted");
+  return registered.registration;
 }
 
 test("listening requires an executor lease and expires without implying native departure", () => {
@@ -1014,6 +1039,427 @@ test("the cancellation command needs no native authority and remains limited to 
     );
     expect(output.at(-1)).toMatchObject({ verdict: "refused", reason: "input-already-dispatched" });
     expect(f.controls.lease?.held()).toBe(true);
+  } finally {
+    f.close();
+  }
+});
+
+test("native preparation carries the complete current document and the original comparison annotation", async () => {
+  const f = boundFixture();
+  try {
+    const write = async (version: number, bytes: string) => {
+      expect(
+        (
+          await f.host.writeArtifact({
+            artifactId: "flow",
+            author: "agent",
+            bytes,
+            contentType: "text/html",
+            version,
+          })
+        ).verdict,
+      ).toBe("accepted");
+      const artifact = f.host.readArtifact("flow", version);
+      if (!artifact) throw new Error("Missing fixture artifact");
+      return artifact;
+    };
+    const original = await write(1, "<p>The original wording.</p>");
+    const reviewed = await write(2, "<p>The reviewed wording.</p>");
+    const passage = readContentSource(original.bytes).passages[0];
+    if (!passage) throw new Error("Missing fixture passage");
+    const note = encodeAnnotationBatch({
+      artifactId: "flow",
+      version: 1,
+      comparison: { earlierVersion: 1, reviewedHash: reviewed.hash, reviewedVersion: 2 },
+      notes: [
+        {
+          note: "Restore the original wording and keep later additions.",
+          spots: [
+            {
+              author: passage.author,
+              id: passage.id,
+              selectors: passage.selectors,
+              snippet: passage.text,
+              sourceHash: original.hash,
+              sourceVersion: 1,
+            },
+          ],
+        },
+      ],
+    });
+    expect(
+      f.host.acceptInput({ id: "context-note", mode: "queue", text: note }, { managed: true })
+        .verdict,
+    ).toBe("accepted");
+    const current = await write(
+      3,
+      `<p>${"current addition ".repeat(1200)}FINAL-CURRENT-MARKER</p>`,
+    );
+    f.acquire();
+    expect(f.host.writeConnection(f.enableFact()).verdict).toBe("accepted");
+    const prepared = prepareNativeFeedback(f.host, "context-note", {
+      encode: (prompt: string) => JSON.stringify({ decision: "block", reason: prompt }),
+      maxBytes: 500_000,
+    });
+    expect(prepared.kind).toBe("ready");
+    if (prepared.kind !== "ready") throw new Error(prepared.kind);
+    const prompt = JSON.parse(prepared.payload).reason;
+    expect(prompt).toContain(JSON.stringify(current.bytes));
+    expect(prompt).toContain("Historical source: v1. Reviewed: v2.");
+    expect(prompt).toContain("Dispatch version: 3.");
+    expect(prompt).toContain(note);
+    expect(prompt).toContain(`connection receipt 'feedback' --offer '${prepared.fact.offer.id}'`);
+    expect(prompt).toContain(`connection respond 'feedback' --offer '${prepared.fact.offer.id}'`);
+    expect(prepared.fact.offer.inputId).toBe("context-note");
+    expect(Object.values(f.host.state().connection?.offers ?? {})).toHaveLength(0);
+    expect(f.host.writeConnection(prepared.fact).verdict).toBe("accepted");
+  } finally {
+    f.close();
+  }
+});
+
+test("the bounded native listener waits without inference, offers FIFO feedback once, and resumes only after settlement", async () => {
+  const f = boundFixture(false);
+  const authority = { callerOwns: () => true, ownerPresence: () => true };
+  try {
+    const registration = registerBinding(f, authority);
+    let waits = 0;
+    const options = {
+      recordDir: f.paths.dir,
+      root: registration.workingDirectory,
+      signal: new AbortController().signal,
+      source: "explicit" as const,
+      transport: {
+        encode: (prompt: string) => JSON.stringify({ decision: "block", reason: prompt }),
+        maxBytes: 100_000,
+      },
+    };
+    const deps = {
+      authority,
+      now: () => f.controls.now,
+      wait: async (ms: number) => {
+        waits += 1;
+        f.controls.now += ms;
+        expect(f.status().state).toBe("listening");
+        expect(
+          f.host.acceptInput(
+            { id: "managed-first", text: "First browser feedback", mode: "queue" },
+            { managed: true },
+          ).verdict,
+        ).toBe("accepted");
+        expect(
+          f.host.acceptInput({
+            id: "ordinary-second",
+            text: "Second browser feedback",
+            mode: "queue",
+          }).verdict,
+        ).toBe("accepted");
+      },
+    };
+    const first = await listenNativeFeedback(options, deps);
+    expect(first.kind).toBe("offered");
+    if (first.kind !== "offered") throw new Error(first.kind);
+    expect(waits).toBe(1);
+    expect(JSON.parse(first.payload).reason).toContain("First browser feedback");
+    const afterOffer = viewConversation(f.paths.dir);
+    expect(afterOffer.state.connection?.offers[first.offerId]).toMatchObject({
+      kind: "sending",
+      offer: { inputId: "managed-first" },
+    });
+    expect(afterOffer.state.appliedInputs["managed-first"]).toBeUndefined();
+    expect(presenceHeld(f.paths.dir)).toBe(false);
+    const blocked = await listenNativeFeedback({ ...options, source: "continuation" }, deps);
+    expect(blocked.kind).toBe("held");
+    expect(viewConversation(f.paths.dir).state.seq).toBe(afterOffer.state.seq);
+    expect(f.host.controlConnection({ kind: "receipt", offerId: first.offerId }).verdict).toBe(
+      "accepted",
+    );
+    expect(
+      f.host.controlConnection({
+        kind: "respond",
+        offerId: first.offerId,
+        outcome: { kind: "answer", text: "First feedback answered" },
+      }).verdict,
+    ).toBe("accepted");
+    const second = await listenNativeFeedback({ ...options, source: "continuation" }, deps);
+    expect(second.kind).toBe("offered");
+    if (second.kind !== "offered") throw new Error(second.kind);
+    expect(viewConversation(f.paths.dir).state.connection?.offers[second.offerId]).toMatchObject({
+      kind: "sending",
+      offer: { inputId: "ordinary-second" },
+    });
+    expect(waits).toBe(1);
+    expect(presenceHeld(f.paths.dir)).toBe(false);
+  } finally {
+    f.close();
+  }
+});
+
+test("the idle native listener revokes readiness as soon as its owner becomes unverified", async () => {
+  const f = boundFixture(false);
+  let owner: boolean | undefined = true;
+  const authority = { callerOwns: () => true, ownerPresence: (): boolean | undefined => owner };
+  try {
+    const registration = registerBinding(f, authority);
+    let waits = 0;
+    const result = await listenNativeFeedback(
+      {
+        recordDir: f.paths.dir,
+        root: registration.workingDirectory,
+        signal: new AbortController().signal,
+        source: "explicit",
+        transport: { encode: (prompt) => prompt, maxBytes: 100_000 },
+      },
+      {
+        authority,
+        now: () => f.controls.now,
+        wait: async (ms) => {
+          waits += 1;
+          f.controls.now += ms;
+          owner = undefined;
+        },
+      },
+    );
+    expect(result.kind).toBe("held");
+    if (result.kind === "held") expect(result.reason).toBe("owner-unknown");
+    expect(waits).toBe(1);
+    const fresh = viewConversation(f.paths.dir);
+    expect(fresh.state.connection?.disabledReason).toBe("owner-lost");
+    expect(fresh.state.connection?.listenerId).toBeNull();
+    expect(Object.keys(fresh.state.connection?.offers ?? {})).toHaveLength(0);
+    expect(presenceHeld(f.paths.dir)).toBe(false);
+    expect(
+      readConnection(f.paths.dir, {
+        now: () => f.controls.now,
+        ownerPresence: authority.ownerPresence,
+      }).state,
+    ).toBe("owner-unknown");
+  } finally {
+    f.close();
+  }
+});
+
+test("native interruption during preparation keeps the input unsent and requires explicit listening again", async () => {
+  const f = boundFixture(false);
+  const authority = { callerOwns: () => true, ownerPresence: () => true };
+  try {
+    const registration = registerBinding(f, authority);
+    expect(
+      f.host.acceptInput({ id: "interrupted-feedback", text: "Keep this queued", mode: "queue" })
+        .verdict,
+    ).toBe("accepted");
+    const controller = new AbortController();
+    let waits = 0;
+    const deps = {
+      authority,
+      now: () => f.controls.now,
+      wait: async () => {
+        waits += 1;
+      },
+    };
+    const options = {
+      recordDir: f.paths.dir,
+      root: registration.workingDirectory,
+      signal: controller.signal,
+      source: "explicit" as const,
+      transport: {
+        encode: (prompt: string) => {
+          controller.abort();
+          return prompt;
+        },
+        maxBytes: 100_000,
+      },
+    };
+    const interrupted = await listenNativeFeedback(options, deps);
+    expect(interrupted).toEqual({ kind: "stopped", reason: "interrupted" });
+    const fresh = viewConversation(f.paths.dir);
+    expect(fresh.state.connection?.disabledReason).toBe("interrupted");
+    expect(Object.keys(fresh.state.connection?.offers ?? {})).toHaveLength(0);
+    expect(fresh.state.appliedInputs["interrupted-feedback"]).toBeUndefined();
+    expect(fresh.state.inputs.find((input) => input.id === "interrupted-feedback")?.text).toBe(
+      "Keep this queued",
+    );
+    expect(presenceHeld(f.paths.dir)).toBe(false);
+    const again = {
+      ...options,
+      signal: new AbortController().signal,
+      transport: { encode: (prompt: string) => prompt, maxBytes: 100_000 },
+    };
+    const automatic = await listenNativeFeedback({ ...again, source: "continuation" }, deps);
+    expect(automatic.kind).toBe("held");
+    expect(viewConversation(f.paths.dir).state.seq).toBe(fresh.state.seq);
+    const explicit = await listenNativeFeedback(again, deps);
+    expect(explicit.kind).toBe("offered");
+    expect(waits).toBe(0);
+  } finally {
+    f.close();
+  }
+});
+
+test("native preparation holds unsupported historical content without dropping it or dispatching feedback", async () => {
+  const f = boundFixture(false);
+  try {
+    f.acquire();
+    expect(
+      f.host.handleFrame(
+        JSON.stringify(
+          attach({
+            conversationId: "feedback",
+            harness: "codex",
+            profile: "headless-turn",
+            secret: f.host.state().secret,
+          }),
+        ),
+      ).verdict,
+    ).toBe("accepted");
+    expect(
+      f.host.handleFrame(
+        JSON.stringify({
+          kind: "event",
+          epoch: 1,
+          n: 1,
+          turnId: "previous-native-turn",
+          event: { kind: "future-native-result", content: "Retain this unclassified evidence" },
+        }),
+      ).verdict,
+    ).toBe("accepted");
+    expect(
+      f.host.handleFrame(JSON.stringify({ kind: "detach", epoch: 1, reason: "shutdown" })).verdict,
+    ).toBe("accepted");
+    expect(
+      f.host.writeConnection({
+        actionId: crypto.randomUUID(),
+        binding: f.controls.registration,
+        kind: "bound",
+      }).verdict,
+    ).toBe("accepted");
+    expect(f.host.writeConnection(f.enableFact()).verdict).toBe("accepted");
+    expect(
+      f.host.acceptInput({
+        id: "unclassified-context",
+        text: "Continue with all evidence",
+        mode: "queue",
+      }).verdict,
+    ).toBe("accepted");
+    const seq = f.host.state().seq;
+    let encodes = 0;
+    const prepared = prepareNativeFeedback(f.host, "unclassified-context", {
+      encode: (prompt) => {
+        encodes += 1;
+        return prompt;
+      },
+      maxBytes: 100_000,
+    });
+    expect(prepared.kind).toBe("held");
+    if (prepared.kind === "held") expect(prepared.reason).toBe("context-unavailable");
+    expect(encodes).toBe(0);
+    const fresh = viewConversation(f.paths.dir);
+    expect(fresh.state.seq).toBe(seq);
+    expect(Object.keys(fresh.state.connection?.offers ?? {})).toHaveLength(0);
+    expect(fresh.transcript.events[0]?.event.content).toBe("Retain this unclassified evidence");
+    expect(fresh.state.inputs.find((input) => input.id === "unclassified-context")?.text).toBe(
+      "Continue with all evidence",
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("native encoding failure leaves feedback intact and permits a later preparation", async () => {
+  const f = boundFixture();
+  try {
+    f.acquire();
+    expect(f.host.writeConnection(f.enableFact()).verdict).toBe("accepted");
+    expect(
+      f.host.acceptInput({
+        id: "encoding-failure",
+        text: "Keep the original request",
+        mode: "queue",
+      }).verdict,
+    ).toBe("accepted");
+    const seq = f.host.state().seq;
+    const failed = prepareNativeFeedback(f.host, "encoding-failure", {
+      encode: () => {
+        throw new Error("Native output encoder unavailable");
+      },
+      maxBytes: 100_000,
+    });
+    expect(failed.kind).toBe("held");
+    if (failed.kind === "held") expect(failed.reason).toBe("transport-encoding-failed");
+    expect(f.host.state().seq).toBe(seq);
+    expect(Object.keys(f.host.state().connection?.offers ?? {})).toHaveLength(0);
+    const prepared = prepareNativeFeedback(f.host, "encoding-failure", {
+      encode: (prompt) => JSON.stringify({ decision: "block", reason: prompt }),
+      maxBytes: 100_000,
+    });
+    expect(prepared.kind).toBe("ready");
+    if (prepared.kind !== "ready") throw new Error(prepared.kind);
+    expect(JSON.parse(prepared.payload).reason).toContain("Keep the original request");
+    expect(f.host.writeConnection(prepared.fact).verdict).toBe("accepted");
+  } finally {
+    f.close();
+  }
+});
+
+test("native preparation holds feedback when the transport has no verified finite output limit", async () => {
+  const f = boundFixture();
+  try {
+    f.acquire();
+    expect(f.host.writeConnection(f.enableFact()).verdict).toBe("accepted");
+    expect(
+      f.host.acceptInput({ id: "unverified-limit", text: "Keep this feedback", mode: "queue" })
+        .verdict,
+    ).toBe("accepted");
+    const seq = f.host.state().seq;
+    let encodes = 0;
+    for (const maxBytes of [Number.NaN, Number.POSITIVE_INFINITY, 0, -1, 1.5]) {
+      const result = prepareNativeFeedback(f.host, "unverified-limit", {
+        encode: (prompt) => {
+          encodes += 1;
+          return prompt;
+        },
+        maxBytes,
+      });
+      expect(result.kind).toBe("held");
+      if (result.kind === "held") expect(result.reason).toBe("transport-unverified");
+    }
+    expect(encodes).toBe(0);
+    expect(f.host.state().seq).toBe(seq);
+    expect(f.host.state().inputs.find((input) => input.id === "unverified-limit")?.text).toBe(
+      "Keep this feedback",
+    );
+    expect(Object.keys(f.host.state().connection?.offers ?? {})).toHaveLength(0);
+  } finally {
+    f.close();
+  }
+});
+
+test("native preparation measures the complete encoded payload and holds oversized feedback intact", async () => {
+  const f = boundFixture();
+  try {
+    f.acquire();
+    expect(f.host.writeConnection(f.enableFact()).verdict).toBe("accepted");
+    const text = `${'Quoted "words" and emoji 🎯. '.repeat(100)}END-OF-FEEDBACK`;
+    expect(f.host.acceptInput({ id: "large-feedback", text, mode: "queue" }).verdict).toBe(
+      "accepted",
+    );
+    const encode = (prompt: string) => JSON.stringify({ decision: "block", reason: prompt });
+    const full = prepareNativeFeedback(f.host, "large-feedback", { encode, maxBytes: 1_000_000 });
+    expect(full.kind).toBe("ready");
+    if (full.kind !== "ready") throw new Error(full.kind);
+    const bytes = Buffer.byteLength(full.payload);
+    const seq = f.host.state().seq;
+    const held = prepareNativeFeedback(f.host, "large-feedback", { encode, maxBytes: bytes - 1 });
+    expect(held.kind).toBe("held");
+    if (held.kind === "held") expect(held.reason).toBe("context-too-large");
+    expect(f.host.state().seq).toBe(seq);
+    expect(f.host.state().inputs.find((input) => input.id === "large-feedback")?.text).toBe(text);
+    expect(Object.values(f.host.state().connection?.offers ?? {})).toHaveLength(0);
+    const fits = prepareNativeFeedback(f.host, "large-feedback", { encode, maxBytes: bytes });
+    expect(fits.kind).toBe("ready");
+    if (fits.kind !== "ready") throw new Error(fits.kind);
+    expect(JSON.parse(fits.payload).reason).toContain(text);
+    expect(f.host.writeConnection(fits.fact).verdict).toBe("accepted");
   } finally {
     f.close();
   }

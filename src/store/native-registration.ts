@@ -16,7 +16,7 @@ import type { NativeBinding } from "../protocol/connection.js";
 import { connectionId, parseNativeBinding } from "../protocol/connection.js";
 import type { ProcessOwner } from "../protocol/process-owner.js";
 import { atomicSidecar } from "./atomic-file.js";
-import { classifyStoreFailure } from "./errors.js";
+import { classifyStoreFailure, type StoreFailureCode } from "./errors.js";
 import { type AppendLock, acquireAppendLock, LockError } from "./flock.js";
 
 export interface RegistrationAuthority {
@@ -29,7 +29,15 @@ export type NativeCapture = Omit<NativeBinding, "generation" | "registrationId">
 export interface RegistrationFailure {
   readonly message: string;
   readonly ok: false;
-  readonly reason: string;
+  readonly reason:
+    | StoreFailureCode
+    | "invalid-registration"
+    | "native-identity-conflict"
+    | "owner-unknown"
+    | "registration-busy"
+    | "registration-missing"
+    | "registration-store-unavailable"
+    | "stale-registration";
 }
 type RegistrationResult<TValue> =
   | { readonly ok: true; readonly value: TValue }
@@ -59,7 +67,7 @@ export function nativeRegistrationAuthority(): RegistrationAuthority {
   return { callerOwns: (owner) => callerOwns(owner, probe), ownerPresence };
 }
 
-const failure = (reason: string, message: string): RegistrationFailure => ({
+const failure = (reason: RegistrationFailure["reason"], message: string): RegistrationFailure => ({
   message,
   ok: false,
   reason,
