@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { readProcessOwner } from "../process-owner.js";
+import { ownerPresence, readProcessOwner } from "../process-owner.js";
 import { detectAnnotationBatch, filesOf } from "../protocol/annotations.js";
 import type { ProcessOwner } from "../protocol/process-owner.js";
 import { hashBlob } from "./blobs.js";
@@ -28,6 +28,16 @@ export const CONTEXT_SLICE_MAX = 65_536;
 const ownerKey = (owner: ProcessOwner): string =>
   hashBlob(Buffer.from(JSON.stringify([owner.startedAt, owner.executable]))).slice(0, 32);
 const ownedName = /^lucid-context-offer-([1-9][0-9]*)-([a-f0-9]{32})-[A-Za-z0-9]+$/;
+
+function removeContextCopy(path: string): void {
+  try {
+    rmSync(path, { recursive: true, force: true });
+  } catch {
+    process.emitWarning("A private context copy could not be removed", {
+      code: "LUCID_CONTEXT_CLEANUP",
+    });
+  }
+}
 
 /** The name carries process provenance before any bytes are copied. A crash
  * before a sidecar or an attempt append therefore still leaves a reapable copy.
@@ -68,18 +78,19 @@ export interface OfferedContext {
 export function offerContext(
   recordDir: string,
   content: string | ((attachmentsDir: string) => string),
+  receivingOwner?: ProcessOwner,
 ): OfferedContext {
   reapContextOffers();
   const record = realpathSync(recordDir);
-  const owner = readProcessOwner(process.pid);
-  if (!owner)
+  const owner = receivingOwner ?? readProcessOwner(process.pid);
+  if (!owner || ownerPresence(owner) !== true)
     throw new ContextPreparationError("The context copy's process owner could not be verified");
   const path = mkdtempSync(
     join(realpathSync(tmpdir()), `lucid-context-offer-${owner.pid}-${ownerKey(owner)}-`),
   );
   const within = relative(record, path);
   if (within === "" || (!within.startsWith(`..${sep}`) && within !== ".." && !isAbsolute(within))) {
-    rmSync(path, { recursive: true, force: true });
+    removeContextCopy(path);
     throw new ContextPreparationError("A context copy cannot be placed inside the record");
   }
   const attachmentsDir = join(path, "attachments");
@@ -91,14 +102,14 @@ export function offerContext(
       flag: "wx",
     });
   } catch (cause) {
-    rmSync(path, { recursive: true, force: true });
+    removeContextCopy(path);
     throw new ContextPreparationError("The offered context copy could not be written", { cause });
   }
   return {
     attachmentsDir,
     path,
     text,
-    close: () => rmSync(path, { recursive: true, force: true }),
+    close: () => removeContextCopy(path),
   };
 }
 
@@ -114,41 +125,46 @@ export interface OfferedAttachment {
 export function offerProjectedContext(
   recordDir: string,
   context: ConversationContext,
+  receivingOwner?: ProcessOwner,
 ): OfferedContext & { readonly attachments: readonly OfferedAttachment[] } {
   const attachments: OfferedAttachment[] = [];
-  const offered = offerContext(recordDir, (attachmentsDir) => {
-    const copies = new Map<string, string | null>();
-    for (const entry of [...context.history, context.pending]) {
-      if (entry.role !== "user") continue;
-      const batch = detectAnnotationBatch(entry.text);
-      if (!batch || "malformed" in batch) continue;
-      for (const [note, annotation] of batch.notes.entries()) {
-        for (const ref of filesOf(annotation)) {
-          let path = copies.get(ref.hash);
-          if (path === undefined) {
-            const delivery = deliverAttachments({
-              attachments: [{ ...ref, text: false }],
-              // Different blobs may have the same human filename.
-              offerDir: join(attachmentsDir, ref.hash),
-              recordDir,
-              textMax: 0,
-              typed: "",
+  const offered = offerContext(
+    recordDir,
+    (attachmentsDir) => {
+      const copies = new Map<string, string | null>();
+      for (const entry of [...context.history, context.pending]) {
+        if (entry.role !== "user") continue;
+        const batch = detectAnnotationBatch(entry.text);
+        if (!batch || "malformed" in batch) continue;
+        for (const [note, annotation] of batch.notes.entries()) {
+          for (const ref of filesOf(annotation)) {
+            let path = copies.get(ref.hash);
+            if (path === undefined) {
+              const delivery = deliverAttachments({
+                attachments: [{ ...ref, text: false }],
+                // Different blobs may have the same human filename.
+                offerDir: join(attachmentsDir, ref.hash),
+                recordDir,
+                textMax: 0,
+                typed: "",
+              });
+              const outcome = delivery.outcomes[0];
+              path = outcome?.kind === "named" ? outcome.path : null;
+              copies.set(ref.hash, path);
+            }
+            attachments.push({
+              entryId: entry.id,
+              hash: ref.hash,
+              noteIndex: note,
+              path,
             });
-            const outcome = delivery.outcomes[0];
-            path = outcome?.kind === "named" ? outcome.path : null;
-            copies.set(ref.hash, path);
           }
-          attachments.push({
-            entryId: entry.id,
-            hash: ref.hash,
-            noteIndex: note,
-            path,
-          });
         }
       }
-    }
-    return renderConversationContext(context, renderAttachmentReferences(attachments));
-  });
+      return renderConversationContext(context, renderAttachmentReferences(attachments));
+    },
+    receivingOwner,
+  );
   return { ...offered, attachments };
 }
 

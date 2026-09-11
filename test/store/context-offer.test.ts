@@ -246,3 +246,35 @@ test("orphaned context copies are removed after process loss while a live copy s
     rmSync(record, { recursive: true, force: true });
   }
 });
+
+test("a context copy survives its preparing helper when the receiving process is still alive", () => {
+  const record = mkdtempSync(join(tmpdir(), "lucid-native-context-owner-"));
+  const script = join(record, "prepare.ts");
+  const contextModule = new URL("../../src/store/context-offer.ts", import.meta.url).pathname;
+  const ownerModule = new URL("../../src/process-owner.ts", import.meta.url).pathname;
+  writeFileSync(
+    script,
+    [
+      `import { offerContext } from ${JSON.stringify(contextModule)};`,
+      `import { readProcessOwner } from ${JSON.stringify(ownerModule)};`,
+      `const owner = readProcessOwner(${process.pid});`,
+      'if (!owner) throw new Error("Missing receiving process");',
+      `const copy = offerContext(${JSON.stringify(record)}, "complete feedback survives", owner);`,
+      "process.stdout.write(copy.path);",
+    ].join("\n"),
+  );
+  let path = "";
+  try {
+    const helper = Bun.spawnSync([process.execPath, script]);
+    expect(helper.exitCode).toBe(0);
+    path = helper.stdout.toString();
+    expect(existsSync(path)).toBe(true);
+    const next = offerContext(record, "another preparation triggers cleanup");
+    next.close();
+    expect(existsSync(path)).toBe(true);
+    expect(readOfferedContext(path, 0, 64).text).toBe("complete feedback survives");
+  } finally {
+    if (path) rmSync(path, { force: true, recursive: true });
+    rmSync(record, { force: true, recursive: true });
+  }
+});

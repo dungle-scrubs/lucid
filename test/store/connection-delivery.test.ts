@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dispatch } from "../../src/cli/dispatch.js";
@@ -11,6 +11,7 @@ import { encodeAnnotationBatch } from "../../src/protocol/annotations.js";
 import type { ConnectionFact, NativeBinding } from "../../src/protocol/connection.js";
 import { readContentSource } from "../../src/protocol/content-comparison.js";
 import type { ProcessOwner } from "../../src/protocol/process-owner.js";
+import { putBlob } from "../../src/store/blobs.js";
 import { observeConnection, readConnection } from "../../src/store/connection-view.js";
 import {
   createConversationHost,
@@ -1783,6 +1784,138 @@ test("uninterpretable native attachment references cannot bypass complete-contex
     expect(result.kind).toBe("held");
     expect(encodes).toBe(0);
     expect(f.host.state().inputs.find((input) => input.id === "malformed-file")?.text).toBe(text);
+    expect(Object.values(f.host.state().connection?.offers ?? {})).toHaveLength(0);
+  } finally {
+    f.close();
+  }
+});
+
+test("verified native file transport offers complete copies with current locations", () => {
+  const f = boundFixture(false);
+  const owner = readProcessOwner(process.pid);
+  if (!owner) throw new Error("Missing native fixture owner");
+  let discard: (() => void) | undefined;
+  try {
+    f.controls.registration = { ...f.controls.registration, owner };
+    expect(
+      f.host.writeConnection({
+        actionId: crypto.randomUUID(),
+        binding: f.controls.registration,
+        kind: "bound",
+      }).verdict,
+    ).toBe("accepted");
+    f.acquire();
+    expect(f.host.writeConnection(f.enableFact()).verdict).toBe("accepted");
+    const bytes = Buffer.from([137, 80, 78, 71, 0, 255, 10]);
+    const hash = putBlob(f.paths.dir, bytes);
+    const text = encodeAnnotationBatch({
+      artifactId: "flow",
+      version: 1,
+      notes: [
+        {
+          note: "Inspect every pixel",
+          spots: [],
+          files: [
+            {
+              bytes: bytes.length,
+              contentType: "image/png",
+              hash,
+              name: "flow.png",
+              path: "/expired/flow.png",
+            },
+          ],
+        },
+      ],
+    });
+    expect(f.host.acceptInput({ id: "complete-file", mode: "queue", text }).verdict).toBe(
+      "accepted",
+    );
+    const result = prepareNativeFeedback(f.host, "complete-file", {
+      encode: (prompt) => prompt,
+      files: "local",
+      maxBytes: 100_000,
+    });
+    expect(result.kind).toBe("ready");
+    if (result.kind !== "ready") throw new Error(result.kind);
+    discard = result.discard;
+    const manifest = JSON.parse(
+      result.payload.split("\n\n").find((part) => part.startsWith('[{"entryId"')) ?? "null",
+    ) as { entryId: string; hash: string; path: string }[];
+    expect(manifest).toHaveLength(1);
+    const file = manifest[0];
+    if (!file) throw new Error("Missing file manifest");
+    expect(file.entryId).toBe("input:complete-file");
+    expect(file.hash).toBe(hash);
+    expect(file.path).not.toBe("/expired/flow.png");
+    expect(file.path.startsWith(f.paths.dir)).toBe(false);
+    expect(readFileSync(file.path)).toEqual(bytes);
+    expect(result.payload).toContain(text);
+    expect(result.payload).toContain("Use these locations instead of recorded historical paths");
+    expect(f.host.writeConnection(result.fact).verdict).toBe("accepted");
+  } finally {
+    discard?.();
+    f.close();
+  }
+});
+
+// Confirm that already implemented pre-dispatch failures dispose prepared file copies.
+test("native file copies are removed when final transport encoding exceeds its limit", () => {
+  const f = boundFixture(false);
+  const owner = readProcessOwner(process.pid);
+  if (!owner) throw new Error("Missing native fixture owner");
+  let copiedPath = "";
+  try {
+    f.controls.registration = { ...f.controls.registration, owner };
+    expect(
+      f.host.writeConnection({
+        actionId: crypto.randomUUID(),
+        binding: f.controls.registration,
+        kind: "bound",
+      }).verdict,
+    ).toBe("accepted");
+    f.acquire();
+    expect(f.host.writeConnection(f.enableFact()).verdict).toBe("accepted");
+    const bytes = Buffer.from("all attachment bytes");
+    const text = encodeAnnotationBatch({
+      artifactId: "flow",
+      version: 1,
+      notes: [
+        {
+          note: "Read all bytes",
+          spots: [],
+          files: [
+            {
+              bytes: bytes.length,
+              contentType: "text/plain",
+              hash: putBlob(f.paths.dir, bytes),
+              name: "notes.txt",
+            },
+          ],
+        },
+      ],
+    });
+    expect(f.host.acceptInput({ id: "oversized-file-offer", mode: "queue", text }).verdict).toBe(
+      "accepted",
+    );
+    const result = prepareNativeFeedback(f.host, "oversized-file-offer", {
+      encode: (prompt) => {
+        const manifest = JSON.parse(
+          prompt.split("\n\n").find((part) => part.startsWith('[{"entryId"')) ?? "null",
+        ) as { path: string }[];
+        copiedPath = manifest[0]?.path ?? "";
+        expect(readFileSync(copiedPath)).toEqual(bytes);
+        return prompt;
+      },
+      files: "local",
+      maxBytes: 1,
+    });
+    expect(result.kind).toBe("held");
+    if (result.kind === "held") expect(result.reason).toBe("context-too-large");
+    expect(copiedPath).not.toBe("");
+    expect(existsSync(copiedPath)).toBe(false);
+    expect(f.host.state().inputs.find((input) => input.id === "oversized-file-offer")?.text).toBe(
+      text,
+    );
     expect(Object.values(f.host.state().connection?.offers ?? {})).toHaveLength(0);
   } finally {
     f.close();

@@ -192,7 +192,10 @@ export async function listenNativeFeedback(
           snapshot.artifactHeads,
         );
         const prepared = prepareNativeFeedback(writer, inputId, transport);
-        if (signal.aborted || deps.now() >= participation.expiresAt) break;
+        if (signal.aborted || deps.now() >= participation.expiresAt) {
+          if (prepared.kind === "ready") prepared.discard();
+          break;
+        }
         if (prepared.kind === "held") {
           const refusal = write({
             actionId: crypto.randomUUID(),
@@ -209,8 +212,14 @@ export async function listenNativeFeedback(
           if (refusal) return refusal;
           continue;
         }
-        const refusal = write(prepared.fact);
-        if (refusal) return refusal;
+        let dispatched = false;
+        try {
+          const refusal = write(prepared.fact);
+          if (refusal) return refusal;
+          dispatched = true;
+        } finally {
+          if (!dispatched) prepared.discard();
+        }
         return { kind: "offered", offerId: prepared.fact.offer.id, payload: prepared.payload };
       }
       await deps.wait(Math.min(DEFAULT_POLL_MS, participation.expiresAt - deps.now()), signal);

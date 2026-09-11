@@ -2,9 +2,11 @@ import {
   ANNOTATION_FENCE,
   composeAnnotationPrompt,
   detectAnnotationBatch,
+  inspectAnnotationFiles,
 } from "../protocol/annotations.js";
 import type { ConnectionFact, NativePreparationReason } from "../protocol/connection.js";
 import { currentListener } from "../protocol/connection.js";
+import { offerProjectedContext, renderAttachmentReferences } from "../store/context-offer.js";
 import { renderConversationContext } from "../store/conversation-context.js";
 import type { ConversationHost } from "../store/conversation-host.js";
 import type { ComparisonHold } from "./comparison-delivery.js";
@@ -13,11 +15,14 @@ import { createComparisonDelivery } from "./comparison-delivery.js";
 /** Supplied only by an interface whose full-output limit has passed native acceptance. */
 export interface NativeFeedbackTransport {
   readonly encode: (prompt: string) => string;
+  /** Set only after the native session can read private local attachment copies. */
+  readonly files?: "local";
   readonly maxBytes: number;
 }
 
 export type PreparedNativeFeedback =
   | {
+      readonly discard: () => void;
       readonly fact: Extract<ConnectionFact, { kind: "offer-started" }>;
       readonly kind: "ready";
       readonly payload: string;
@@ -59,19 +64,26 @@ export function prepareNativeFeedback(
       message: "Connect the intended native session before delivering feedback.",
       reason: "listener-not-ready",
     };
-  const hasFileContext = (entry: typeof captured.context.pending): boolean => {
-    if (entry.role !== "user" || !entry.text.includes(ANNOTATION_FENCE)) return false;
+  const fileState = (entry: typeof captured.context.pending): "none" | "valid" | "invalid" => {
+    if (entry.role !== "user" || !entry.text.includes(ANNOTATION_FENCE)) return "none";
     const batch = detectAnnotationBatch(entry.text);
-    return (
-      !!batch &&
-      !("malformed" in batch) &&
-      batch.notes.some(
-        (note) =>
-          Object.hasOwn(note, "files") && (!Array.isArray(note.files) || note.files.length > 0),
-      )
-    );
+    if (!batch || "malformed" in batch) return "none";
+    let found = false;
+    for (const note of batch.notes) {
+      const refs = inspectAnnotationFiles(note);
+      if (!refs.complete) return "invalid";
+      found ||= refs.files.length > 0;
+    }
+    return found ? "valid" : "none";
   };
-  if (hasFileContext(captured.context.pending) || captured.context.history.some(hasFileContext))
+  let attachmentState = fileState(captured.context.pending);
+  for (const entry of captured.context.history) {
+    if (attachmentState === "invalid") break;
+    const state = fileState(entry);
+    if (state !== "none") attachmentState = state;
+  }
+  const needsFiles = attachmentState !== "none";
+  if (needsFiles && transport.files !== "local")
     return {
       kind: "held",
       message:
@@ -110,27 +122,61 @@ export function prepareNativeFeedback(
     },
   };
   const conversationId = captured.state.conversationId;
-  const prompt = [
-    renderConversationContext(context),
-    "<lucid-offer>",
-    JSON.stringify({
-      conversationId,
-      epoch: listener.epoch,
-      inputId,
-      offerId,
-      participationId: listener.id,
-    }),
-    "Before working on this feedback, confirm receipt from this native session:",
-    `lucid connection receipt '${conversationId}' --offer '${offerId}' --json`,
-    "After answering, asking a question, refusing, or failing, write a temporary JSON file with kind (answer, question, refusal, or failure) and plain-text text. Record that response with the command below, replacing RESPONSE_FILE with its path:",
-    `lucid connection respond '${conversationId}' --offer '${offerId}' --request RESPONSE_FILE --json`,
-    "Artifact writes alone do not record the response outcome. A refused receipt or response leaves this offer held; inspect the reported reason before continuing.",
-    "</lucid-offer>",
-  ].join("\n\n");
+  let offered: ReturnType<typeof offerProjectedContext> | undefined;
+  const discard = (): void => offered?.close();
+  if (needsFiles) {
+    try {
+      if (attachmentState === "invalid") throw new Error("Attachment metadata is incomplete");
+      // Extract references from recorded inputs: composed teaching contains an example annotation fence.
+      // Only attachment paths are advertised; the generic sidecar retains the recorded context.
+      offered = offerProjectedContext(host.dir, captured.context, listener.registration.owner);
+      if (offered.attachments.some((file) => file.path === null))
+        throw new Error("Attachment bytes are missing");
+    } catch {
+      discard();
+      return {
+        kind: "held",
+        message:
+          "The complete attached files could not be prepared for this native session. The saved input is held intact.",
+        reason: "context-unavailable",
+      };
+    }
+  }
+  let prompt: string;
+  try {
+    prompt = [
+      renderConversationContext(
+        context,
+        offered ? renderAttachmentReferences(offered.attachments) : undefined,
+      ),
+      "<lucid-offer>",
+      JSON.stringify({
+        conversationId,
+        epoch: listener.epoch,
+        inputId,
+        offerId,
+        participationId: listener.id,
+      }),
+      "Before working on this feedback, confirm receipt from this native session:",
+      `lucid connection receipt '${conversationId}' --offer '${offerId}' --json`,
+      "After answering, asking a question, refusing, or failing, write a temporary JSON file with kind (answer, question, refusal, or failure) and plain-text text. Record that response with the command below, replacing RESPONSE_FILE with its path:",
+      `lucid connection respond '${conversationId}' --offer '${offerId}' --request RESPONSE_FILE --json`,
+      "Artifact writes alone do not record the response outcome. A refused receipt or response leaves this offer held; inspect the reported reason before continuing.",
+      "</lucid-offer>",
+    ].join("\n\n");
+  } catch {
+    discard();
+    return {
+      kind: "held",
+      message: "The complete feedback could not be rendered. The saved input is held intact.",
+      reason: "context-unavailable",
+    };
+  }
   let payload: string;
   try {
     payload = transport.encode(prompt);
   } catch {
+    discard();
     return {
       kind: "held",
       message:
@@ -138,14 +184,17 @@ export function prepareNativeFeedback(
       reason: "transport-encoding-failed",
     };
   }
-  if (Buffer.byteLength(payload, "utf8") > transport.maxBytes)
+  if (Buffer.byteLength(payload, "utf8") > transport.maxBytes) {
+    discard();
     return {
       kind: "held",
       message:
         "The complete feedback and current document exceed this native transport's limit. The saved input is held intact.",
       reason: "context-too-large",
     };
+  }
   return {
+    discard,
     fact: {
       actionId: crypto.randomUUID(),
       kind: "offer-started",
