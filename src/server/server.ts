@@ -6,6 +6,7 @@ import {
   titleState,
 } from "../protocol/conversation-title.js";
 import { HubError } from "../protocol/hub-errors.js";
+import { readConnection } from "../store/connection-view.js";
 import { renameConversation } from "../store/conversation-naming.js";
 import { readRecordMetadata } from "../store/record-identity.js";
 
@@ -491,6 +492,13 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             requestManaged(id, inputId);
             return json({ verdict: "accepted", inputId, actionId: value.actionId });
           });
+        }
+
+        const connection = path.match(/^\/api\/conversations\/([^/]+)\/connection$/);
+        if (connection && req.method === "GET") {
+          const id = decodeURIComponent(connection[1] ?? "");
+          if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+          return json(readConnection(dirForRequest(id)));
         }
 
         const read = path.match(/^\/api\/conversations\/([^/]+)\/?$/);

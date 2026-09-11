@@ -18,6 +18,7 @@ export class StoreError extends Error {
       | "missing-secret"
       | "invalid-secret"
       | "corrupt-log"
+      | "unsupported-connection-payload"
       | "fold-refused"
       | "append-failed",
     message: string,
@@ -33,7 +34,9 @@ export const classifyStoreFailure = (cause: unknown): StoreFailureCode | undefin
   if (cause instanceof LockError)
     return cause.code === "lock-timeout" ? "record-busy" : "record-write-failed";
   if (cause instanceof StoreError)
-    return cause.code === "corrupt-log" || cause.code === "fold-refused"
+    return cause.code === "corrupt-log" ||
+      cause.code === "fold-refused" ||
+      cause.code === "unsupported-connection-payload"
       ? "record-unreadable"
       : "record-write-failed";
   return undefined;

@@ -48,6 +48,7 @@ import { openHonoringDriver } from "../modes/honor.js";
 import { createHeadlessHost, hostSeamFor } from "../modes/host.js";
 import { createManagedSource } from "../modes/managed-source.js";
 import { ownerPresence, readProcessOwner, terminalPresence } from "../process-owner.js";
+import { nativeOwners } from "../protocol/connection.js";
 import { HubError } from "../protocol/hub-errors.js";
 import type { ChannelStatus, Frame } from "../protocol/index.js";
 import { inputFrame } from "../protocol/index.js";
@@ -218,13 +219,28 @@ export const openDrivenConversation = async (
   // seam becomes real: one adapter = hypothetical, two = real.
   const presenceVal = presenceProbe();
   const previous = host.state();
+  const explicitHarness = opts.harnessName ?? opts.harness;
+  if (
+    previous.connection &&
+    explicitHarness !== undefined &&
+    explicitHarness !== previous.connection.binding.harness
+  ) {
+    host.close();
+    throw new HubError(
+      "This conversation is bound to a different native harness. Continue its existing native session; feedback remains saved.",
+      "E-HUB-03",
+      409,
+      [],
+    );
+  }
   const managed = opts.managed ?? Object.keys(previous.executions).length > 0;
+  const owners = nativeOwners(previous);
   const terminal = previous.lastTerminalParticipation;
   const probeOwner = (owner: import("../protocol/process-owner.js").ProcessOwner | undefined) =>
     owner === undefined ? presenceProbe() : (opts.ownerPresence ?? ownerPresence)(owner);
-  const ownerState = terminalPresence(previous.terminalParticipations, probeOwner);
-  const ownerAlive = terminal !== null && ownerState === true;
-  if (terminal !== null && ownerState === undefined) {
+  const ownerState = terminalPresence(owners, probeOwner);
+  const ownerAlive = owners.length > 0 && ownerState === true;
+  if (owners.length > 0 && ownerState === undefined) {
     host.close();
     throw new HubError(
       "The previous terminal owner could not be verified. Keep the prompt pending until ownership is resolved.",
@@ -239,7 +255,9 @@ export const openDrivenConversation = async (
   const action = decideActionFn(status);
   if (ownerAlive || action.action === "await-reattach") {
     const resumeInstruction = ownerAlive
-      ? `The terminal owner for ${conversationId} is still alive. Wait for it to exit or reconnect.`
+      ? previous.connection
+        ? "Your interactive session is still open. Tell it to resume listening."
+        : `The terminal owner for ${conversationId} is still alive. Wait for it to exit or reconnect.`
       : `The interactive source for ${conversationId} is unattached. Reconnect it before continuing.`;
     try {
       host.close();
@@ -251,6 +269,16 @@ export const openDrivenConversation = async (
       status,
       resumeInstruction,
     };
+  }
+
+  if (previous.connection) {
+    host.close();
+    throw new HubError(
+      "Same-session continuation has not been admitted. Feedback remains saved in this conversation.",
+      "E-HUB-03",
+      409,
+      [],
+    );
   }
 
   // Presence is held for the source's lifetime and kernel-released on
@@ -344,9 +372,16 @@ export const openDrivenConversation = async (
       }
     }
 
+    if (host.state().connection)
+      throw new HubError(
+        "The conversation became bound before launch. Same-session continuation must be admitted first.",
+        "E-HUB-03",
+        409,
+        [],
+      );
     const latest = host.state().terminalParticipations.at(-1);
     if (latest?.profile === "interactive") {
-      const alive = terminalPresence(host.state().terminalParticipations, probeOwner);
+      const alive = terminalPresence(nativeOwners(host.state()), probeOwner);
       if (alive !== false)
         throw new HubError(
           "Terminal ownership changed before launch. Wait for its process to exit or verify ownership.",

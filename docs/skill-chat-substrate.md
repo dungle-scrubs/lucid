@@ -228,6 +228,21 @@ shipped capability.
 
 ## Refusals are the signal
 
+Connection control writes report `invalid-connection` for malformed facts,
+`connection-unverified` when the current native registration or owner cannot
+be corroborated, and `connection-conflict` when an action or binding conflicts
+with its durable identity. These are internal control operations, not source
+frames. Keep the published artifact and saved feedback; correct registration
+or ownership before retrying. A connection refusal never authorizes a fresh
+native session.
+
+`connection-folder-mismatch` keeps the artifact published when its working
+folder differs from the native registration. `connection-not-admitted` means
+the bound conversation has no same-session continuation admission; saved
+feedback must remain pending. `connection-folder-unverified`
+means the record has no associated folder or path evidence is unavailable.
+Connect from the intended native session and verify the folder before retrying.
+
 Internal execution writes also report typed issues: `invalid-execution`
 for a malformed fact, `executor-required` without the executor lease,
 `execution-stale` for an outdated attempt or conflicting action identity,

@@ -12,11 +12,11 @@ import {
 import { createHcnRunner } from "../harness/hcn-runner.js";
 import { type HarnessStartup, prepareNodeHarness } from "../harness/node-deps.js";
 import type { HarnessRunner } from "../harness/runner.js";
-import { isProfile, SETTINGS_FIELDS, type Settings } from "../protocol/driver-settings.js";
+import { SETTINGS_FIELDS, type Settings, settingsShape } from "../protocol/driver-settings.js";
 import { HubError } from "../protocol/hub-errors.js";
 import { createWithReceipt } from "../store/creation.js";
 import type { DiscoveryIndex } from "../store/discovery.js";
-import { isDriverField, isDriverHarness, preferenceState } from "../store/driver-preference.js";
+import { isDriverField, preferenceState } from "../store/driver-preference.js";
 import { readRecordMetadata } from "../store/record-identity.js";
 import { locationProjection, replaceSettings } from "../store/settings.js";
 import { driverChoices, driverChoicesFromFacts } from "./driver-choices.js";
@@ -27,26 +27,6 @@ const objectBody = (value: unknown): Record<string, unknown> => {
     throw new HubError("Expected an object.", "E-HUB-03");
   return value as Record<string, unknown>;
 };
-function settingsShape(value: unknown): Settings {
-  const choice = objectBody(value);
-  if (!isDriverHarness(choice.harness))
-    throw new HubError("Choose a supported harness.", "E-HUB-03");
-  for (const field of ["model", "effort", ...(choice.provider === undefined ? [] : ["provider"])]) {
-    if (!isDriverField(choice[field]))
-      throw new HubError(
-        `${field} must be a nonempty, control-free string of at most 128 characters.`,
-        "E-HUB-03",
-      );
-  }
-  if (!isProfile(choice.profile)) throw new HubError("Choose a supported mode.", "E-HUB-03");
-  return {
-    harness: choice.harness,
-    model: String(choice.model),
-    effort: String(choice.effort),
-    profile: choice.profile,
-    ...(choice.provider === undefined ? {} : { provider: String(choice.provider) }),
-  };
-}
 export async function resolveSettings(value: unknown, runner: HarnessRunner): Promise<Settings> {
   const choice = settingsShape(value);
   const refuse = (

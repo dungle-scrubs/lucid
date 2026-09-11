@@ -11,7 +11,7 @@
  * it is a pure OS primitive.
  */
 
-import { closeSync, mkdirSync, openSync } from "node:fs";
+import { closeSync, constants, fstatSync, mkdirSync, openSync } from "node:fs";
 import { dirname } from "node:path";
 
 type FlockFn = (fd: number, op: number) => number;
@@ -75,6 +75,7 @@ export type LockEvent =
   | { readonly event: "lock.release"; readonly target: string; readonly label?: string };
 
 export interface AcquireOpts {
+  readonly privateFile?: boolean;
   readonly timeoutMs?: number;
   readonly label?: string;
   readonly onEvent?: (event: LockEvent) => void;
@@ -110,9 +111,24 @@ export const acquireWith = (
     : lockTargetPath;
   const lockPath = `${normalizedTarget}.lock`;
   mkdirSync(dirname(lockPath), { recursive: true });
-  const lockFd = openSync(lockPath, "a");
+  const lockFd = opts?.privateFile
+    ? openSync(
+        lockPath,
+        constants.O_CREAT | constants.O_APPEND | constants.O_WRONLY | constants.O_NOFOLLOW,
+        0o600,
+      )
+    : openSync(lockPath, "a");
   let handedOff = false;
   try {
+    if (opts?.privateFile) {
+      const stat = fstatSync(lockFd);
+      if (!stat.isFile() || (stat.mode & 0o777) !== 0o600 || stat.uid !== process.getuid?.())
+        throw new LockError(
+          "lock-unavailable",
+          lockTargetPath,
+          "Registration lock must be a private regular file owned by this user.",
+        );
+    }
     const start = performance.now();
     const deadline = start + timeoutMs;
     for (;;) {

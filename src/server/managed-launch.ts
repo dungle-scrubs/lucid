@@ -1,5 +1,6 @@
 import { statSync } from "node:fs";
 import { ownerPresence, terminalPresence } from "../process-owner.js";
+import { nativeOwners } from "../protocol/connection.js";
 import { viewConversation } from "../store/conversation-host.js";
 import type { Discovery } from "../store/discovery.js";
 import { pathsForDir } from "../store/errors.js";
@@ -36,11 +37,10 @@ export function createManagedLaunchReconciler(
           cached?.fingerprint === fingerprint ? cached.snapshot : viewConversation(record.dir);
         states.set(record.dir, { fingerprint, snapshot });
         const state = snapshot.state;
+        const owners = nativeOwners(state);
         if (
-          state.lastTerminalParticipation &&
-          terminalPresence(state.terminalParticipations, (owner) =>
-            owner ? ownerPresence(owner) : undefined,
-          ) !== false
+          owners.length > 0 &&
+          terminalPresence(owners, (owner) => (owner ? ownerPresence(owner) : undefined)) !== false
         )
           continue;
         const inputId = managedCandidates(record.dir, state, snapshot.artifactHeads)[0];

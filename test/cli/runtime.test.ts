@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { conversations } from "../../src/cli/record-addressing.js";
@@ -66,6 +66,121 @@ const fakePresence = (): { handle: PresenceHandle; acquire: typeof acquirePresen
   };
   return { handle, acquire };
 };
+
+const registrationRoots = new Set<string>();
+const registrationRoot = (): string => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-registered-owner-"));
+  registrationRoots.add(root);
+  return root;
+};
+afterEach(() => {
+  for (const root of registrationRoots) rmSync(root, { force: true, recursive: true });
+  registrationRoots.clear();
+});
+
+test("a registered live author blocks execution before its first listener attaches", async () => {
+  const root = registrationRoot();
+  const { paths } = createConversationRecord(root, "registered-owner", { workingDirectory: root });
+  const binding = {
+    generation: crypto.randomUUID(),
+    harness: "codex" as const,
+    interface: "codex-cli" as const,
+    nativeSessionId: "native-author",
+    owner: { executable: "/native/codex", pid: 123, startedAt: "123:456" },
+    registrationId: crypto.randomUUID(),
+    workingDirectory: root,
+  };
+  const writer = createConversationHost(paths.dir, {
+    connectionAuthority: () => binding,
+    executorLease: () => false,
+    now: () => 1000,
+    onEffect: () => {},
+    onRecord: () => {},
+    ownerPresence: () => true,
+    presence: () => undefined,
+  });
+  expect(
+    writer.writeConnection({ actionId: crypto.randomUUID(), binding, kind: "bound" }).verdict,
+  ).toBe("accepted");
+  writer.acceptInput(
+    { id: "feedback", mode: "queue", text: "Keep this for the author." },
+    { managed: true },
+  );
+  writer.close();
+  const result = await openDrivenConversation({
+    acquirePresenceFn: () => {
+      throw new Error("Must not acquire execution for a live registered owner");
+    },
+    conversationId: "registered-owner",
+    ownerPresence: () => true,
+    rootDir: root,
+    runner: fakeRunner,
+  });
+  expect(result).toMatchObject({
+    kind: "await-reattach",
+    resumeInstruction: "Your interactive session is still open. Tell it to resume listening.",
+  });
+  const reopened = openWriter(paths.dir);
+  try {
+    expect(reopened.hasAcceptedInput("feedback")).toBe(true);
+  } finally {
+    reopened.close();
+  }
+});
+
+test("a registered conversation refuses an explicit launch through a different harness", async () => {
+  const root = registrationRoot();
+  const { paths } = createConversationRecord(root, "registered-departed", {
+    workingDirectory: root,
+    preference: {
+      v: 1,
+      revision: 1,
+      harness: "codex",
+      model: "test-model",
+      effort: "high",
+      profile: "headless-turn",
+    },
+  });
+  const binding = {
+    generation: crypto.randomUUID(),
+    harness: "codex" as const,
+    interface: "codex-cli" as const,
+    nativeSessionId: "native-author",
+    owner: { executable: "/native/codex", pid: 123, startedAt: "123:456" },
+    registrationId: crypto.randomUUID(),
+    workingDirectory: root,
+  };
+  const writer = createConversationHost(paths.dir, {
+    connectionAuthority: () => binding,
+    executorLease: () => false,
+    now: () => 1000,
+    onEffect: () => {},
+    onRecord: () => {},
+    ownerPresence: () => true,
+    presence: () => undefined,
+  });
+  expect(
+    writer.writeConnection({ actionId: crypto.randomUUID(), binding, kind: "bound" }).verdict,
+  ).toBe("accepted");
+  writer.acceptInput(
+    { id: "feedback", mode: "queue", text: "Keep the same native session." },
+    { managed: true },
+  );
+  writer.close();
+  await expect(
+    openDrivenConversation({
+      acquirePresenceFn: fakePresence().acquire,
+      conversationId: "registered-departed",
+      harnessName: "claude",
+      createHeadlessHostFn: () => {
+        throw new Error("Fresh native launch was reached");
+      },
+      ownerPresence: () => false,
+      rootDir: root,
+      runner: fakeRunner,
+    }),
+  ).rejects.toMatchObject({ code: "E-HUB-03" });
+});
 
 test("legacy runtime does not drain managed inputs armed during lease expiry", async () => {
   const root = mkdtempSync(join(tmpdir(), "lucid-runtime-managed-fence-"));

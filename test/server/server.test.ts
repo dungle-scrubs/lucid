@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { dispatch } from "../../src/cli/dispatch.js";
 import { sendInput } from "../../src/cli/send.js";
 import { startServe } from "../../src/cli/serve.js";
 import { ARTIFACT_TITLE_MAX } from "../../src/protocol/artifact-title.js";
@@ -47,6 +48,30 @@ afterEach(async () => {
 });
 
 describe("the way in", () => {
+  test("browser and CLI report the same connection state without exposing record authority", async () => {
+    const response = await api(`/api/conversations/${CONV}/connection`);
+    expect(response.status).toBe(200);
+    const browser = await response.json();
+    const output: string[] = [];
+    await dispatch(["connection", "status", CONV, "--json"], {
+      rootDir: root,
+      onOutput: (line) => output.push(line),
+    });
+    const cli = JSON.parse(output[0] ?? "null");
+    expect(cli).toMatchObject({
+      conversationId: CONV,
+      message: browser.message,
+      state: "setup-required",
+    });
+    expect(browser).toMatchObject({
+      interface: null,
+      nativeSessionId: null,
+      reason: "registration-missing",
+      state: "setup-required",
+    });
+    expect(browser).not.toHaveProperty("secret");
+    expect(browser).not.toHaveProperty("owner");
+  });
   test("binds loopback, and the port is the one the kernel gave back", () => {
     expect(server.port).toBeGreaterThan(0);
     expect(server.url).toBe(`http://127.0.0.1:${server.port}`);

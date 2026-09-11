@@ -37,12 +37,20 @@ import { completeLegacyPreference, type DriverChoice } from "./driver-preference
  * the flock primitive, or the record mint.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import type { WebLinkProbe } from "../links/check-web-link.js";
 import { validateArtifactLinks } from "../links/validate-artifact-links.js";
 import { ownerPresence, terminalPresence } from "../process-owner.js";
 import type { ArtifactLinkRefusal } from "../protocol/artifact-links.js";
 import { linkRefusal } from "../protocol/artifact-links.js";
+import type { NativeBinding } from "../protocol/connection.js";
+import {
+  nativeOwners,
+  parseConnectionFact,
+  parseNativeBinding,
+  reduceConnection,
+  refuseConnection,
+} from "../protocol/connection.js";
 import {
   type ContextFact,
   type ContextOfferRequest,
@@ -96,7 +104,7 @@ import {
   type LogEntry,
   readArtifactVersion,
 } from "./log.js";
-import { readRecordIdentity } from "./record-identity.js";
+import { readRecordIdentity, readRecordMetadata } from "./record-identity.js";
 
 const REDACTED = "redacted";
 
@@ -112,6 +120,8 @@ export type {
 } from "./log.js";
 
 export interface HostDeps {
+  /** Called under the append lock. The caller holds the registration lock for this transaction. */
+  readonly connectionAuthority?: () => NativeBinding | undefined;
   readonly probeArtifactLink?: WebLinkProbe;
   readonly ownerPresence?: (
     owner: import("../protocol/process-owner.js").ProcessOwner,
@@ -197,6 +207,7 @@ export const readRecordFiles = (
 };
 
 export interface ConversationHost {
+  writeConnection(fact: unknown): ReduceResult;
   captureDispatch(
     inputId: string,
     from: number | ((state: ChannelState) => number),
@@ -422,7 +433,9 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
       const result =
         "issue" in decision
           ? refuseExecution(state, at, decision.issue)
-          : reduceExecution(state, fact, at, deps.executorLease());
+          : state.connection && fact?.kind === "attempt-started"
+            ? refuseExecution(state, at, "connection-not-admitted")
+            : reduceExecution(state, fact, at, deps.executorLease());
       return {
         result,
         frame: null,
@@ -435,6 +448,45 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
   };
 
   return {
+    writeConnection: (raw) => {
+      const at = deps.now();
+      return transactDynamic((state) => {
+        const fact = parseConnectionFact(raw);
+        const authority = parseNativeBinding(deps.connectionAuthority?.());
+        const verified =
+          fact &&
+          authority &&
+          JSON.stringify(fact.binding) === JSON.stringify(authority) &&
+          (deps.ownerPresence ?? ownerPresence)(authority.owner) === true;
+        let folderMatches: boolean | undefined;
+        if (fact) {
+          const folder = readRecordMetadata(dir).workingDirectory;
+          try {
+            const nativeFolder = realpathSync(fact.binding.workingDirectory);
+            if (typeof folder === "string") folderMatches = realpathSync(folder) === nativeFolder;
+          } catch {
+            /* Unavailable path evidence cannot bind a session. */
+          }
+        }
+        const result = !fact
+          ? refuseConnection(state, at, "invalid-connection")
+          : !verified
+            ? refuseConnection(state, at, "connection-unverified")
+            : folderMatches === undefined
+              ? refuseConnection(state, at, "connection-folder-unverified")
+              : !folderMatches
+                ? refuseConnection(state, at, "connection-folder-mismatch")
+                : reduceConnection(state, fact, at);
+        return {
+          entry:
+            fact && result.verdict === "accepted" && result.state !== state
+              ? { at, connection: fact, payloadVersion: 2, src: "execution", v: 1 }
+              : null,
+          frame: null,
+          result,
+        };
+      });
+    },
     captureDispatch: (inputId, from) =>
       log.inspect((snapshot) => captureDispatchContext(dir, inputId, from, snapshot)),
     writePreparedExecution: (fact, stamp) =>
@@ -577,6 +629,15 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
         ...(owner === undefined ? {} : { owner }),
       };
       return transact(entry, (s) => {
+        if (
+          s.connection &&
+          decoded.frame.kind === "attach" &&
+          decoded.frame.profile !== "interactive"
+        )
+          return {
+            result: refuseConnection(s, at, "connection-not-admitted"),
+            frame: decoded.frame,
+          };
         const r = reduce(s, decoded.frame, at, {
           ...(decoded.frame.kind === "attach" && decoded.frame.profile !== "interactive"
             ? { ownersDeparted: true }
@@ -590,7 +651,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
           r.verdict === "accepted" &&
           decoded.frame.kind === "attach" &&
           decoded.frame.profile !== "interactive" &&
-          terminalPresence(s.terminalParticipations, (owner) =>
+          terminalPresence(nativeOwners(s), (owner) =>
             owner === undefined ? deps.presence() : (deps.ownerPresence ?? ownerPresence)(owner),
           ) !== false
         )
@@ -834,6 +895,8 @@ export const viewArtifactVersion = (
 export const openWriter = (
   dir: string,
   deps: {
+    connectionAuthority?: HostDeps["connectionAuthority"];
+    ownerPresence?: HostDeps["ownerPresence"];
     now?: () => number;
     presence?: () => boolean | undefined;
     expectedConversationId?: string;
@@ -841,6 +904,8 @@ export const openWriter = (
   } = {},
 ): ConversationHost =>
   createConversationHost(dir, {
+    connectionAuthority: deps.connectionAuthority,
+    ownerPresence: deps.ownerPresence,
     probeArtifactLink: deps.probeArtifactLink,
     expectedConversationId: deps.expectedConversationId,
     now: deps.now ?? Date.now,

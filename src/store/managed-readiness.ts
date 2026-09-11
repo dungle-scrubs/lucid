@@ -30,6 +30,8 @@ export function managedCandidates(
   state: ChannelState,
   heads: ReadonlyMap<string, number> = new Map(),
 ): readonly string[] {
+  // Bound conversations require same-session admission before any executor may start.
+  if (state.connection) return [];
   const prerequisites = new Map<ExecutionHold["code"], string>();
   const prerequisiteFor = (code: ExecutionHold["code"]): string => {
     const value = prerequisites.get(code) ?? managedPrerequisite(dir, state, code);

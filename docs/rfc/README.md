@@ -1,5 +1,8 @@
 # Active RFCs
 
+RFC 26 proposes [interactive artifact conversation continuity](26_interactive-artifact-conversation-continuity.rfc.md).
+It is accepted for implementation after three Muse review passes. Native integration acceptance remains required for each interface.
+
 RFC 23 is implemented. Its proposal and cross-family review are preserved in
 commit `1e7bd70`. Current contracts live in [artifact links](../artifacts.md#link-navigation-and-validation)
 and [ADR 0008](../adr/0008-browser-and-agent-content-have-separate-authority.md).
@@ -33,7 +36,9 @@ commit `000381b`; its current contract is in [the design reference](../design.md
 Current reading-view design is listed in the
 [documentation index](../README.md#browser-design).
 
-The highest allocated RFC number is **23**. The next RFC is **24**.
+The highest allocated RFC number is **26**. The next RFC is **27**.
+RFC 24 was allocated to Claude startup compatibility; RFC 25 is allocated to
+automatic recovery in concurrent work. Their numbers remain reserved.
 Never reset numbering because completed files have been removed. Before
 allocating, check this high-water mark, active filenames, and Git history;
 use one greater than the highest number allocated and update this mark.

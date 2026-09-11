@@ -33,6 +33,7 @@ import {
   truncateSync,
   writeSync,
 } from "node:fs";
+import { reduceConnection } from "../protocol/connection.js";
 import { reduceContextCoverage } from "../protocol/context-coverage.js";
 import { reduceExecution } from "../protocol/execution.js";
 import { ARTIFACT_BYTES_MAX } from "../protocol/frames.js";
@@ -61,6 +62,13 @@ import { withRecordLock } from "./record-identity.js";
 /** One durable log entry: the verbatim input to `foldLog`. */
 export type LogEntry =
   | CursorEntry
+  | {
+      readonly v: 1;
+      readonly at: number;
+      readonly src: "execution";
+      readonly payloadVersion: 2;
+      readonly connection: import("../protocol/connection.js").ConnectionFact;
+    }
   | {
       readonly v: 1;
       readonly at: number;
@@ -565,8 +573,13 @@ const applyEntry = (
 ): { result: ReduceResult; frame: import("../protocol/index.js").Frame | null } => {
   switch (entry.src) {
     case "execution":
+      if (entry.payloadVersion === 2)
+        return { result: reduceConnection(state, entry.connection, entry.at), frame: null };
       if (entry.payloadVersion !== 1)
-        throw new StoreError("corrupt-log", "Unsupported execution payload");
+        throw new StoreError(
+          "unsupported-connection-payload",
+          "Unsupported connection control payload. Use a reader that supports this record.",
+        );
       return { result: reduceExecution(state, entry.fact, entry.at, true), frame: null };
     case "context":
       if (entry.payloadVersion !== 1)

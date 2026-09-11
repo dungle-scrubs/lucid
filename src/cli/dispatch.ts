@@ -44,7 +44,7 @@ import { readStdin } from "./hooks/delivery.js";
 import { type InjectResult, inject } from "./hooks/inject.js";
 
 import { type MappedCommand, mapSubcommand } from "./mapping.js";
-import { type Conversations, conversations } from "./record-addressing.js";
+import { type Conversations, commandRecordDir, conversations } from "./record-addressing.js";
 import type { RunOpts, RunResult } from "./run.js";
 import { runConversation } from "./run.js";
 import type { SendOpts } from "./send.js";
@@ -91,6 +91,8 @@ export interface DispatchDeps {
 }
 
 export type DispatchResult =
+  | { readonly kind: "connection-status" }
+  | { readonly kind: "artifact-publish" }
   | { readonly kind: "hcn-supervisor" }
   | { readonly kind: "context" }
   | { readonly kind: "name-titles" }
@@ -125,6 +127,24 @@ export const dispatch = async (
 
   // Help is terminal — no seams, no root, no flock.
   if (mapped.kind === "help") return { kind: "help", message: mapped.message };
+  if (mapped.kind === "connection-status") {
+    const { readConnection } = await import("../store/connection-view.js");
+    const records = (deps.conversationsFactory ?? conversations)(deps.rootDir);
+    const result = readConnection(commandRecordDir(records, mapped.conversationId));
+    (deps.onOutput ?? console.log)(mapped.json ? JSON.stringify(result) : result.message);
+    return { kind: "connection-status" };
+  }
+  if (mapped.kind === "artifact-publish") {
+    const { publishArtifact, readPublicationRequest } = await import("./artifact-publish.js");
+    const result = await publishArtifact(
+      await readPublicationRequest(mapped.request),
+      deps.rootDir,
+    );
+    (deps.onOutput ?? console.log)(
+      mapped.json ? JSON.stringify(result) : `${result.artifactUrl}\n${result.connection.message}`,
+    );
+    return { kind: "artifact-publish" };
+  }
   if (mapped.kind === "context") {
     const { readOfferedContext } = await import("../store/context-offer.js");
     const result = readOfferedContext(mapped.path, mapped.offset, mapped.bytes);

@@ -113,6 +113,12 @@ export const REFUSAL_ISSUES = [
   "execution-ineligible",
   "executor-required",
   "invalid-execution",
+  "invalid-connection",
+  "connection-conflict",
+  "connection-unverified",
+  "connection-folder-mismatch",
+  "connection-folder-unverified",
+  "connection-not-admitted",
 ] as const;
 export type RefusalIssue = (typeof REFUSAL_ISSUES)[number];
 

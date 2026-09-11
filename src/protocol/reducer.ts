@@ -130,6 +130,7 @@ export interface OpenQuestion {
 }
 
 export interface ChannelState {
+  readonly connection: import("./connection.js").ConnectionState | null;
   readonly conversationId: string;
   /** Minted by the host at record creation (D-004); checked only at attach. */
   readonly secret: string;
@@ -300,6 +301,7 @@ export const initialChannelState = (init: {
   readonly conversationId: string;
   readonly secret: string;
 }): ChannelState => ({
+  connection: null,
   conversationId: init.conversationId,
   secret: init.secret,
   seq: 0,
