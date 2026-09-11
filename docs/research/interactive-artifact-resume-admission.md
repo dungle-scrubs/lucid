@@ -25,3 +25,37 @@ The probe must distinguish native refusal, opening an existing shared runtime, i
 Test fresh-process resume separately from in-app session switching. A native lock that refuses a second process may provide exclusion but does not itself provide automatic waiting and reconnect. A hook that prevents model requests may still run after history was loaded or changed. No result should silently weaken one active native writer to one Lucid feedback sender.
 
 If these native boundaries cannot support the accepted flow, return with a concrete alternative and its user-visible cost before revising the contract. Keep the ownership decision open in the meantime. This note does not implement a launcher, replace the user's interface, or promise protection against arbitrary unintegrated processes.
+
+## Native concurrency probes, 2026-09-11
+
+**Observed:** native behavior differs. Codex CLI and Muse rejected competing interactive resume. Pi and Claude Code allowed interactive model requests while a headless request for the same native session was still pending. These are controlled native-process observations, not a claim that every version or launch configuration behaves identically.
+
+| Interface | Competing resume result | Continuation after headless exit |
+| --- | --- | --- |
+| Codex CLI 0.154.0 | Native conflict screen: This conversation is open in another app. It offered R to Retry. No second model request occurred before the headless request was released. | Explicit Retry loaded the completed headless answer. The subsequent interactive request included that answer. No automatic reconnect was observed. |
+| Muse 1.1.1-R2514.1 | Native resume reported the exact session already open in another window and returned to its picker. The probe exited the picker without selecting another session. | A new exact-ID resume after headless exit restored the headless echo response. No automatic reconnect was observed. |
+| Pi 0.85.1 | Interactive --session accepted the same ID and completed a local-provider request while the headless request remained held. The interactive request lacked the pending headless answer. | Both processes completed and exited. This probe does not establish safe merging or updated history in the already-loaded interactive process. |
+| Claude Code 2.1.268 | Interactive --resume accepted the same ID and completed a local-provider request while the headless request remained held. Both the interactive exit hint and HCN identity retained the same ID. | Both processes completed and exited. No automatic fork was observed in this path. This does not establish history consistency across the concurrent writers. |
+| Codex desktop | Not tested in the actual desktop window. | CLI evidence does not establish desktop acceptance. |
+
+### Probe method and evidence
+
+Codex, Pi, and Claude used loopback HTTP response stubs. They performed no provider inference. Muse's decisive lock probe used its native echo provider, seeded by an interactive session, with a project PreLLMCall hook holding the headless process until a release file appeared. All operated on synthetic session IDs and test folders. No user conversation was resumed or selected. Muse's conflict UI exposed its session picker; no picker contents are retained as evidence. No Herdr pane was created in this round.
+
+All headless runs went through HCN. Successful Pi and Claude probes explicitly used Lucid's installed HCN 0.6.7. Test session identities were obtained from HCN/native results and independently matched to the fixture. CLI controls supplied the competing interactive requests. Timestamps in the local-provider receipts place those requests before the headless release. The Claude probe's initial hold expired during first-run onboarding; it is not counted as concurrency evidence. A second headless request, after setup, remained held while the competing interactive request completed.
+
+Exact synthetic native IDs are retained in the local proof JSON files below. They are test-run evidence, not implementation constants.
+
+Local ignored evidence is under artifacts/evidence/interactive-artifact-wayfinder/: codex-admission-probe.mjs, codex-admission-proof.json, muse-lock-proof.json, pi-admission-probe.mjs, pi-admission-proof.json, claude-admission-probe.mjs, and claude-admission-proof.json. Their location files point at the temporary native fixtures and request receipts. Each test process and local provider listener was stopped; targeted process and listener checks found none remaining.
+
+Two preparation failures are excluded from these results. An initial Muse headless seed used native arguments after HCN's passthrough separator, but Muse treated them as prompt text and used the Meta provider. Its responses were synthetic but were not an echo or concurrency proof. The decisive probe instead created a verified native echo session first and resumed its stored provider without passthrough. Pi's isolated session-store override did not match HCN's existing-session lookup; the final probe used an explicit per-fixture directory matching HCN's documented-in-code cwd layout. Neither failure proves native concurrent ownership behavior. Custom session-store support and passthrough interpretation remain separate integration compatibility findings.
+
+### Decision now exposed
+
+The ordinary native resume path does not enforce single-writer admission for Pi or Claude in these probes. It would be incorrect to generalize Codex/Muse's native conflict protection to them. It would also be incorrect to call all hook/extension guards impossible: this work has not proved a complete fail-closed guard across their startup, cancellation, timeout, direct-input, and history-refresh paths.
+
+Candidate A is a Lucid-controlled launch/reconnect entry point for participating sessions: wait before starting the native process, coordinate admission with the managed headless launch, finish the active turn, then start the exact native session from its updated history. This is a new user-facing workflow requirement. It protects only launches that use that entry point; ordinary native resume can bypass it unless a separate native or installed launch guard is proven. Do not describe the helper alone as universal protection.
+
+Candidate B retains ordinary native resume and holds automatic takeover for interfaces without proven native admission until an enforceable guard exists. Interactive feedback remains in scope. This narrows immediately deliverable automatic takeover, without pretending those interfaces have parity or silently creating new sessions.
+
+Fit check: the actual user is one person moving between a native coding session and browser artifact review. CONTEXT.md says Lucid owns the durable record and provides artifact reading and annotation. Both candidates serve continuation without competing writers. A adds a launch/reconnect surface and usage constraint; B narrows available automatic continuation. Those are product choices for the user, not conclusions to manufacture from the probes. No candidate has been accepted by this research, and the ownership ticket remains open.
