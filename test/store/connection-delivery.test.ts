@@ -1296,6 +1296,235 @@ test("native interruption during preparation keeps the input unsent and requires
   }
 });
 
+test("a native preparation hold survives continuation while other eligible feedback proceeds", async () => {
+  const f = boundFixture(false);
+  const authority = { callerOwns: () => true, ownerPresence: () => true };
+  try {
+    const registration = registerBinding(f, authority);
+    const note = "Keep this original feedback for a later retry";
+    expect(
+      f.host.acceptInput({ id: "held-feedback", text: note, mode: "queue" }, { managed: true })
+        .verdict,
+    ).toBe("accepted");
+    expect(
+      f.host.acceptInput({
+        id: "eligible-feedback",
+        text: "Answer this independent question",
+        mode: "queue",
+      }).verdict,
+    ).toBe("accepted");
+    let encodes = 0;
+    const options = {
+      recordDir: f.paths.dir,
+      root: registration.workingDirectory,
+      signal: new AbortController().signal,
+      source: "explicit" as const,
+      transport: {
+        encode: (prompt: string) => {
+          encodes += 1;
+          if (encodes === 1) throw new Error("Transport encoding failed for this input");
+          return prompt;
+        },
+        maxBytes: 100_000,
+      },
+    };
+    const deps = {
+      authority,
+      now: () => f.controls.now,
+      wait: async (ms: number) => {
+        f.controls.now += ms;
+      },
+    };
+    const first = await listenNativeFeedback(options, deps);
+    expect(first.kind).toBe("offered");
+    if (first.kind !== "offered") throw new Error(first.kind);
+    const fresh = viewConversation(f.paths.dir);
+    expect(fresh.state.connection?.offers[first.offerId]?.offer.inputId).toBe("eligible-feedback");
+    const hold = fresh.state.connection?.heldInputs["held-feedback"];
+    expect(hold?.reason).toBe("transport-encoding-failed");
+    expect(fresh.state.inputs.find((input) => input.id === "held-feedback")?.text).toBe(note);
+    expect(fresh.state.appliedInputs["held-feedback"]).toBeUndefined();
+    expect(f.host.controlConnection({ kind: "receipt", offerId: first.offerId }).verdict).toBe(
+      "accepted",
+    );
+    expect(
+      f.host.controlConnection({
+        kind: "respond",
+        offerId: first.offerId,
+        outcome: { kind: "answer", text: "Independent answer" },
+      }).verdict,
+    ).toBe("accepted");
+    expect(
+      f.host.acceptInput({
+        id: "later-feedback",
+        text: "Another independent question",
+        mode: "queue",
+      }).verdict,
+    ).toBe("accepted");
+    const continued = await listenNativeFeedback({ ...options, source: "continuation" }, deps);
+    expect(continued.kind).toBe("offered");
+    if (continued.kind !== "offered") throw new Error(continued.kind);
+    const after = viewConversation(f.paths.dir);
+    expect(after.state.connection?.offers[continued.offerId]?.offer.inputId).toBe("later-feedback");
+    expect(after.state.connection?.heldInputs["held-feedback"]).toEqual(hold);
+    expect(encodes).toBe(3);
+    expect(presenceHeld(f.paths.dir)).toBe(false);
+  } finally {
+    f.close();
+  }
+});
+
+test("explicit native listening rechecks a comparison hold recorded by the prior execution path", async () => {
+  const f = boundFixture(false);
+  const authority = { callerOwns: () => true, ownerPresence: () => true };
+  try {
+    f.acquire();
+    expect(
+      (
+        await f.host.writeArtifact({
+          artifactId: "flow",
+          author: "agent",
+          bytes: "<p>Current saved document.</p>",
+          contentType: "text/html",
+          version: 1,
+        })
+      ).verdict,
+    ).toBe("accepted");
+    expect(
+      f.host.acceptInput(
+        { id: "legacy-held", text: "Recheck the saved document", mode: "queue" },
+        { managed: true },
+      ).verdict,
+    ).toBe("accepted");
+    // Synthetic prior worker failure composed through the public execution seam.
+    expect(
+      f.host.writeExecution({
+        kind: "held",
+        inputId: "legacy-held",
+        attempt: 0,
+        hold: {
+          code: "E-COMP-07",
+          reason: "The prior session could not prepare the current document",
+          actions: ["save-newer-version", "attach-session"],
+          prerequisite: "comparison-content",
+          comparison: { artifactId: "flow", explicitEpoch: 0, failedHead: 1 },
+        },
+      }).verdict,
+    ).toBe("accepted");
+    const registration = registerBinding(f, authority);
+    f.controls.lease?.release();
+    const result = await listenNativeFeedback(
+      {
+        recordDir: f.paths.dir,
+        root: registration.workingDirectory,
+        signal: new AbortController().signal,
+        source: "explicit",
+        transport: { encode: (prompt) => prompt, maxBytes: 100_000 },
+      },
+      {
+        authority,
+        now: () => f.controls.now,
+        wait: async (ms) => {
+          f.controls.now += ms;
+        },
+      },
+    );
+    expect(result.kind).toBe("offered");
+    if (result.kind !== "offered") throw new Error(result.kind);
+    expect(result.payload).toContain("Current saved document.");
+    expect(
+      viewConversation(f.paths.dir).state.connection?.offers[result.offerId]?.offer.inputId,
+    ).toBe("legacy-held");
+    expect(presenceHeld(f.paths.dir)).toBe(false);
+  } finally {
+    f.close();
+  }
+});
+
+test("a newer document or explicit listening releases the original held native input", async () => {
+  for (const recovery of ["new-document", "explicit-listen"] as const) {
+    const f = boundFixture(false);
+    const authority = { callerOwns: () => true, ownerPresence: () => true };
+    try {
+      const registration = registerBinding(f, authority);
+      for (const [id, text] of [
+        ["held-original", "Keep this exact original feedback"],
+        ["independent", "Answer independently"],
+      ] as const)
+        expect(f.host.acceptInput({ id, text, mode: "queue" }, { managed: true }).verdict).toBe(
+          "accepted",
+        );
+      let encodes = 0;
+      const options = {
+        recordDir: f.paths.dir,
+        root: registration.workingDirectory,
+        signal: new AbortController().signal,
+        source: "explicit" as const,
+        transport: {
+          encode: (prompt: string) => {
+            if (++encodes === 1) throw new Error("Synthetic transport failure");
+            return prompt;
+          },
+          maxBytes: 100_000,
+        },
+      };
+      const deps = {
+        authority,
+        now: () => f.controls.now,
+        wait: async (ms: number) => {
+          f.controls.now += ms;
+        },
+      };
+      const first = await listenNativeFeedback(options, deps);
+      expect(first.kind).toBe("offered");
+      if (first.kind !== "offered") throw new Error(first.kind);
+      expect(
+        viewConversation(f.paths.dir).state.connection?.heldInputs["held-original"],
+      ).toBeDefined();
+      expect(f.host.controlConnection({ kind: "receipt", offerId: first.offerId }).verdict).toBe(
+        "accepted",
+      );
+      expect(
+        f.host.controlConnection({
+          kind: "respond",
+          offerId: first.offerId,
+          outcome: { kind: "answer", text: "Independent response" },
+        }).verdict,
+      ).toBe("accepted");
+      if (recovery === "new-document")
+        expect(
+          (
+            await f.host.writeArtifact({
+              artifactId: "changed",
+              author: "human",
+              bytes: "<p>New current reference</p>",
+              contentType: "text/html",
+              version: 1,
+            })
+          ).verdict,
+        ).toBe("accepted");
+      const next = await listenNativeFeedback(
+        { ...options, source: recovery === "new-document" ? "continuation" : "explicit" },
+        deps,
+      );
+      expect(next.kind).toBe("offered");
+      if (next.kind !== "offered") throw new Error(next.kind);
+      expect(next.payload).toContain("Keep this exact original feedback");
+      const fresh = viewConversation(f.paths.dir);
+      expect(fresh.state.connection?.offers[next.offerId]?.offer.inputId).toBe("held-original");
+      expect(fresh.state.connection?.heldInputs["held-original"]).toBeUndefined();
+      expect(fresh.state.appliedInputs["held-original"]).toBeUndefined();
+      expect(fresh.transcript.inputs.map((input) => input.id)).toEqual([
+        "held-original",
+        "independent",
+      ]);
+      expect(encodes).toBe(3);
+    } finally {
+      f.close();
+    }
+  }
+});
+
 test("native preparation holds unsupported historical content without dropping it or dispatching feedback", async () => {
   const f = boundFixture(false);
   try {

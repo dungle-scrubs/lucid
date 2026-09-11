@@ -43,6 +43,27 @@ export function managedCandidates(
   return eligibleExecutions(dir, state, heads);
 }
 
+/** A hold follows material prerequisites; automatic continuation does not reset it. */
+export function nativePreparationPrerequisite(
+  dir: string,
+  state: ChannelState,
+  heads: ReadonlyMap<string, number>,
+): string {
+  const metadata = readRecordMetadata(dir);
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        artifacts: [...heads].sort(([a], [b]) => a.localeCompare(b)),
+        explicitListenerEpoch: state.connection?.explicitListenerEpoch ?? 0,
+        location: {
+          revision: metadata.locationRevision ?? 0,
+          workingDirectory: metadata.workingDirectory ?? null,
+        },
+      }),
+    )
+    .digest("hex");
+}
+
 /** Eligibility does not grant an executor lease or authorize native dispatch. */
 export function nativeInputCandidates(
   dir: string,
@@ -52,12 +73,20 @@ export function nativeInputCandidates(
   if (!state.connection || hasUnresolvedOffer(state.connection) || hasUnsettledExecution(state))
     return [];
   const managed = new Set(eligibleExecutions(dir, state, heads));
+  let prerequisite: string | undefined;
+  const unheld = (id: string): boolean => {
+    const hold = state.connection?.heldInputs[id];
+    if (!hold) return true;
+    prerequisite ??= nativePreparationPrerequisite(dir, state, heads);
+    return hold.prerequisite !== prerequisite;
+  };
   return state.inputs
     .filter(
       (input) =>
         !Object.hasOwn(state.appliedInputs, input.id) &&
         input.rejections === 0 &&
-        (!Object.hasOwn(state.executions, input.id) || managed.has(input.id)),
+        (!Object.hasOwn(state.executions, input.id) || managed.has(input.id)) &&
+        unheld(input.id),
     )
     .sort((a, b) => a.seq - b.seq)
     .map((input) => input.id);
@@ -88,6 +117,7 @@ function eligibleExecutions(
         return (
           prior !== undefined &&
           ((heads.get(prior.artifactId) ?? 0) > prior.failedHead ||
+            (state.connection?.explicitListenerEpoch ?? 0) > prior.explicitEpoch ||
             Object.values(state.explicitAttachments).some((epoch) => epoch > prior.explicitEpoch))
         );
       }

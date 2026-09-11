@@ -10,7 +10,10 @@ import type { ProtocolIssue } from "../protocol/frames.js";
 import { createConversationHost, viewConversation } from "../store/conversation-host.js";
 import { classifyStoreFailure, type StoreFailureCode } from "../store/errors.js";
 import { LockError } from "../store/flock.js";
-import { nativeInputCandidates } from "../store/managed-readiness.js";
+import {
+  nativeInputCandidates,
+  nativePreparationPrerequisite,
+} from "../store/managed-readiness.js";
 import type { RegistrationAuthority, RegistrationFailure } from "../store/native-registration.js";
 import {
   nativeRegistrationAuthority,
@@ -183,9 +186,29 @@ export async function listenNativeFeedback(
       const snapshot = viewConversation(recordDir);
       const inputId = nativeInputCandidates(recordDir, snapshot.state, snapshot.artifactHeads)[0];
       if (inputId !== undefined) {
+        const prerequisite = nativePreparationPrerequisite(
+          recordDir,
+          snapshot.state,
+          snapshot.artifactHeads,
+        );
         const prepared = prepareNativeFeedback(writer, inputId, transport);
         if (signal.aborted || deps.now() >= participation.expiresAt) break;
-        if (prepared.kind === "held") return prepared;
+        if (prepared.kind === "held") {
+          const refusal = write({
+            actionId: crypto.randomUUID(),
+            kind: "input-held",
+            hold: {
+              epoch: participation.epoch,
+              inputId,
+              message: prepared.message,
+              participationId: participation.id,
+              prerequisite,
+              reason: prepared.reason,
+            },
+          });
+          if (refusal) return refusal;
+          continue;
+        }
         const refusal = write(prepared.fact);
         if (refusal) return refusal;
         return { kind: "offered", offerId: prepared.fact.offer.id, payload: prepared.payload };

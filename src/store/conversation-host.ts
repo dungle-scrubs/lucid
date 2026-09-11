@@ -46,6 +46,7 @@ import { linkRefusal } from "../protocol/artifact-links.js";
 import type { ConnectionControl, NativeBinding } from "../protocol/connection.js";
 import {
   connectionId,
+  connectionParticipation,
   connectionRegistration,
   nativeOwners,
   parseConnectionFact,
@@ -107,7 +108,7 @@ import {
   type LogEntry,
   readArtifactVersion,
 } from "./log.js";
-import { nativeInputCandidates } from "./managed-readiness.js";
+import { nativeInputCandidates, nativePreparationPrerequisite } from "./managed-readiness.js";
 import { readRecordIdentity, readRecordMetadata } from "./record-identity.js";
 
 const REDACTED = "redacted";
@@ -466,15 +467,11 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
       const cancellation = fact?.kind === "input-cancelled";
       const disabling = fact?.kind === "listener-disabled";
       const registration = fact ? connectionRegistration(state.connection, fact) : undefined;
-      const needsExecutor = fact?.kind === "listener-enabled" || fact?.kind === "offer-started";
-      const participation =
-        fact?.kind === "listener-enabled"
-          ? fact.participation
-          : fact?.kind === "offer-started"
-            ? state.connection?.participations[fact.offer.participationId]
-            : fact?.kind === "listener-disabled"
-              ? state.connection?.participations[fact.participationId]
-              : undefined;
+      const needsExecutor =
+        fact?.kind === "listener-enabled" ||
+        fact?.kind === "offer-started" ||
+        fact?.kind === "input-held";
+      const participation = fact ? connectionParticipation(state.connection, fact) : undefined;
       const currentProcess = needsExecutor || disabling ? readProcessOwner(process.pid) : undefined;
       const settlement =
         cancellation ||
@@ -522,6 +519,13 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
             state.connection?.revision,
           ) !== fact.stamp
         )
+          preparationIssue = "execution-stale";
+      }
+      if (fact?.kind === "input-held" && !repeated) {
+        const heads = log.artifactHeads();
+        if (nativeInputCandidates(dir, state, heads)[0] !== fact.hold.inputId)
+          preparationIssue = "execution-ineligible";
+        else if (nativePreparationPrerequisite(dir, state, heads) !== fact.hold.prerequisite)
           preparationIssue = "execution-stale";
       }
       let folderMatches: boolean | undefined = settlement ? true : undefined;

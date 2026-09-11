@@ -1,5 +1,5 @@
 import { composeAnnotationPrompt } from "../protocol/annotations.js";
-import type { ConnectionFact } from "../protocol/connection.js";
+import type { ConnectionFact, NativePreparationReason } from "../protocol/connection.js";
 import { currentListener } from "../protocol/connection.js";
 import { renderConversationContext } from "../store/conversation-context.js";
 import type { ConversationHost } from "../store/conversation-host.js";
@@ -21,13 +21,7 @@ export type PreparedNativeFeedback =
   | {
       readonly kind: "held";
       readonly message: string;
-      readonly reason:
-        | ComparisonHold["code"]
-        | "context-too-large"
-        | "context-unavailable"
-        | "listener-not-ready"
-        | "transport-encoding-failed"
-        | "transport-unverified";
+      readonly reason: NativePreparationReason;
     };
 
 /** Preparation grants no dispatch authority. The caller must commit fact before returning payload. */
