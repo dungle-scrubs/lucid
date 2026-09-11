@@ -48,4 +48,12 @@ These are consequences of the evidence, not new product decisions:
 
 The candidate serves the existing user: one person who opens an artifact from an interactive coding session and sends browser feedback back to that session. It serves Lucid's stated purpose of routing the live conversation into a durable record and back to its viewers. Scope direction: hold. It does not introduce a dashboard, another conversation, or a replacement session.
 
-The unresolved product question is whether a visibly active waiting session is acceptable for Codex and Muse. Fully idle background wakeup is not established by these probes. The connection ticket remains open pending that answer and the remaining desktop validation; no interface was silently removed from scope.
+The user subsequently accepted visibly active waiting for Codex and Muse. Fully idle background wakeup is not established by these probes. No interface is removed from scope.
+
+## Live Herdr confirmation
+
+**Observed, 2026-09-11:** at the user's request, the prepared test ran in a new Herdr pane, w2M:pM, named lucid-listener-test. The installed Codex CLI was 0.154.0 and used gpt-6-astra at high effort. This was a native behavior check, not a second model's review. The two exact project hooks were reviewed and trusted through the native CLI. One submitted prompt produced LUCID_DESKTOP_INITIAL, then the waiting hook supplied synthetic feedback, and the model produced LUCID_DESKTOP_FEEDBACK without a second user message. Both Stop callbacks and SessionStart reported one native ID and one canonical working folder. Herdr's reported native ID matched that hook ID. The literal marker names came from the earlier fixture; they do not identify the tested interface.
+
+This strengthens the earlier local-response-stub result: a real model acted on the continuation. It remains terminal evidence. The separate desktop-window acceptance check is still required before claiming desktop support. The user's direction to run the test in Herdr did not remove that interface from the product scope.
+
+Local ignored evidence: herdr-listener-proof.json, herdr-listener-hook-events.ndjson, and herdr-listener-visible.txt under the same evidence directory. The pane remains available for inspection; the model turn is complete and the one-shot test hook is no longer waiting.

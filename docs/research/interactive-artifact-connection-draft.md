@@ -1,6 +1,6 @@
 # Connecting the session that creates an artifact
 
-Draft for [Decide how artifact creation connects the originating session](https://github.com/dungle-scrubs/lucid/issues/257). This specifies proposed Lucid operations, not commands that already ship. User-approved behavior is recorded on the issue; this draft remains open while the installed Codex desktop path is checked.
+Connection design for [Decide how artifact creation connects the originating session](https://github.com/dungle-scrubs/lucid/issues/257). This specifies planned Lucid operations, not commands that already ship. User-approved behavior is recorded on the issue. Live desktop validation remains an acceptance requirement, distinct from deciding this contract.
 
 ## The operation
 
@@ -28,7 +28,7 @@ When a harness changes its current native session through new, resume, clear, fo
 
 | Interface | Connection mechanism | Standing |
 | --- | --- | --- |
-| Codex CLI | Trusted lifecycle hooks supply identity. Artifact publication binds the record. A synchronous session-owned wait returns feedback as a native continuation. | Native SessionStart and Stop path observed with codex-cli 0.153.4 in the isolated terminal probe. The user accepts visibly active waiting. |
+| Codex CLI | Trusted lifecycle hooks supply identity. Artifact publication binds the record. A synchronous session-owned wait returns feedback as a native continuation. | Native SessionStart and Stop path observed with codex-cli 0.153.4 in the isolated terminal probe and 0.154.0 with a real model in Herdr. The user accepts visibly active waiting. |
 | Codex desktop | Use the desktop's own supported lifecycle integration and the same session-owned wait, without requiring Lucid to connect to a hidden app-server endpoint. | Official documentation includes lifecycle hooks in ChatGPT Work/Codex. Installation, trust, hook execution, and ownership evidence in the installed desktop still require confirmation. The CLI test is not that confirmation. |
 | Muse CLI | Startup-loaded hooks supply identity and invoke a synchronous wait in the originating session. | Native hook identity, context injection, continuation, interruption, and wait expiry observed with Muse 1.1.1-R2514.1. The user accepts visibly active waiting. External session-message sender admission is not required for this path. |
 | Pi CLI | An installed extension reads its current session identity and folder, binds the record, and submits accepted feedback through the current-session extension API. | Documented extension primitives. Complete Lucid extension delivery and acknowledgement still need implementation tests and a live confirmation. Do not substitute a new RPC runtime for the existing TUI. |
@@ -58,6 +58,6 @@ Lucid owns the record, publication and binding, durable queue, exact-record reco
 
 The delivery decision specifies ordering, context preparation, native acknowledgement, partial delivery, and listener loss. The ownership decision specifies confirmed exit, desktop client lifetimes, reopen races, and same-ID headless continuation. The interface prototype presents these states using the accepted explanations. Those responsibilities are not settled by a successful hook return.
 
-Before this connection decision closes, the desktop result must identify the installed interface, prove or explicitly fail its setup/identity/listening path, and state any support limitation for a user decision. The full product will additionally require deterministic registration and reconnect scenarios plus separate live confirmations for each interface.
+Before desktop support is claimed, its live result must identify the installed interface, prove or explicitly fail its setup/identity/listening path, and state any support limitation for a user decision. The full product also requires deterministic registration and reconnect scenarios plus separate live confirmations for each interface. This is an implementation acceptance gate, not a reason to leave the connection mechanism undecided. The user's requested Herdr test supplies terminal evidence only; it does not waive desktop acceptance or approve shipping an unsupported desktop interface.
 
 Evidence: [native listener tests](interactive-artifact-session-listener.md), [existing Lucid and HCN boundary](interactive-artifact-recovery.md), and the capability reports linked from the decision issue. [Official plugin support](https://learn.chatgpt.com/docs/plugins#use-plugins-from-a-supported-surface) documents hooks in the Codex runtime including ChatGPT Work; [hook semantics](https://learn.chatgpt.com/docs/hooks) owns their input and continuation contract. Both documentation sources were retrieved on 2026-09-11. On that date Computer Use refused access to the installed desktop app with the stated reason that it was not allowed for safety reasons. No alternate UI-control path was attempted.
