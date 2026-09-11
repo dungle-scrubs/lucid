@@ -30,7 +30,7 @@
   },
   "dependencies": {
     "@assistant-ui/react": "^0.10",
-    "@dungle-scrubs/harness-cli-normalizer": "0.6.6",
+    "@dungle-scrubs/harness-cli-normalizer": "0.6.7",
     "@radix-ui/react-popover": "^1.1.23",
     "@radix-ui/react-tooltip": "^1.2.16",
     "@tanstack/react-form": "1.33.5",
