@@ -1,5 +1,6 @@
 import { EventKind } from "./events.js";
 import type { AttemptStart, ContextBoundary } from "./execution.js";
+import { parseContextBoundary } from "./execution.js";
 import { HARNESS_NAMES, type HarnessName, isWireId } from "./frames.js";
 import type { ChannelState, ReduceResult } from "./reducer.js";
 
@@ -151,15 +152,8 @@ export function parseContextFact(raw: unknown): ContextFact | null {
   )
     return null;
   const { context: c, managed: m } = raw;
-  if (
-    !object(c) ||
-    !natural(c.from) ||
-    !natural(c.through) ||
-    c.from > c.through ||
-    typeof c.digest !== "string" ||
-    !/^[a-f0-9]{64}$/.test(c.digest)
-  )
-    return null;
+  const context = parseContextBoundary(c);
+  if (!context) return null;
   let managed: ContextSupply["managed"];
   if (m !== undefined) {
     if (!object(m) || !id(m.inputId) || !natural(m.attempt) || m.attempt === 0) return null;
@@ -170,7 +164,7 @@ export function parseContextFact(raw: unknown): ContextFact | null {
     harness: raw.harness as HarnessName,
     sessionId: raw.sessionId,
     turnId: raw.turnId,
-    context: { digest: c.digest, from: c.from, through: c.through },
+    context,
     ...(managed ? { managed } : {}),
   };
   if (raw.kind === "coverage-offered") return { ...supply, kind: raw.kind };

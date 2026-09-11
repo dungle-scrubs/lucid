@@ -45,6 +45,7 @@ import type { ArtifactLinkRefusal } from "../protocol/artifact-links.js";
 import { linkRefusal } from "../protocol/artifact-links.js";
 import type { NativeBinding } from "../protocol/connection.js";
 import {
+  connectionRegistration,
   nativeOwners,
   parseConnectionFact,
   parseNativeBinding,
@@ -68,7 +69,7 @@ import {
   reduceExecution,
   refuseExecution,
 } from "../protocol/execution.js";
-import type { Frame, HarnessName } from "../protocol/frames.js";
+import type { Frame, HarnessName, ProtocolIssue } from "../protocol/frames.js";
 import { supportsManagedInput } from "../protocol/frames.js";
 import { HubError } from "../protocol/hub-errors.js";
 import type { Effect } from "../protocol/index.js";
@@ -86,6 +87,7 @@ import {
   reduce,
   type TransitionRecord,
 } from "../protocol/index.js";
+import { sameProcessOwner } from "../protocol/process-owner.js";
 import { enqueueManagedInput, inputFrame } from "../protocol/reducer.js";
 import {
   captureDispatchContext,
@@ -104,6 +106,7 @@ import {
   type LogEntry,
   readArtifactVersion,
 } from "./log.js";
+import { nativeInputCandidates } from "./managed-readiness.js";
 import { readRecordIdentity, readRecordMetadata } from "./record-identity.js";
 
 const REDACTED = "redacted";
@@ -452,31 +455,85 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
       const at = deps.now();
       return transactDynamic((state) => {
         const fact = parseConnectionFact(raw);
-        const authority = parseNativeBinding(deps.connectionAuthority?.());
-        const verified =
-          fact &&
-          authority &&
-          JSON.stringify(fact.binding) === JSON.stringify(authority) &&
-          (deps.ownerPresence ?? ownerPresence)(authority.owner) === true;
-        let folderMatches: boolean | undefined;
-        if (fact) {
+        const cancellation = fact?.kind === "input-cancelled";
+        const disabling = fact?.kind === "listener-disabled";
+        const registration = fact ? connectionRegistration(state.connection, fact) : undefined;
+        const needsExecutor = fact?.kind === "listener-enabled" || fact?.kind === "offer-started";
+        const settlement =
+          cancellation ||
+          disabling ||
+          fact?.kind === "receipt-confirmed" ||
+          fact?.kind === "offer-outcome";
+        let authority: NativeBinding | null = null;
+        let verified = cancellation;
+        if (!cancellation) {
+          try {
+            authority = parseNativeBinding(deps.connectionAuthority?.());
+            verified =
+              !!registration &&
+              !!authority &&
+              JSON.stringify(registration) === JSON.stringify(authority) &&
+              (disabling || (deps.ownerPresence ?? ownerPresence)(authority.owner) === true);
+          } catch {
+            // Failed native inspection cannot authorize a control write.
+          }
+        }
+        let otherOwners: boolean | undefined = false;
+        if (needsExecutor && authority) {
+          try {
+            otherOwners = terminalPresence(
+              nativeOwners(state).filter(
+                (entry) => !sameProcessOwner(entry.owner, authority.owner),
+              ),
+              (owner) => (owner ? (deps.ownerPresence ?? ownerPresence)(owner) : undefined),
+            );
+          } catch {
+            otherOwners = undefined;
+          }
+        }
+        let preparationIssue: ProtocolIssue | undefined;
+        const repeated = fact && state.connection?.actions[fact.actionId] === JSON.stringify(fact);
+        if (fact?.kind === "offer-started" && !repeated) {
+          const heads = log.artifactHeads();
+          if (nativeInputCandidates(dir, state, heads)[0] !== fact.offer.inputId)
+            preparationIssue = "execution-ineligible";
+          else if (
+            dispatchStamp(
+              dir,
+              fact.offer.inputId,
+              fact.offer.context,
+              state.epoch,
+              heads,
+              state.connection?.revision,
+            ) !== fact.stamp
+          )
+            preparationIssue = "execution-stale";
+        }
+        let folderMatches: boolean | undefined = settlement ? true : undefined;
+        if (registration && !settlement) {
           const folder = readRecordMetadata(dir).workingDirectory;
           try {
-            const nativeFolder = realpathSync(fact.binding.workingDirectory);
+            const nativeFolder = realpathSync(registration.workingDirectory);
             if (typeof folder === "string") folderMatches = realpathSync(folder) === nativeFolder;
           } catch {
             /* Unavailable path evidence cannot bind a session. */
           }
         }
-        const result = !fact
-          ? refuseConnection(state, at, "invalid-connection")
-          : !verified
-            ? refuseConnection(state, at, "connection-unverified")
-            : folderMatches === undefined
-              ? refuseConnection(state, at, "connection-folder-unverified")
-              : !folderMatches
-                ? refuseConnection(state, at, "connection-folder-mismatch")
-                : reduceConnection(state, fact, at);
+        const decide = (): ReduceResult => {
+          if (!fact) return refuseConnection(state, at, "invalid-connection");
+          if ((needsExecutor || disabling) && !deps.executorLease())
+            return refuseConnection(state, at, "executor-required");
+          if (!verified) return refuseConnection(state, at, "connection-unverified");
+          if (folderMatches === undefined)
+            return refuseConnection(state, at, "connection-folder-unverified");
+          if (!folderMatches) return refuseConnection(state, at, "connection-folder-mismatch");
+          if (otherOwners === undefined)
+            return refuseConnection(state, at, "connection-unverified");
+          if (otherOwners) return refuseConnection(state, at, "connection-conflict");
+          if (preparationIssue) return refuseConnection(state, at, preparationIssue);
+          return reduceConnection(state, fact, at);
+        };
+        const result = decide();
         return {
           entry:
             fact && result.verdict === "accepted" && result.state !== state
@@ -492,7 +549,14 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     writePreparedExecution: (fact, stamp) =>
       writeExecution((state) => {
         if (
-          dispatchStamp(dir, fact.inputId, fact.context, state.epoch, log.artifactHeads()) !== stamp
+          dispatchStamp(
+            dir,
+            fact.inputId,
+            fact.context,
+            state.epoch,
+            log.artifactHeads(),
+            state.connection?.revision,
+          ) !== stamp
         )
           return { issue: "execution-stale" };
         // Concurrent appends do not change the captured immutable range.
@@ -629,11 +693,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
         ...(owner === undefined ? {} : { owner }),
       };
       return transact(entry, (s) => {
-        if (
-          s.connection &&
-          decoded.frame.kind === "attach" &&
-          decoded.frame.profile !== "interactive"
-        )
+        if (s.connection && decoded.frame.kind === "attach")
           return {
             result: refuseConnection(s, at, "connection-not-admitted"),
             frame: decoded.frame,

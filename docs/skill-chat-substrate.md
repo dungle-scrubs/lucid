@@ -243,6 +243,14 @@ feedback must remain pending. `connection-folder-unverified`
 means the record has no associated folder or path evidence is unavailable.
 Connect from the intended native session and verify the folder before retrying.
 
+`receipt-stale` means the acknowledgement does not match the recorded offer,
+participation or current epoch. It cannot mark feedback received. An exact
+repeat of a recorded receipt returns that receipt without another append.
+`receipt-required` refuses a response outcome until that offer has a confirmed
+receipt. It does not infer delivery from the response text.
+`input-already-dispatched` refuses cancellation after dispatch began. It
+preserves the offer and never stops the human-owned native session.
+
 Internal execution writes also report typed issues: `invalid-execution`
 for a malformed fact, `executor-required` without the executor lease,
 `execution-stale` for an outdated attempt or conflicting action identity,

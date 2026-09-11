@@ -1049,6 +1049,7 @@ export const enqueueInput = (
     return hostRefusal(state, frame, "invalid-input", now);
   if (
     state.inputs.some((existing) => existing.id === input.id) ||
+    Object.hasOwn(state.connection?.cancelledInputs ?? {}, input.id) ||
     Object.hasOwn(state.appliedInputs, input.id)
   )
     return hostRefusal(state, frame, "input-id-reused", now);

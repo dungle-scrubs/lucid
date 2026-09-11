@@ -14,6 +14,7 @@ import {
   nativeRegistrationAuthority,
   withNativeRegistration,
 } from "../store/native-registration.js";
+import { presenceHeld } from "../store/presence.js";
 import { WorkingFolderError } from "../store/project-directory.js";
 import { commandRecordDir, conversations, validConversationId } from "./record-addressing.js";
 
@@ -176,7 +177,11 @@ export async function publishArtifact(
             connection.value.issue,
             `Artifact published; connection refused: ${connection.value.issue}.`,
           )
-        : observeConnection(state, authority.ownerPresence);
+        : observeConnection(state, {
+            executorPresent: presenceHeld(host.dir),
+            now: Date.now(),
+            ownerPresence: authority.ownerPresence,
+          });
     return {
       artifactUrl: `${url.origin}/c/${encodeURIComponent(id)}/${encodeURIComponent(params.artifactId)}`,
       connection: {

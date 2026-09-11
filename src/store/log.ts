@@ -33,7 +33,7 @@ import {
   truncateSync,
   writeSync,
 } from "node:fs";
-import { reduceConnection } from "../protocol/connection.js";
+import { nativeOutcomeEvent, reduceConnection } from "../protocol/connection.js";
 import { reduceContextCoverage } from "../protocol/context-coverage.js";
 import { reduceExecution } from "../protocol/execution.js";
 import { ARTIFACT_BYTES_MAX } from "../protocol/frames.js";
@@ -446,7 +446,7 @@ export interface TranscriptInput {
   readonly id: string;
   readonly text: string;
   readonly mode: InputMode;
-  readonly status: "outstanding" | "queued" | "applied" | "rejected";
+  readonly status: "outstanding" | "queued" | "applied" | "rejected" | "cancelled";
 }
 
 /** Repeat-safe acceptance is separate from source-protocol duplicate refusal. */
@@ -496,6 +496,7 @@ export interface CollectedBatch {
 
 interface TranscriptAcc {
   readonly events: TranscriptEvent[];
+  readonly inputIndices: Map<string, number>;
   readonly inputs: TranscriptInput[];
   readonly aborted: string[];
 }
@@ -633,7 +634,9 @@ const collectTranscript = (
         event: frameOrNull.event,
       }),
     );
-  if ((entry.src === "input" || entry.src === "managed-input") && result.record.seq !== undefined)
+  if ((entry.src === "input" || entry.src === "managed-input") && result.record.seq !== undefined) {
+    if (!acc.inputIndices.has(entry.input.id))
+      acc.inputIndices.set(entry.input.id, acc.inputs.length);
     acc.inputs.push({
       seq: result.record.seq,
       id: entry.input.id,
@@ -641,12 +644,48 @@ const collectTranscript = (
       mode: entry.input.mode,
       status: "outstanding",
     });
+  }
+  const setInputStatus = (inputId: string | undefined, status: TranscriptInput["status"]): void => {
+    const index = inputId === undefined ? undefined : acc.inputIndices.get(inputId);
+    const input = index === undefined ? undefined : acc.inputs[index];
+    if (input && index !== undefined) acc.inputs[index] = { ...input, status };
+  };
   if (frameOrNull?.kind === "disposition") {
-    const at = acc.inputs.findIndex((i) => i.id === frameOrNull.inputId);
-    if (at !== -1) {
-      const prev = acc.inputs[at];
-      if (prev !== undefined) acc.inputs[at] = { ...prev, status: frameOrNull.outcome };
-    }
+    setInputStatus(frameOrNull.inputId, frameOrNull.outcome);
+  }
+  if (
+    entry.src === "execution" &&
+    entry.payloadVersion === 2 &&
+    entry.connection.kind === "receipt-confirmed"
+  ) {
+    const offer = result.state.connection?.offers[entry.connection.offerId]?.offer;
+    setInputStatus(offer?.inputId, "applied");
+  }
+  if (
+    entry.src === "execution" &&
+    entry.payloadVersion === 2 &&
+    entry.connection.kind === "input-cancelled"
+  ) {
+    setInputStatus(entry.connection.inputId, "cancelled");
+  }
+  if (
+    entry.src === "execution" &&
+    entry.payloadVersion === 2 &&
+    entry.connection.kind === "offer-outcome" &&
+    result.record.seq !== undefined
+  ) {
+    const connection = result.state.connection;
+    const offer = connection?.offers[entry.connection.offerId]?.offer;
+    if (offer && connection)
+      acc.events.push(
+        deepFreeze({
+          seq: result.record.seq,
+          epoch: offer.epoch,
+          turnId: offer.turnId,
+          harness: connection.binding.harness,
+          event: nativeOutcomeEvent(entry.connection.outcome),
+        }),
+      );
   }
   for (const effect of result.effects)
     if (effect.type === "abort-turn") acc.aborted.push(effect.turnId);
@@ -688,7 +727,12 @@ const walk = (
   let cursor = 0;
   const collected: CollectedEntry[] = [];
   let entries = 0;
-  const transcript: TranscriptAcc = { events: [], inputs: [], aborted: [] };
+  const transcript: TranscriptAcc = {
+    events: [],
+    inputIndices: new Map(),
+    inputs: [],
+    aborted: [],
+  };
   let namingEligible = false;
   const refusedInputs: FoldRefusal[] = [];
   const artifactIndex = new Map<string, number>();
@@ -1120,7 +1164,7 @@ export const createLog = (
   let curState = initial.folded.state;
   let curGoodBytes = initial.folded.goodBytes;
   let curCursor = initial.folded.cursor;
-  let acc: TranscriptAcc = { events: [], inputs: [], aborted: [] };
+  let acc: TranscriptAcc = { events: [], inputIndices: new Map(), inputs: [], aborted: [] };
   let curArtifactIndex = new Map<string, number>();
   let curArtifactVersions = new Map<string, Map<number, VersionHeader>>();
   let curArtifactHeads = new Map<string, number>();
@@ -1142,8 +1186,13 @@ export const createLog = (
     curState = folded.state;
     curGoodBytes = folded.goodBytes;
     curCursor = folded.cursor;
+    const inputIndices = new Map<string, number>();
+    folded.transcript.inputs.forEach((input, index) => {
+      if (!inputIndices.has(input.id)) inputIndices.set(input.id, index);
+    });
     acc = {
       events: [...folded.transcript.events],
+      inputIndices,
       inputs: [...folded.transcript.inputs],
       aborted: [...folded.transcript.aborted],
     };

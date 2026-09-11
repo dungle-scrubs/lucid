@@ -119,6 +119,9 @@ export const REFUSAL_ISSUES = [
   "connection-folder-mismatch",
   "connection-folder-unverified",
   "connection-not-admitted",
+  "receipt-stale",
+  "receipt-required",
+  "input-already-dispatched",
 ] as const;
 export type RefusalIssue = (typeof REFUSAL_ISSUES)[number];
 

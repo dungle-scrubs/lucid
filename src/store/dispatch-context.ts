@@ -40,6 +40,7 @@ export function captureDispatchContext(
       context,
       snapshot.state.epoch,
       new Map(snapshot.artifacts.map((artifact) => [artifact.artifactId, artifact.version])),
+      snapshot.state.connection?.revision,
     ),
   };
 }
@@ -51,6 +52,7 @@ export function dispatchStamp(
   context: ContextBoundary,
   epoch: number,
   artifacts: ReadonlyMap<string, number>,
+  connectionRevision?: number,
 ): string {
   const metadata = readRecordMetadata(dir);
   return hashBlob(
@@ -58,6 +60,7 @@ export function dispatchStamp(
       JSON.stringify({
         context: { digest: context.digest, from: context.from, through: context.through },
         epoch,
+        ...(connectionRevision === undefined ? {} : { connectionRevision }),
         artifacts: [...artifacts].sort(([a], [b]) => a.localeCompare(b)),
         inputId,
         location: {

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { hasUnresolvedOffer } from "../protocol/connection.js";
 import type { ExecutionHold } from "../protocol/execution.js";
 import type { ChannelState } from "../protocol/reducer.js";
 import { preferenceState } from "./driver-preference.js";
@@ -32,18 +33,54 @@ export function managedCandidates(
 ): readonly string[] {
   // Bound conversations require same-session admission before any executor may start.
   if (state.connection) return [];
-  const prerequisites = new Map<ExecutionHold["code"], string>();
-  const prerequisiteFor = (code: ExecutionHold["code"]): string => {
-    const value = prerequisites.get(code) ?? managedPrerequisite(dir, state, code);
-    prerequisites.set(code, value);
-    return value;
-  };
   if (
     Object.values(state.executions).some(
       (entry) => entry.kind === "attempt-ended" && entry.outcome.kind === "uncertain",
     )
   )
     return [];
+  return eligibleExecutions(dir, state, heads);
+}
+
+/** Eligibility does not grant an executor lease or authorize native dispatch. */
+export function nativeInputCandidates(
+  dir: string,
+  state: ChannelState,
+  heads: ReadonlyMap<string, number>,
+): readonly string[] {
+  if (
+    !state.connection ||
+    hasUnresolvedOffer(state.connection) ||
+    Object.values(state.executions).some(
+      (entry) =>
+        entry.kind === "attempt-started" ||
+        (entry.kind === "attempt-ended" && entry.outcome.kind === "uncertain"),
+    )
+  )
+    return [];
+  const managed = new Set(eligibleExecutions(dir, state, heads));
+  return state.inputs
+    .filter(
+      (input) =>
+        !Object.hasOwn(state.appliedInputs, input.id) &&
+        input.rejections === 0 &&
+        (!Object.hasOwn(state.executions, input.id) || managed.has(input.id)),
+    )
+    .sort((a, b) => a.seq - b.seq)
+    .map((input) => input.id);
+}
+
+function eligibleExecutions(
+  dir: string,
+  state: ChannelState,
+  heads: ReadonlyMap<string, number>,
+): readonly string[] {
+  const prerequisites = new Map<ExecutionHold["code"], string>();
+  const prerequisiteFor = (code: ExecutionHold["code"]): string => {
+    const value = prerequisites.get(code) ?? managedPrerequisite(dir, state, code);
+    prerequisites.set(code, value);
+    return value;
+  };
   return Object.entries(state.executions)
     .filter(([, entry]) => {
       if (

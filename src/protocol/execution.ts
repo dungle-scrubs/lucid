@@ -142,6 +142,19 @@ const id = (v: unknown): v is string => typeof v === "string" && isWireId(v);
 const nat = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
 const text = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= 4096;
 
+export function parseContextBoundary(value: unknown): ContextBoundary | null {
+  if (
+    !object(value) ||
+    !nat(value.from) ||
+    !nat(value.through) ||
+    value.from > value.through ||
+    typeof value.digest !== "string" ||
+    !/^[a-f0-9]{64}$/.test(value.digest)
+  )
+    return null;
+  return { digest: value.digest, from: value.from, through: value.through };
+}
+
 /** Both API writes and log replay validate the internal payload here. */
 export function parseExecutionFact(value: unknown): ExecutionFact | null {
   if (!object(value) || !id(value.inputId) || !nat(value.attempt)) return null;
@@ -151,15 +164,11 @@ export function parseExecutionFact(value: unknown): ExecutionFact | null {
       return value.attempt === 0 ? { ...base, attempt: 0, kind: value.kind } : null;
     case "attempt-started": {
       const { context: c, driver: d, native: n, turnId, epoch } = value;
+      const context = parseContextBoundary(c);
       if (
         !id(turnId) ||
         !nat(epoch) ||
-        !object(c) ||
-        !nat(c.from) ||
-        !nat(c.through) ||
-        c.from > c.through ||
-        typeof c.digest !== "string" ||
-        !/^[a-f0-9]{64}$/.test(c.digest) ||
+        !context ||
         !object(d) ||
         !HARNESS_NAMES.includes(d.harness as HarnessName) ||
         !id(d.model) ||
@@ -175,7 +184,7 @@ export function parseExecutionFact(value: unknown): ExecutionFact | null {
         kind: value.kind,
         epoch,
         turnId,
-        context: { digest: c.digest, from: c.from, through: c.through },
+        context,
         driver: {
           effort: d.effort,
           harness: d.harness as HarnessName,
