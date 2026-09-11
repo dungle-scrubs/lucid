@@ -111,7 +111,6 @@ export async function listenNativeFeedback(
     const registration = resolved.value;
     const executorOwner = readProcessOwner(process.pid);
     if (!executorOwner) return held("owner-unknown", "The listener process could not be verified.");
-    lease = acquirePresence(recordDir, before.conversationId, { timeoutMs: 0 });
     host = createConversationHost(recordDir, {
       connectionAuthority: () => registration,
       executorLease: () => lease?.held() ?? false,
@@ -133,6 +132,14 @@ export async function listenNativeFeedback(
               "stale-registration",
               "The native registration changed. Reconnect from the intended session.",
             );
+          if (fact.kind === "listener-enabled") {
+            const admission = writer.acquireExecutor({ kind: "listener", fact }, () =>
+              acquirePresence(recordDir, before.conversationId, { timeoutMs: 0 }),
+            );
+            if (admission.verdict === "refused")
+              return held(admission.issue, "Listening was not admitted. Feedback remains saved.");
+            lease = admission.lease;
+          }
           const result = writer.writeConnection(fact);
           return result.verdict === "accepted"
             ? null

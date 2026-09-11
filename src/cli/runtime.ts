@@ -285,12 +285,23 @@ export const openDrivenConversation = async (
   // death; the runtime ensures a single explicit release.
   let presence: PresenceHandle;
   try {
-    presence = acquirePresenceFn(dir, conversationId, {
-      onEvent: opts.onPresenceEvent,
-      ...(opts.managed ? { timeoutMs: 0 } : {}),
-    });
+    const admission = host.acquireExecutor({ kind: "headless" }, () =>
+      acquirePresenceFn(dir, conversationId, {
+        onEvent: opts.onPresenceEvent,
+        ...(opts.managed ? { timeoutMs: 0 } : {}),
+      }),
+    );
+    if (admission.verdict === "refused")
+      throw new HubError(
+        `Execution was not admitted (${admission.issue}). Feedback remains saved.`,
+        "E-HUB-03",
+        409,
+        [],
+      );
+    presence = admission.lease;
   } catch (cause) {
     host.close();
+    if (cause instanceof HubError) throw cause;
     if (cause instanceof LockError && (cause.code === "lock-unavailable" || opts.managed))
       throw cause;
     throw new PresenceAcquireError(conversationId, cause);

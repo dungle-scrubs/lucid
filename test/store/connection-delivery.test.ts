@@ -1996,6 +1996,151 @@ function preparedNativeFileFixture(): {
   }
 }
 
+test("binding during executor acquisition refuses authority and releases the acquired lock", () => {
+  const f = boundFixture(false);
+  let kernelLease: PresenceHandle | undefined;
+  try {
+    const admitted = f.host.acquireExecutor({ kind: "headless" }, () => {
+      kernelLease = acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 });
+      expect(
+        f.host.writeConnection({
+          actionId: crypto.randomUUID(),
+          binding: f.controls.registration,
+          kind: "bound",
+        }).verdict,
+      ).toBe("accepted");
+      return kernelLease;
+    });
+    expect(admitted).toEqual({ verdict: "refused", issue: "connection-not-admitted" });
+    expect(kernelLease?.held()).toBe(false);
+    expect(presenceHeld(f.paths.dir)).toBe(false);
+    expect(viewConversation(f.paths.dir).state.connection?.binding).toEqual(
+      f.controls.registration,
+    );
+    expect(viewConversation(f.paths.dir).state.attachment).toBeNull();
+  } finally {
+    kernelLease?.release();
+    f.close();
+  }
+});
+
+test("terminal ownership appearing during admission prevents executor authority", () => {
+  const f = boundFixture(false);
+  let kernelLease: PresenceHandle | undefined;
+  try {
+    const admitted = f.host.acquireExecutor({ kind: "headless" }, () => {
+      kernelLease = acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 });
+      const writer = openWriter(f.paths.dir, { ownerPresence: () => true });
+      try {
+        expect(
+          writer.handleFrame(
+            JSON.stringify({
+              kind: "attach",
+              conversationId: "feedback",
+              secret: readFileSync(f.paths.secretPath, "utf8").trim(),
+              version: 1,
+              profile: "interactive",
+              harness: "codex",
+              owner: f.controls.registration.owner,
+            }),
+          ).verdict,
+        ).toBe("accepted");
+        expect(
+          writer.handleFrame(JSON.stringify({ kind: "detach", epoch: 1, reason: "yield" })).verdict,
+        ).toBe("accepted");
+      } finally {
+        writer.close();
+      }
+      return kernelLease;
+    });
+    expect(admitted).toEqual({ verdict: "refused", issue: "connection-conflict" });
+    expect(kernelLease?.held()).toBe(false);
+    expect(presenceHeld(f.paths.dir)).toBe(false);
+  } finally {
+    kernelLease?.release();
+    f.close();
+  }
+});
+
+test("a verified listener acquires authority without recording readiness until its enable write", () => {
+  const f = boundFixture();
+  try {
+    const fact = f.enableFact();
+    const before = f.host.state().seq;
+    const admission = f.host.acquireExecutor({ kind: "listener", fact }, () =>
+      acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 }),
+    );
+    expect(admission.verdict).toBe("accepted");
+    if (admission.verdict !== "accepted") throw new Error(admission.issue);
+    f.controls.lease = admission.lease;
+    expect(admission.lease.held()).toBe(true);
+    expect(f.host.state().seq).toBe(before);
+    expect(f.status().state).toBe("not-listening");
+    expect(f.host.writeConnection(fact).verdict).toBe("accepted");
+    expect(f.status().state).toBe("listening");
+  } finally {
+    f.close();
+  }
+});
+
+test("repeating a saved listener enable cannot grant a new executor during unresolved delivery", () => {
+  const f = boundFixture();
+  let acquired = false;
+  let unexpectedLease: PresenceHandle | undefined;
+  try {
+    f.acquire();
+    const fact = f.enableFact();
+    expect(f.host.writeConnection(fact).verdict).toBe("accepted");
+    expect(
+      f.host.acceptInput({ id: "unsettled", mode: "queue", text: "Keep this delivery singular" })
+        .verdict,
+    ).toBe("accepted");
+    expect(
+      f.host.writeConnection(prepareOffer(f.host, fact.participation.id, "unsettled")).verdict,
+    ).toBe("accepted");
+    f.controls.lease?.release();
+    const admission = f.host.acquireExecutor({ kind: "listener", fact }, () => {
+      acquired = true;
+      unexpectedLease = acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 });
+      return unexpectedLease;
+    });
+    expect(admission).toEqual({ verdict: "refused", issue: "connection-not-admitted" });
+    expect(acquired).toBe(false);
+    // The control command still supports historical readback; it grants no lease.
+    f.acquire();
+    const before = f.host.state().seq;
+    expect(f.host.writeConnection(fact).verdict).toBe("accepted");
+    expect(f.host.state().seq).toBe(before);
+  } finally {
+    unexpectedLease?.release();
+    f.close();
+  }
+});
+
+test.each([false, undefined])(
+  "native presence changing to %s during acquisition releases the lock",
+  (present) => {
+    const f = boundFixture();
+    let kernelLease: PresenceHandle | undefined;
+    try {
+      const fact = f.enableFact();
+      const before = f.host.state().seq;
+      const admission = f.host.acquireExecutor({ kind: "listener", fact }, () => {
+        kernelLease = acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 });
+        f.controls.probe = () => present;
+        return kernelLease;
+      });
+      expect(admission).toEqual({ verdict: "refused", issue: "connection-unverified" });
+      expect(kernelLease?.held()).toBe(false);
+      expect(presenceHeld(f.paths.dir)).toBe(false);
+      expect(viewConversation(f.paths.dir).state.seq).toBe(before);
+    } finally {
+      kernelLease?.release();
+      f.close();
+    }
+  },
+);
+
 test("native file copies survive receipt and are removed only after their response is recorded", () => {
   const { f, bytes, path, offerId, close } = preparedNativeFileFixture();
   try {
