@@ -858,10 +858,10 @@ body {
   min-height: 0;
   width: 100%;
   border: 0;
-  /* Transparent, not paper. The document paints its own background, and a
-     colour set here shows through wherever the document does not reach,
-     which on macOS is every rubber-band overscroll. */
-  background: transparent;
+  /* Back unstyled documents without blocking body-to-canvas propagation.
+     If the document uses a different scheme, the browser supplies its own
+     opaque canvas. Authored backgrounds paint over this backing. */
+  background: Canvas;
 }
 
 .width-control {

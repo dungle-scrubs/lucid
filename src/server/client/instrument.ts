@@ -167,17 +167,11 @@ html {
   overscroll-behavior: none;
 }
 
-/* A ground for a document that gave itself none.
- *
- * Agent HTML routinely sets a text colour and no background, then relies on
- * the browser default of white. Rendered in a frame with no background of
- * its own that is dark text on a dark page, and close to unreadable.
- *
- * The :where() wrapper carries no specificity, so a document that sets its own
- * background wins — including a deliberately dark one. A default, not an
- * override. */
+/* Keep the root background untouched. Even a zero-specificity background
+ * blocks the browser from propagating an authored body background across
+ * the canvas, leaving contrasting margins around a narrow body. The
+ * embedding iframe supplies the Canvas backing instead. */
 :where(html) {
-  background: Canvas;
   color: CanvasText;
 }
 

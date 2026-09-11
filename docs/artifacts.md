@@ -370,6 +370,13 @@ That can change an older document's inspection appearance on a dark system.
 Hardcoded colors remain authored. Fixed-theme documents pair their declaration
 with matching standard browser metadata and complete foreground/background pairs.
 
+The embedding iframe supplies a `Canvas` background for unstyled documents.
+Instrumentation leaves the document root background untouched so the browser can
+propagate an authored body background across the canvas, including outside a
+width-limited body. If the frame and document use different color schemes, the
+browser supplies an opaque canvas in the document's scheme. Reader and saved-version
+inspection use the same backing; no background is added to saved artifact bytes.
+
 The browser carries the embedding scheme across the existing sandbox into
 `prefers-color-scheme`. No new theme messages, parent storage access, or
 sandbox permissions are involved. Switching updates the embedding element
