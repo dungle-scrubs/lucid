@@ -32,7 +32,8 @@ columns retain their own layout.
 Keep the neutral ground cool, without process-yellow or sepia warming. The
 surrounding surface is darker than the patterned document ground, which is
 darker than the page. The document ground mixes the surrounding ground and
-paper equally. Topography lines use 6.5% ink opacity. Edit mode uses graph
+paper equally. Topography lines use 6.5% theme ink opacity in both light and
+dark appearances. Edit mode uses graph
 paper. No shadows: the surface colors and borders provide separation.
 
 Source Serif 4 is the interface typeface. Agent-authored documents retain

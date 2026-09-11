@@ -766,8 +766,17 @@ body {
   margin: 0 -14px -14px;
   padding: 16px 16px 0;
   background-color: var(--document-ground);
-  background-image: url("data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2288%22 height=%2288%22 viewBox=%220 0 88 88%22><g fill=%22none%22 stroke=%22%23201e1d%22 stroke-opacity=%22.065%22 stroke-width=%221%22><circle cx=%2222%22 cy=%2222%22 r=%227%22/><circle cx=%2222%22 cy=%2222%22 r=%2215%22/><circle cx=%2222%22 cy=%2222%22 r=%2223%22/><circle cx=%2222%22 cy=%2222%22 r=%2231%22/><circle cx=%2266%22 cy=%2266%22 r=%229%22/><circle cx=%2266%22 cy=%2266%22 r=%2218%22/><circle cx=%2266%22 cy=%2266%22 r=%2227%22/><circle cx=%2274%22 cy=%2214%22 r=%225%22/><circle cx=%2214%22 cy=%2274%22 r=%224%22/></g></svg>");
-  background-size: 88px 88px;
+}
+
+/* Mask the linework so its ink follows the theme, like the edit grid. */
+.doc-ground:not(.edit):not(.compare)::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-color: var(--color-text);
+  mask-image: url("data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2288%22 height=%2288%22 viewBox=%220 0 88 88%22><g fill=%22none%22 stroke=%22%23201e1d%22 stroke-opacity=%22.065%22 stroke-width=%221%22><circle cx=%2222%22 cy=%2222%22 r=%227%22/><circle cx=%2222%22 cy=%2222%22 r=%2215%22/><circle cx=%2222%22 cy=%2222%22 r=%2223%22/><circle cx=%2222%22 cy=%2222%22 r=%2231%22/><circle cx=%2266%22 cy=%2266%22 r=%229%22/><circle cx=%2266%22 cy=%2266%22 r=%2218%22/><circle cx=%2266%22 cy=%2266%22 r=%2227%22/><circle cx=%2274%22 cy=%2214%22 r=%225%22/><circle cx=%2214%22 cy=%2274%22 r=%224%22/></g></svg>");
+  mask-size: 88px 88px;
 }
 
 /* Edit reads on Graph Paper: 80px majors, 16px minors, in ink. */
