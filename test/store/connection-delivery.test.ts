@@ -25,6 +25,7 @@ import {
   type RegistrationAuthority,
   registerNativeSession,
   withNativeRegistration,
+  withNativeSessionAdmission,
 } from "../../src/store/native-registration.js";
 import { acquirePresence, type PresenceHandle, presenceHeld } from "../../src/store/presence.js";
 import { replaceLocation } from "../../src/store/settings.js";
@@ -3360,6 +3361,164 @@ test("native launch start requires its recorded session identity and retains the
     expect(f.host.recordNativeExecution(cleanup).verdict).toBe("accepted");
     expect(viewConversation(f.paths.dir).state).toEqual(cleaned);
   } finally {
+    f.close();
+  }
+});
+
+test("a reconnect reservation survives replay and fences native executor acquisition without taking its lease", () => {
+  const f = boundFixture();
+  try {
+    expect(
+      f.host.acceptInput(
+        { id: "reconnect-input", mode: "queue", text: "Saved feedback" },
+        { managed: true },
+      ).verdict,
+    ).toBe("accepted");
+    f.controls.probe = () => false;
+    const requester = readProcessOwner(process.pid);
+    if (!requester) throw new Error("Missing requester provenance");
+    const request = {
+      id: crypto.randomUUID(),
+      requester: {
+        executable: requester.executable,
+        pid: requester.pid,
+        startedAt: requester.startedAt,
+      },
+    };
+    const fact = { actionId: crypto.randomUUID(), kind: "reconnect-requested", request };
+    expect(f.host.writeConnection(fact).verdict).toBe("accepted");
+    expect(presenceHeld(f.paths.dir)).toBe(false);
+    const reserved = f.host.state();
+    expect(f.host.writeConnection(fact).verdict).toBe("accepted");
+    expect(viewConversation(f.paths.dir).state).toEqual(reserved);
+    expect(reserved.connection?.reconnects[request.id]).toMatchObject({
+      kind: "requested",
+      request,
+    });
+    let acquired = false;
+    expect(
+      f.host.acquireExecutor(
+        { kind: "native-headless", binding: f.controls.registration, inputId: "reconnect-input" },
+        () => {
+          acquired = true;
+          return acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 });
+        },
+      ).verdict,
+    ).toBe("refused");
+    expect(acquired).toBe(false);
+    expect(f.host.state().inputs).toHaveLength(1);
+    expect(
+      f.host.writeConnection({
+        actionId: crypto.randomUUID(),
+        kind: "reconnect-withdrawn",
+        requestId: crypto.randomUUID(),
+      }).verdict,
+    ).toBe("refused");
+    const withdrawal = {
+      actionId: crypto.randomUUID(),
+      kind: "reconnect-withdrawn",
+      requestId: request.id,
+    };
+    expect(f.host.writeConnection(withdrawal).verdict).toBe("accepted");
+    const cancelled = f.host.state();
+    expect(cancelled.connection?.reconnectId).toBeNull();
+    expect(cancelled.connection?.reconnects[request.id]).toMatchObject({
+      kind: "withdrawn",
+      request,
+    });
+    expect(f.host.writeConnection(withdrawal).verdict).toBe("accepted");
+    expect(f.host.writeConnection(fact).verdict).toBe("accepted");
+    expect(viewConversation(f.paths.dir).state).toEqual(cancelled);
+    expect(f.host.state().inputs).toHaveLength(1);
+    const admitted = f.host.acquireExecutor(
+      { kind: "native-headless", binding: f.controls.registration, inputId: "reconnect-input" },
+      () => acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 }),
+    );
+    if (admitted.verdict !== "accepted") throw new Error(admitted.issue);
+    f.controls.lease = admitted.lease;
+    expect(admitted.lease.held()).toBe(true);
+  } finally {
+    f.close();
+  }
+});
+
+test("reconnect controls report one existing request and cancel only its named wait", () => {
+  const f = boundFixture();
+  try {
+    expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("refused");
+    f.controls.probe = () => undefined;
+    expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("refused");
+    f.controls.probe = () => false;
+    expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("accepted");
+    const reserved = f.host.state();
+    const requestId = reserved.connection?.reconnectId;
+    if (!requestId) throw new Error("Missing reconnect request");
+    const pending = reserved.connection?.reconnects[requestId];
+    if (!pending) throw new Error("Missing request history");
+    expect(presenceHeld(f.paths.dir)).toBe(false);
+    const statusBefore = f.host.state();
+    expect(f.status()).toMatchObject({
+      state: "reconnect-waiting",
+      reason: "reconnect-pending",
+      message: "Waiting to reconnect to the same native session. Saved feedback is held.",
+      actions: [],
+    });
+    expect(f.host.state()).toEqual(statusBefore);
+    const repeated = withNativeSessionAdmission(
+      f.controls.registration.workingDirectory,
+      f.controls.registration,
+      () => false,
+      () => [
+        f.host.controlReconnect({ kind: "request" }).verdict,
+        f.host.writeConnection({
+          actionId: pending.requestedActionId,
+          kind: "reconnect-requested",
+          request: pending.request,
+        }).verdict,
+      ],
+    );
+    expect(repeated).toEqual({ ok: true, value: ["accepted", "accepted"] });
+    expect(f.host.state()).toEqual(reserved);
+    expect(
+      f.host.controlReconnect({ kind: "cancel", requestId: crypto.randomUUID() }).verdict,
+    ).toBe("refused");
+    expect(f.host.controlReconnect({ kind: "cancel", requestId }).verdict).toBe("accepted");
+    expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("accepted");
+    const next = f.host.state();
+    expect(next.connection?.reconnectId).not.toBe(requestId);
+    expect(f.host.controlReconnect({ kind: "cancel", requestId }).verdict).toBe("accepted");
+    expect(viewConversation(f.paths.dir).state).toEqual(next);
+  } finally {
+    f.close();
+  }
+});
+
+test("a reconnect reservation arriving during raw lease acquisition prevents executor authority", () => {
+  const f = boundFixture();
+  let lease: PresenceHandle | undefined;
+  try {
+    expect(
+      f.host.acceptInput(
+        { id: "reconnect-race", mode: "queue", text: "Preserve this feedback" },
+        { managed: true },
+      ).verdict,
+    ).toBe("accepted");
+    f.controls.probe = () => false;
+    const admitted = f.host.acquireExecutor(
+      { kind: "native-headless", binding: f.controls.registration, inputId: "reconnect-race" },
+      () => {
+        lease = acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 });
+        expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("accepted");
+        return lease;
+      },
+    );
+    expect(admitted.verdict).toBe("refused");
+    expect(lease?.held()).toBe(false);
+    expect(presenceHeld(f.paths.dir)).toBe(false);
+    expect(f.host.state().connection?.reconnectId).toBeString();
+    expect(f.host.state().inputs).toHaveLength(1);
+  } finally {
+    lease?.release();
     f.close();
   }
 });

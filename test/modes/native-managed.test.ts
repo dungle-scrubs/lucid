@@ -172,66 +172,75 @@ test("bound preparation records the native settings and one launch notice while 
   }
 });
 
-test("a native owner returning after preparation prevents HCN creation and proves no dispatch", async () => {
-  const f = setup();
-  const proc = new FakeHcnProcess();
-  const spawner = fakeSpawner([proc]);
-  const wire = createHcnRunner({ bin: "/fake/hcn", spawn: spawner.spawn });
-  const execution = createManagedExecution({
-    cwd: f.root,
-    driver: f.driver,
-    host: f.host,
-    runner: f.runner,
-  });
-  try {
-    const prepared = await execution.prepare({
-      inputId: "feedback",
-      text: "Use the same native session",
-      turnId: "turn",
-      native: { kind: "fresh" },
-      profile: "headless-turn",
-      signal: new AbortController().signal,
+test.each(["returning owner", "reconnect request"] as const)(
+  "%s after preparation prevents HCN creation and proves no dispatch",
+  async (change) => {
+    const f = setup();
+    const proc = new FakeHcnProcess();
+    const spawner = fakeSpawner([proc]);
+    const wire = createHcnRunner({ bin: "/fake/hcn", spawn: spawner.spawn });
+    const execution = createManagedExecution({
+      cwd: f.root,
+      driver: f.driver,
+      host: f.host,
+      runner: f.runner,
     });
-    if (prepared.kind !== "ready" || !prepared.nativeApprovals) throw new Error("Preparation held");
-    f.setOwnerAlive(true);
-    proc.exit(0);
-    await expect(
-      wire
-        .streamTurn({
-          cwd: f.root,
-          harness: "codex",
-          nativeApprovals: prepared.nativeApprovals,
-          prompt: prepared.prompt,
-          resume: f.binding.nativeSessionId,
-          turnId: "turn",
-        })
-        [Symbol.asyncIterator]()
-        .next(),
-    ).rejects.toThrow("connection-conflict");
-    expect(spawner.calls).toHaveLength(0);
-    execution.turnSettled("turn");
-    expect(f.host.state().executions.feedback).toMatchObject({
-      kind: "attempt-ended",
-      outcome: { kind: "pre-start-failed", failure: { evidence: "dispatch-not-called" } },
-    });
-    expect(Object.values(f.host.state().connection?.launches ?? {})).toEqual([
-      expect.objectContaining({
-        kind: "refused",
-        failure: { code: "E-HUB-05", evidence: "dispatch-not-called", reason: expect.any(String) },
-      }),
-    ]);
-    const settled = f.host.state();
-    expect(f.host.recordNativeExecution({ kind: "settled", turnId: "turn" }).verdict).toBe(
-      "accepted",
-    );
-    expect(f.host.state()).toEqual(settled);
-    expect(f.host.transcript().inputs).toHaveLength(1);
-  } finally {
-    proc.exit(0);
-    execution.close();
-    f.close();
-  }
-});
+    try {
+      const prepared = await execution.prepare({
+        inputId: "feedback",
+        text: "Use the same native session",
+        turnId: "turn",
+        native: { kind: "fresh" },
+        profile: "headless-turn",
+        signal: new AbortController().signal,
+      });
+      if (prepared.kind !== "ready" || !prepared.nativeApprovals)
+        throw new Error("Preparation held");
+      if (change === "returning owner") f.setOwnerAlive(true);
+      else expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("accepted");
+      proc.exit(0);
+      await expect(
+        wire
+          .streamTurn({
+            cwd: f.root,
+            harness: "codex",
+            nativeApprovals: prepared.nativeApprovals,
+            prompt: prepared.prompt,
+            resume: f.binding.nativeSessionId,
+            turnId: "turn",
+          })
+          [Symbol.asyncIterator]()
+          .next(),
+      ).rejects.toThrow(change === "returning owner" ? "connection-conflict" : "execution-stale");
+      expect(spawner.calls).toHaveLength(0);
+      execution.turnSettled("turn");
+      expect(f.host.state().executions.feedback).toMatchObject({
+        kind: "attempt-ended",
+        outcome: { kind: "pre-start-failed", failure: { evidence: "dispatch-not-called" } },
+      });
+      expect(Object.values(f.host.state().connection?.launches ?? {})).toEqual([
+        expect.objectContaining({
+          kind: "refused",
+          failure: {
+            code: "E-HUB-05",
+            evidence: "dispatch-not-called",
+            reason: expect.any(String),
+          },
+        }),
+      ]);
+      const settled = f.host.state();
+      expect(f.host.recordNativeExecution({ kind: "settled", turnId: "turn" }).verdict).toBe(
+        "accepted",
+      );
+      expect(f.host.state()).toEqual(settled);
+      expect(f.host.transcript().inputs).toHaveLength(1);
+    } finally {
+      proc.exit(0);
+      execution.close();
+      f.close();
+    }
+  },
+);
 
 test("owned cleanup preserves an uncertain response and blocks later native work", async () => {
   const f = setup();
@@ -416,6 +425,9 @@ test("an admitted native source records one approval answer and completes the sa
       choices: [{ id: "deny", label: "Deny", scope: "deny" }],
     });
     await requested.promise;
+    expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("accepted");
+    const reconnectId = f.host.state().connection?.reconnectId;
+    expect(reconnectId).toBeString();
     expect(Object.values(f.host.state().connection?.launches ?? {})).toEqual([
       expect.objectContaining({ kind: "started", identitySeq: expect.any(Number) }),
     ]);
@@ -451,6 +463,8 @@ test("an admitted native source records one approval answer and completes the sa
       start: { native: { kind: "resume", sessionId: f.binding.nativeSessionId } },
     });
     expect(f.host.contextCoverage("codex", f.binding.nativeSessionId)).toBeGreaterThan(0);
+    expect(f.host.state().connection?.reconnectId).toBe(reconnectId);
+    expect(hasUnsettledNativeWork(f.host.state())).toBe(true);
     expect(
       f.host
         .transcript()

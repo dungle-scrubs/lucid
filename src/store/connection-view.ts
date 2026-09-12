@@ -1,6 +1,11 @@
 import { ownerPresence } from "../process-owner.js";
 import type { NativeInterface } from "../protocol/connection.js";
-import { currentListener, hasUnsettledLaunch, nativeOwners } from "../protocol/connection.js";
+import {
+  currentListener,
+  currentReconnect,
+  hasUnsettledLaunch,
+  nativeOwners,
+} from "../protocol/connection.js";
 import type { ProcessOwner } from "../protocol/process-owner.js";
 import { sameProcessOwner } from "../protocol/process-owner.js";
 import type { ChannelState } from "../protocol/reducer.js";
@@ -21,6 +26,7 @@ export interface ConnectionStatus {
     | "delivery-uncertain"
     | "outcome-unknown"
     | "launch-uncertain"
+    | "reconnect-waiting"
     | "closed";
 }
 
@@ -139,6 +145,12 @@ export function observeConnection(
         "More than one native session owner is open. Connection is held until ownership is resolved.",
       reason: "native-identity-conflict",
       state: "owner-conflict",
+    };
+  if (alive === false && currentReconnect(state.connection))
+    return {
+      message: "Waiting to reconnect to the same native session. Saved feedback is held.",
+      reason: "reconnect-pending",
+      state: "reconnect-waiting",
     };
   if (
     alive === true &&

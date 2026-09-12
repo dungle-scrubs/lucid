@@ -45,11 +45,17 @@ import { validateArtifactLinks } from "../links/validate-artifact-links.js";
 import { ownerPresence, readProcessOwner, terminalPresence } from "../process-owner.js";
 import type { ArtifactLinkRefusal } from "../protocol/artifact-links.js";
 import { linkRefusal } from "../protocol/artifact-links.js";
-import type { ConnectionControl, ConnectionFact, NativeBinding } from "../protocol/connection.js";
+import type {
+  ConnectionControl,
+  ConnectionFact,
+  NativeBinding,
+  ReconnectControl,
+} from "../protocol/connection.js";
 import {
   connectionId,
   connectionParticipation,
   connectionRegistration,
+  currentReconnect,
   hasUnsettledNativeWork,
   nativeOwners,
   parseConnectionFact,
@@ -275,6 +281,7 @@ export interface ConversationHost {
     | { readonly verdict: "accepted"; readonly lease: PresenceHandle }
     | { readonly verdict: "refused"; readonly issue: ProtocolIssue };
   controlConnection(control: ConnectionControl): ReduceResult;
+  controlReconnect(control: ReconnectControl): ReduceResult;
   writeConnection(fact: unknown): ReduceResult;
   captureDispatch(
     inputId: string,
@@ -654,6 +661,22 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     cleanupTurnId?: string,
   ): { readonly fact: ConnectionFact | null; readonly result: ReduceResult } => {
     const fact = parseConnectionFact(raw);
+    // Cancellation changes only a pre-launch wait. The reducer pins its request
+    // and phase under append ordering; no native process is admitted or stopped.
+    if (fact?.kind === "reconnect-withdrawn")
+      return { fact, result: reduceConnection(state, fact, at) };
+    if (fact?.kind === "reconnect-requested") {
+      const repeated = state.connection?.actions[fact.actionId] === JSON.stringify(fact);
+      const issue = repeated
+        ? undefined
+        : !sameProcessOwner(readProcessOwner(process.pid) ?? undefined, fact.request.requester)
+          ? "connection-unverified"
+          : terminalDepartureIssue(state);
+      return {
+        fact,
+        result: issue ? refuseConnection(state, at, issue) : reduceConnection(state, fact, at),
+      };
+    }
     if (
       fact?.kind === "launch-refused" ||
       fact?.kind === "launch-started" ||
@@ -893,8 +916,40 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
   const refuseNativeAdmission = (issue: ProtocolIssue): ReduceResult =>
     refuseConnection(log.state(), deps.now(), issue);
 
+  /** Historical readback grants no new native authority and needs no owner scan. */
+  const readReconnectRequest = (
+    fact?: Extract<ConnectionFact, { kind: "reconnect-requested" }>,
+  ): ReduceResult | undefined =>
+    log.inspect(({ state }) => {
+      const pending = currentReconnect(state.connection);
+      const recorded =
+        fact ??
+        (pending
+          ? {
+              actionId: pending.requestedActionId,
+              kind: "reconnect-requested" as const,
+              request: pending.request,
+            }
+          : undefined);
+      return recorded && state.connection?.actions[recorded.actionId] === JSON.stringify(recorded)
+        ? reduceConnection(state, recorded, deps.now())
+        : undefined;
+    });
+
   const writeAdmittedConnection = (fact: unknown): ReduceResult => {
     const parsed = parseConnectionFact(fact);
+    if (parsed?.kind === "reconnect-requested") {
+      const recorded = readReconnectRequest(parsed);
+      if (recorded) return recorded;
+      const binding = log.state().connection?.binding;
+      return binding
+        ? withNativeAdmission(
+            binding,
+            () => writeConnection(() => ({ fact })),
+            refuseNativeAdmission,
+          )
+        : refuseNativeAdmission("connection-not-admitted");
+    }
     return parsed?.kind === "launch-intended"
       ? withNativeAdmission(
           parsed.launch.registration,
@@ -906,6 +961,43 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
 
   return {
     writeConnection: writeAdmittedConnection,
+    controlReconnect: (control) => {
+      if (control.kind === "cancel")
+        return writeConnection((state) => {
+          if (!connectionId(control.requestId)) return { issue: "invalid-connection" };
+          const pending = state.connection?.reconnects[control.requestId];
+          if (!pending) return { issue: "connection-conflict" };
+          return {
+            fact: {
+              actionId:
+                pending.kind === "withdrawn" ? pending.withdrawnActionId : crypto.randomUUID(),
+              kind: "reconnect-withdrawn",
+              requestId: control.requestId,
+            },
+          };
+        });
+      const recorded = readReconnectRequest();
+      if (recorded) return recorded;
+      const binding = log.state().connection?.binding;
+      if (!binding) return refuseNativeAdmission("connection-not-admitted");
+      return withNativeAdmission(
+        binding,
+        () =>
+          writeConnection((state) => {
+            const pending = currentReconnect(state.connection);
+            const requester = pending?.request.requester ?? readProcessOwner(process.pid);
+            if (!requester) return { issue: "connection-unverified" };
+            return {
+              fact: {
+                actionId: pending?.requestedActionId ?? crypto.randomUUID(),
+                kind: "reconnect-requested",
+                request: pending?.request ?? { id: crypto.randomUUID(), requester },
+              },
+            };
+          }),
+        refuseNativeAdmission,
+      );
+    },
     recordNativeExecution: ({ kind, turnId }) =>
       writeConnection(
         (state) => {

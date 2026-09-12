@@ -47,7 +47,28 @@ export interface ConnectionState {
   readonly listenerId: string | null;
   readonly offers: Readonly<Record<string, NativeOfferState>>;
   readonly participations: Readonly<Record<string, ListenerParticipation>>;
+  readonly reconnectId: string | null;
+  readonly reconnects: Readonly<Record<string, NativeReconnectState>>;
   readonly revision: number;
+}
+
+export interface NativeReconnectRequest {
+  readonly id: string;
+  readonly requester: ProcessOwner;
+}
+
+export type NativeReconnectState = {
+  readonly request: NativeReconnectRequest;
+  readonly requestedActionId: string;
+} & (
+  | { readonly kind: "requested" }
+  | { readonly kind: "withdrawn"; readonly withdrawnActionId: string }
+);
+
+export function currentReconnect(
+  connection: ConnectionState | null,
+): NativeReconnectState | undefined {
+  return connection?.reconnectId ? connection.reconnects[connection.reconnectId] : undefined;
 }
 
 export interface NativeLaunch {
@@ -149,6 +170,10 @@ export type ConnectionControl =
   | { readonly kind: "receipt"; readonly offerId: string }
   | { readonly kind: "respond"; readonly offerId: string; readonly outcome: unknown };
 
+export type ReconnectControl =
+  | { readonly kind: "request" }
+  | { readonly kind: "cancel"; readonly requestId: string };
+
 export function nativeOutcomeEvent(outcome: NativeOutcome): Record<string, unknown> {
   if (outcome.kind === "question") return { kind: EventKind.question, question: outcome.text };
   if (outcome.kind === "answer")
@@ -167,6 +192,7 @@ export function hasUnresolvedOffer(connection: ConnectionState | null): boolean 
 
 export function hasUnsettledNativeWork(state: ChannelState): boolean {
   return (
+    currentReconnect(state.connection) !== undefined ||
     hasUnresolvedOffer(state.connection) ||
     hasUnsettledLaunch(state.connection) ||
     hasUnsettledExecution(state)
@@ -174,6 +200,12 @@ export function hasUnsettledNativeWork(state: ChannelState): boolean {
 }
 
 export type ConnectionFact =
+  | { readonly actionId: string; readonly kind: "reconnect-withdrawn"; readonly requestId: string }
+  | {
+      readonly actionId: string;
+      readonly kind: "reconnect-requested";
+      readonly request: NativeReconnectRequest;
+    }
   | { readonly actionId: string; readonly kind: "launch-started"; readonly launchId: string }
   | { readonly actionId: string; readonly kind: "launch-settled"; readonly launchId: string }
   | { readonly actionId: string; readonly kind: "launch-refused"; readonly launchId: string }
@@ -285,15 +317,17 @@ export function connectionRegistration(
   connection: ConnectionState | null,
   fact: ConnectionFact,
 ): NativeBinding | undefined {
-  return fact.kind === "launch-intended"
-    ? fact.launch.registration
-    : fact.kind === "launch-refused" ||
-        fact.kind === "launch-started" ||
-        fact.kind === "launch-settled"
-      ? connection?.launches[fact.launchId]?.launch.registration
-      : fact.kind === "bound"
-        ? fact.binding
-        : connectionParticipation(connection, fact)?.registration;
+  return fact.kind === "reconnect-requested" || fact.kind === "reconnect-withdrawn"
+    ? connection?.binding
+    : fact.kind === "launch-intended"
+      ? fact.launch.registration
+      : fact.kind === "launch-refused" ||
+          fact.kind === "launch-started" ||
+          fact.kind === "launch-settled"
+        ? connection?.launches[fact.launchId]?.launch.registration
+        : fact.kind === "bound"
+          ? fact.binding
+          : connectionParticipation(connection, fact)?.registration;
 }
 
 export function connectionParticipation(
@@ -301,6 +335,8 @@ export function connectionParticipation(
   fact: ConnectionFact,
 ): ListenerParticipation | undefined {
   switch (fact.kind) {
+    case "reconnect-requested":
+    case "reconnect-withdrawn":
     case "launch-started":
     case "launch-settled":
     case "launch-refused":
@@ -383,6 +419,17 @@ export function parseNativeBinding(value: unknown): NativeBinding | null {
 
 export function parseConnectionFact(value: unknown): ConnectionFact | null {
   if (!object(value) || !connectionId(value.actionId)) return null;
+  if (value.kind === "reconnect-withdrawn" && connectionId(value.requestId))
+    return { actionId: value.actionId, kind: value.kind, requestId: value.requestId };
+  if (value.kind === "reconnect-requested" && object(value.request)) {
+    const requester = parseProcessOwner(value.request.requester);
+    if (!requester || !path(requester.executable) || !connectionId(value.request.id)) return null;
+    return {
+      actionId: value.actionId,
+      kind: value.kind,
+      request: { id: value.request.id, requester },
+    };
+  }
   if (
     (value.kind === "launch-refused" ||
       value.kind === "launch-started" ||
@@ -688,6 +735,50 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
           listenerId: state.connection?.listenerId ?? null,
           offers: state.connection?.offers ?? {},
           participations: state.connection?.participations ?? {},
+          reconnectId: state.connection?.reconnectId ?? null,
+          reconnects: state.connection?.reconnects ?? {},
+          revision: state.seq + 1,
+        },
+        seq: state.seq + 1,
+      };
+    } else if (fact.kind === "reconnect-requested") {
+      const connection = state.connection;
+      if (!connection) return refuseConnection(state, now, "connection-not-admitted");
+      if (currentReconnect(connection) || Object.hasOwn(connection.reconnects, fact.request.id))
+        return refuseConnection(state, now, "connection-conflict");
+      next = {
+        ...state,
+        connection: {
+          ...connection,
+          actions,
+          reconnectId: fact.request.id,
+          reconnects: {
+            ...connection.reconnects,
+            [fact.request.id]: {
+              kind: "requested",
+              request: fact.request,
+              requestedActionId: fact.actionId,
+            },
+          },
+          revision: state.seq + 1,
+        },
+        seq: state.seq + 1,
+      };
+    } else if (fact.kind === "reconnect-withdrawn") {
+      const connection = state.connection;
+      const pending = currentReconnect(connection ?? null);
+      if (!connection || pending?.kind !== "requested" || pending.request.id !== fact.requestId)
+        return refuseConnection(state, now, "connection-conflict");
+      next = {
+        ...state,
+        connection: {
+          ...connection,
+          actions,
+          reconnectId: null,
+          reconnects: {
+            ...connection.reconnects,
+            [fact.requestId]: { ...pending, kind: "withdrawn", withdrawnActionId: fact.actionId },
+          },
           revision: state.seq + 1,
         },
         seq: state.seq + 1,
