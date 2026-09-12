@@ -56,7 +56,7 @@ test("unknown SessionStart sources explain the unsupported callback while compac
   }
 });
 
-test("Stop resolves the existing native registration without creating a lifecycle generation", async () => {
+test("Stop and Interrupt resolve the existing registration without creating a lifecycle generation", async () => {
   const root = mkdtempSync(join(tmpdir(), "lucid-codex-stop-"));
   try {
     const owner = readProcessOwner(process.pid);
@@ -71,6 +71,9 @@ test("Stop resolves the existing native registration without creating a lifecycl
     const stop = await captureCodexAuthor(root, { ...identity, hook_event_name: "Stop" }, deps);
     expect(stop).toEqual(start);
     expect(stop).toHaveProperty("registration");
+    expect(
+      await captureCodexAuthor(root, { ...identity, hook_event_name: "Interrupt" }, deps),
+    ).toEqual(start);
     expect(
       await captureCodexAuthor(
         root,

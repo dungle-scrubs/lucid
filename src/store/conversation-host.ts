@@ -55,6 +55,7 @@ import {
   parseNativeBinding,
   reduceConnection,
   refuseConnection,
+  sameNativeBinding,
 } from "../protocol/connection.js";
 import {
   type ContextFact,
@@ -485,25 +486,34 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
       fact?.kind === "input-held";
     const participation = fact ? connectionParticipation(state.connection, fact) : undefined;
     const currentProcess = needsExecutor || disabling ? readProcessOwner(process.pid) : undefined;
+    const helperDisabling =
+      disabling &&
+      !!currentProcess &&
+      sameProcessOwner(participation?.executorOwner, currentProcess) &&
+      (!requireLease || deps.executorLease());
     const settlement =
       cancellation ||
       disabling ||
       fact?.kind === "receipt-confirmed" ||
       fact?.kind === "offer-outcome";
     let authority: NativeBinding | null = null;
-    let verified = cancellation || disabling;
-    if (!cancellation && !disabling) {
+    let verified = cancellation || helperDisabling;
+    if (!cancellation && !helperDisabling) {
       try {
         authority = parseNativeBinding(deps.connectionAuthority?.());
         verified =
-          !!registration &&
           !!authority &&
-          JSON.stringify(registration) === JSON.stringify(authority) &&
+          sameNativeBinding(registration, authority) &&
           (deps.ownerPresence ?? ownerPresence)(authority.owner) === true;
       } catch {
         // Failed native inspection cannot authorize a control write.
       }
     }
+    // Native Interrupt runs before the harness kills its helper. It may revoke that
+    // exact participation, but cannot take its executor lease or select feedback.
+    const nativeInterrupt =
+      disabling && fact?.reason === "interrupted" && verified && authority !== null;
+    const needsOwnedExecutor = needsExecutor || (disabling && !nativeInterrupt);
     let otherOwners: boolean | undefined = false;
     if (needsExecutor && authority) {
       try {
@@ -552,10 +562,10 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     }
     const decide = (): ReduceResult => {
       if (!fact) return refuseConnection(state, at, "invalid-connection");
-      if (requireLease && (needsExecutor || disabling) && !deps.executorLease())
+      if (requireLease && needsOwnedExecutor && !deps.executorLease())
         return refuseConnection(state, at, "executor-required");
       if (
-        (needsExecutor || disabling) &&
+        needsOwnedExecutor &&
         (!currentProcess || !sameProcessOwner(participation?.executorOwner, currentProcess))
       )
         return refuseConnection(state, at, "connection-unverified");

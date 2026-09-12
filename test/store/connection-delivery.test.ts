@@ -1196,6 +1196,88 @@ test("the bounded native listener waits without inference, offers FIFO feedback 
   }
 });
 
+test("the verified native parent can durably interrupt its helper without owning the executor lease", async () => {
+  const f = boundFixture(false);
+  const authority = { callerOwns: () => true, ownerPresence: () => true };
+  try {
+    const registration = registerBinding(f, authority);
+    let verdict: "accepted" | "refused" | undefined;
+    const rejected: string[] = [];
+    const result = await listenNativeFeedback(
+      {
+        recordDir: f.paths.dir,
+        root: registration.workingDirectory,
+        signal: new AbortController().signal,
+        source: "explicit",
+        transport: { encode: (prompt) => prompt, maxBytes: 100_000 },
+      },
+      {
+        authority,
+        now: () => f.controls.now,
+        wait: async (ms) => {
+          f.controls.now += ms;
+          if (verdict !== undefined) return;
+          const state = viewConversation(f.paths.dir).state;
+          const id = state.connection?.listenerId;
+          if (!id) throw new Error("Missing active listener");
+          for (const invalid of [
+            {
+              registration: { ...registration, generation: crypto.randomUUID() },
+              presence: true,
+              reason: "interrupted" as const,
+            },
+            { registration, presence: undefined, reason: "interrupted" as const },
+            { registration, presence: true, reason: "expired" as const },
+          ]) {
+            const other = openWriter(f.paths.dir, {
+              connectionAuthority: () => invalid.registration,
+              ownerPresence: () => invalid.presence,
+              now: () => f.controls.now,
+            });
+            try {
+              rejected.push(
+                other.writeConnection({
+                  actionId: crypto.randomUUID(),
+                  epoch: state.epoch,
+                  kind: "listener-disabled",
+                  participationId: id,
+                  reason: invalid.reason,
+                }).verdict,
+              );
+            } finally {
+              other.close();
+            }
+          }
+          const callback = openWriter(f.paths.dir, {
+            connectionAuthority: () => registration,
+            ownerPresence: () => true,
+            now: () => f.controls.now,
+          });
+          try {
+            verdict = callback.writeConnection({
+              actionId: crypto.randomUUID(),
+              epoch: state.epoch,
+              kind: "listener-disabled",
+              participationId: id,
+              reason: "interrupted",
+            }).verdict;
+          } finally {
+            callback.close();
+          }
+        },
+      },
+    );
+    expect(verdict).toBe("accepted");
+    expect(rejected).toEqual(["refused", "refused", "refused"]);
+    expect(result).toEqual({ kind: "stopped", reason: "interrupted" });
+    expect(viewConversation(f.paths.dir).state.connection?.disabledReason).toBe("interrupted");
+    expect(f.controls.now).toBe(1500);
+    expect(presenceHeld(f.paths.dir)).toBe(false);
+  } finally {
+    f.close();
+  }
+});
+
 test("the idle native listener revokes readiness as soon as its owner becomes unverified", async () => {
   const f = boundFixture(false);
   let owner: boolean | undefined = true;

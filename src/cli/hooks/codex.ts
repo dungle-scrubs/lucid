@@ -1,10 +1,14 @@
 import { nativeOwner } from "../../harness/native-owner.js";
 import type { NativeListenerDeps, NativeListenerResult } from "../../modes/native-listener.js";
 import type { NativeBinding } from "../../protocol/connection.js";
-import { continuationListener, sameNativeBinding } from "../../protocol/connection.js";
+import {
+  continuationListener,
+  currentListener,
+  sameNativeBinding,
+} from "../../protocol/connection.js";
 import type { ProcessOwner } from "../../protocol/process-owner.js";
 import { sameProcessOwner } from "../../protocol/process-owner.js";
-import { viewConversation } from "../../store/conversation-host.js";
+import { openWriter, viewConversation } from "../../store/conversation-host.js";
 import type {
   NativeCapture,
   RegistrationAuthority,
@@ -18,6 +22,7 @@ import {
 import { listenCodexFeedback } from "../codex-listener.js";
 import { NATIVE_ROLE_ENV } from "../invocation.js";
 import type { Conversations } from "../record-addressing.js";
+import { commandRecordDir } from "../record-addressing.js";
 
 export interface CodexHookDeps {
   readonly owner: () => Promise<ProcessOwner | undefined>;
@@ -47,7 +52,12 @@ export async function captureCodexAuthor(
   // and the isolated native lane. Agent markers also reject mislabeled parent events.
   if (input.agent_id !== undefined || input.agent_type !== undefined)
     return { ok: true, skipped: true };
-  if (input.hook_event_name !== "Stop" && input.hook_event_name !== "SessionStart")
+  // The same native source excludes subagents from run_turn_interrupt_hooks.
+  if (
+    input.hook_event_name !== "Stop" &&
+    input.hook_event_name !== "Interrupt" &&
+    input.hook_event_name !== "SessionStart"
+  )
     return { ok: true, skipped: true };
   // https://learn.chatgpt.com/docs/hooks#sessionstart: compact preserves the lifecycle.
   if (input.hook_event_name === "SessionStart" && input.source === "compact")
@@ -126,8 +136,12 @@ export async function runCodexHook(
 ): Promise<NativeListenerResult | { readonly kind: "skipped" }> {
   const captured = await captureCodexAuthor(records.rootDir, payload, options.native);
   if (!captured.ok) return { kind: "held", message: captured.message, reason: captured.reason };
-  if ("skipped" in captured || (payload as Record<string, unknown>).hook_event_name !== "Stop")
+  if (
+    "skipped" in captured ||
+    (payload as Record<string, unknown>).hook_event_name === "SessionStart"
+  )
     return { kind: "skipped" };
+  const interrupted = (payload as Record<string, unknown>).hook_event_name === "Interrupt";
   const candidates: string[] = [];
   try {
     const listing = records.list();
@@ -139,7 +153,8 @@ export async function runCodexHook(
           "Lucid could not identify one conversation to continue. Feedback remains saved; run resume-listen for the intended conversation.",
       };
     for (const [id, dir] of listing.identities) {
-      const listener = continuationListener(viewConversation(dir).state.connection);
+      const connection = viewConversation(dir).state.connection;
+      const listener = interrupted ? currentListener(connection) : continuationListener(connection);
       if (!sameNativeBinding(listener?.registration, captured.registration)) continue;
       candidates.push(id);
       if (candidates.length === 2) break;
@@ -160,6 +175,46 @@ export async function runCodexHook(
       message:
         "More than one conversation can continue in this session. Feedback remains saved; run resume-listen for the intended conversation.",
     };
+  if (interrupted) {
+    const authority = codexCallbackAuthority(captured.registration);
+    const result = withNativeRegistration(
+      records.rootDir,
+      captured.registration.registrationId,
+      (registration): NativeListenerResult | { readonly kind: "skipped" } => {
+        const host = openWriter(commandRecordDir(records, id), {
+          connectionAuthority: () => registration,
+          expectedConversationId: id,
+          ownerPresence: authority.ownerPresence,
+        });
+        try {
+          const listener = currentListener(host.state().connection);
+          if (!listener || !sameNativeBinding(listener.registration, registration))
+            return { kind: "skipped" };
+          const written = host.writeConnection({
+            actionId: crypto.randomUUID(),
+            epoch: listener.epoch,
+            kind: "listener-disabled",
+            participationId: listener.id,
+            reason: "interrupted",
+          });
+          return written.verdict === "accepted"
+            ? { kind: "stopped", reason: "interrupted" }
+            : {
+                kind: "held",
+                reason: written.issue,
+                message:
+                  "Lucid could not record the native interruption. Check connection status before resuming.",
+              };
+        } finally {
+          host.close();
+        }
+      },
+      authority,
+    );
+    return result.ok
+      ? result.value
+      : { kind: "held", message: result.message, reason: result.reason };
+  }
   return listenCodexFeedback(
     records,
     id,

@@ -196,6 +196,11 @@ export async function listenNativeFeedback(
       );
       if (!verified.ok) return disable("owner-lost") ?? held(verified.reason, verified.message);
       const snapshot = viewConversation(recordDir);
+      if (snapshot.state.connection?.listenerId !== participation.id) {
+        return snapshot.state.connection?.disabledReason === "interrupted"
+          ? { kind: "stopped", reason: "interrupted" }
+          : held("connection-not-admitted", "Listening was revoked. Feedback remains saved.");
+      }
       const inputId = nativeInputCandidates(recordDir, snapshot.state, snapshot.artifactHeads)[0];
       if (inputId !== undefined) {
         const prerequisite = nativePreparationPrerequisite(
