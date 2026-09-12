@@ -1,6 +1,6 @@
 # 14: Answer one native approval during verified resume
 
-Status: open
+Status: claimed
 Blocked by: 13
 
 ## What to build
@@ -17,3 +17,7 @@ A caller runs one exact resumed response through HCN and answers its native perm
 ## Parent
 
 RFC 27 v2, extending RFC 26 and ticket 08. Machine-made slicing under Kevin's autonomous implementation instruction. Local tracker only.
+
+## Implementation seams
+
+Machine-made under the accepted protocol: public hcn run/inspect planning selects one opt-in transport, while the injected one-turn runner owns the native process and decision channel. First prove a synthetic command-approval round trip through the public CLI, then native-settings mismatch and request delivery races, followed by file/permission variants and real native confirmation. Existing channel backpressure, line assembly, turn supervision and process termination remain shared. No Lucid native-protocol parsing is introduced.
