@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { requestCodexListening } from "../../src/cli/codex-listener.js";
 import { dispatch } from "../../src/cli/dispatch.js";
 import { conversations } from "../../src/cli/record-addressing.js";
 import { listenNativeFeedback } from "../../src/modes/native-listener.js";
@@ -4258,6 +4259,114 @@ test.each(["closed", "uncertain"] as const)(
     }
   },
 );
+
+test("the verified reconnect child can select its reserved conversation after the requester releases presence", () => {
+  const f = boundFixture(false);
+  try {
+    registerBinding(f, { callerOwns: () => true, ownerPresence: () => true });
+    f.controls.probe = () => false;
+    expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("accepted");
+    const requestId = f.host.state().connection?.reconnectId;
+    if (!requestId) throw new Error("Missing request");
+    const admission = f.host.acquireExecutor({ kind: "reconnect", requestId }, () =>
+      acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 }),
+    );
+    if (admission.verdict !== "accepted") throw new Error(admission.issue);
+    f.controls.lease = admission.lease;
+    expect(f.host.prepareReconnect(requestId).verdict).toBe("accepted");
+    const pending = f.host.state().connection?.reconnects[requestId];
+    if (pending?.kind !== "intended") throw new Error("Missing intent");
+    expect(f.host.dispatchReconnect(pending.launchId, () => undefined).verdict).toBe("accepted");
+    const child = returningRegistration(f.controls.registration);
+    const authority = {
+      callerOwns: () => true,
+      ownerPresence: (owner: ProcessOwner) => owner.pid === child.owner.pid,
+    };
+    expect(registerNativeSession(child.workingDirectory, child, authority).ok).toBe(true);
+    expect(
+      requestCodexListening(conversations(child.workingDirectory), "feedback", authority),
+    ).toMatchObject({ kind: "held", reason: "execution-blocked" });
+    expect(
+      f.host.recordReconnectStarted({
+        launchId: pending.launchId,
+        owner: child.owner,
+        cwd: child.workingDirectory,
+        interface: child.interface,
+        sessionId: child.nativeSessionId,
+      }).verdict,
+    ).toBe("accepted");
+    expect(
+      requestCodexListening(conversations(child.workingDirectory), "feedback", authority),
+    ).toMatchObject({ kind: "held", reason: "executor-busy" });
+    admission.lease.release();
+    expect(
+      requestCodexListening(conversations(child.workingDirectory), "feedback", authority),
+    ).toMatchObject({ kind: "requested", conversationId: "feedback" });
+    expect(
+      withNativeRegistration(
+        child.workingDirectory,
+        undefined,
+        (_registration, access) => access.readListenRequest(),
+        authority,
+      ),
+    ).toMatchObject({ ok: true, value: { ok: true, value: { conversationId: "feedback" } } });
+    const state = viewConversation(f.paths.dir).state;
+    expect(state.connection?.reconnectId).toBe(requestId);
+    expect(state.connection?.listenerId).toBeNull();
+    expect(presenceHeld(f.paths.dir)).toBe(false);
+    const other = createConversationRecord(child.workingDirectory, "another-return", {
+      workingDirectory: child.workingDirectory,
+    });
+    const writer = openWriter(other.paths.dir, {
+      connectionAuthority: () => child,
+      ownerPresence: authority.ownerPresence,
+    });
+    try {
+      expect(
+        writer.writeConnection({ actionId: crypto.randomUUID(), binding: child, kind: "bound" })
+          .verdict,
+      ).toBe("accepted");
+    } finally {
+      writer.close();
+    }
+    const selection = withNativeRegistration(
+      child.workingDirectory,
+      undefined,
+      (_registration, access) => access.readListenRequest(),
+      authority,
+    );
+    expect(
+      requestCodexListening(conversations(child.workingDirectory), "another-return", authority),
+    ).toMatchObject({ kind: "held", reason: "execution-blocked" });
+    expect(
+      withNativeRegistration(
+        child.workingDirectory,
+        undefined,
+        (_registration, access) => access.readListenRequest(),
+        authority,
+      ),
+    ).toEqual(selection);
+    expect(
+      f.host.recordReconnectResult({
+        launchId: pending.launchId,
+        result: { kind: "uncertain", reason: "control-unverified" },
+      }).verdict,
+    ).toBe("accepted");
+    expect(
+      requestCodexListening(conversations(child.workingDirectory), "feedback", authority),
+    ).toMatchObject({ kind: "held", reason: "execution-blocked" });
+    expect(
+      withNativeRegistration(
+        child.workingDirectory,
+        undefined,
+        (_registration, access) => access.readListenRequest(),
+        authority,
+      ),
+    ).toEqual(selection);
+  } finally {
+    f.close();
+  }
+});
 
 test("the native listener fulfills reconnect and offers saved feedback through its normal receipt boundary", async () => {
   const f = boundFixture(false);

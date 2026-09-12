@@ -75,6 +75,12 @@ not settle the offer. If receipt or response is refused, retain the offer
 and report the reason; do not invent receipt or replay the work.
 
 After a recorded response, the next Stop can wait for further feedback.
+During a reserved reconnect, only the verified native process reported for
+that launch can request listening on the reserved conversation. It must wait
+for the reconnect requester to release its executor lock. Selecting the
+conversation keeps the reservation active; the listener fulfills it only
+when it connects. Selecting another conversation cannot bypass the reservation.
+
 Expiry or interruption disables listening until another explicit
 `resume-listen` request in the same native session. `lucid connection
 status CONVERSATION --json` reads current connection evidence. Feedback

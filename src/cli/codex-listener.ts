@@ -2,8 +2,10 @@ import type { NativeListenerDeps, NativeListenerResult } from "../modes/native-l
 import { heldNativeFeedback, listenNativeFeedback } from "../modes/native-listener.js";
 import { terminalPresence } from "../process-owner.js";
 import {
-  hasUnsettledNativeWork,
+  currentReconnect,
+  hasUnsettledNativeExecution,
   nativeOwners,
+  reconnectForListener,
   sameNativeHistory,
   sameNativeTarget,
 } from "../protocol/connection.js";
@@ -84,7 +86,14 @@ export function requestCodexListening(
             otherOwners ? "connection-conflict" : "connection-unverified",
             "Another owner of this native session is open or could not be verified. Resolve ownership before listening.",
           );
-        if (hasUnsettledNativeWork(candidate))
+        if (
+          hasUnsettledNativeExecution(candidate) ||
+          (currentReconnect(candidate.connection) &&
+            !(
+              candidateId === conversationId &&
+              reconnectForListener(candidate.connection, registration)
+            ))
+        )
           return heldNativeFeedback(
             "execution-blocked",
             "A previous delivery or execution in this native session must settle before listening again.",
