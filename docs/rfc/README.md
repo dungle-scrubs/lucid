@@ -1,5 +1,8 @@
 # Active RFCs
 
+RFC 27 defines [native approvals during headless continuation](27_native-approvals-during-headless-continuation.rfc.md).
+It is accepted for implementation after two Muse review passes. Native transport and browser acceptance remain required.
+
 RFC 26 proposes [interactive artifact conversation continuity](26_interactive-artifact-conversation-continuity.rfc.md).
 It is accepted for implementation after three Muse review passes. Native integration acceptance remains required for each interface.
 
@@ -36,7 +39,7 @@ commit `000381b`; its current contract is in [the design reference](../design.md
 Current reading-view design is listed in the
 [documentation index](../README.md#browser-design).
 
-The highest allocated RFC number is **26**. The next RFC is **27**.
+The highest allocated RFC number is **27**. The next RFC is **28**.
 RFC 24 was allocated to Claude startup compatibility; RFC 25 is allocated to
 automatic recovery in concurrent work. Their numbers remain reserved.
 Never reset numbering because completed files have been removed. Before
