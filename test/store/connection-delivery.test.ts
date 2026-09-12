@@ -1222,6 +1222,46 @@ test("native preparation carries the complete current document and the original 
   }
 });
 
+test("cancelled feedback remains in the transcript but never enters later native context", () => {
+  const f = boundFixture();
+  try {
+    expect(
+      f.host.acceptInput({ id: "withdrawn", mode: "queue", text: "WITHDRAWN_NATIVE_TEXT" }).verdict,
+    ).toBe("accepted");
+    expect(
+      f.host.writeConnection({
+        actionId: crypto.randomUUID(),
+        inputId: "withdrawn",
+        kind: "input-cancelled",
+      }).verdict,
+    ).toBe("accepted");
+    expect(
+      f.host.acceptInput({ id: "current", mode: "queue", text: "Keep this current request" })
+        .verdict,
+    ).toBe("accepted");
+    f.acquire();
+    expect(f.host.writeConnection(f.enableFact()).verdict).toBe("accepted");
+    const prepared = prepareNativeFeedback(f.host, "current", {
+      encode: (text) => text,
+      maxBytes: 100_000,
+    });
+    expect(prepared.kind).toBe("ready");
+    if (prepared.kind !== "ready") return;
+    expect(prepared.payload).not.toContain("WITHDRAWN_NATIVE_TEXT");
+    expect(prepared.payload).toContain("Keep this current request");
+    expect(f.host.transcript().inputs.find((input) => input.id === "withdrawn")).toMatchObject({
+      status: "cancelled",
+      text: "WITHDRAWN_NATIVE_TEXT",
+    });
+    expect(() => f.host.captureDispatch("withdrawn", 0)).toThrow(
+      "The accepted prompt was cancelled",
+    );
+    prepared.discard();
+  } finally {
+    f.close();
+  }
+});
+
 test("the bounded native listener waits without inference, offers FIFO feedback once, and resumes only after settlement", async () => {
   const f = boundFixture(false);
   const authority = { callerOwns: () => true, ownerPresence: () => true };

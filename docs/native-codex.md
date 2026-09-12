@@ -82,3 +82,7 @@ saved while the session is not listening remains saved. Use `lucid
 connection cancel-input CONVERSATION --input INPUT --json` to cancel a
 saved input before dispatch starts; an offered input cannot be cancelled
 through that command.
+
+Cancelled inputs stay visible in the saved transcript. Their content is
+excluded from later dispatch context, and they cannot become a pending
+request again.

@@ -127,6 +127,8 @@ export function projectConversationContext(options: {
     throw new ContextPreparationError("Invalid context range");
   const pendingInput = transcript.inputs.find((input) => input.id === pendingInputId);
   if (!pendingInput) throw new ContextPreparationError("The accepted prompt is missing");
+  if (pendingInput.status === "cancelled")
+    throw new ContextPreparationError("The accepted prompt was cancelled");
   const inputEntry = (input: typeof pendingInput): ContextEntry => ({
     id: `input:${input.id}`,
     kind: "message",
@@ -136,7 +138,13 @@ export function projectConversationContext(options: {
     text: input.text,
   });
   const history: ContextEntry[] = transcript.inputs
-    .filter((input) => input.id !== pendingInputId && input.seq >= from && input.seq < through)
+    .filter(
+      (input) =>
+        input.status !== "cancelled" &&
+        input.id !== pendingInputId &&
+        input.seq >= from &&
+        input.seq < through,
+    )
     .map(inputEntry);
   const lastMessages = new Map<string, number>();
   const interrupted = new Set(transcript.aborted);
