@@ -9,9 +9,10 @@ import { prepareNativeFeedback } from "../../src/modes/native-preparation.js";
 import { readProcessOwner } from "../../src/process-owner.js";
 import { encodeAnnotationBatch } from "../../src/protocol/annotations.js";
 import type { ConnectionFact, NativeBinding } from "../../src/protocol/connection.js";
-import { reduceConnection } from "../../src/protocol/connection.js";
+import { parseConnectionFact, reduceConnection } from "../../src/protocol/connection.js";
 import { readContentSource } from "../../src/protocol/content-comparison.js";
 import { EventKind } from "../../src/protocol/events.js";
+import type { AttemptStart } from "../../src/protocol/execution.js";
 import type { ProcessOwner } from "../../src/protocol/process-owner.js";
 import { putBlob } from "../../src/store/blobs.js";
 import { observeConnection, readConnection } from "../../src/store/connection-view.js";
@@ -44,6 +45,316 @@ interface BoundFixture {
   readonly paths: ReturnType<typeof createConversationRecord>["paths"];
   readonly status: () => ReturnType<typeof readConnection>;
 }
+
+function preparedAttempt(
+  f: BoundFixture,
+  inputId: string,
+  attempt = 1,
+): { fact: AttemptStart; stamp: string } {
+  const snapshot = f.host.captureDispatch(inputId, 0);
+  return {
+    fact: {
+      attempt,
+      context: {
+        digest: snapshot.context.digest,
+        from: snapshot.context.from,
+        through: snapshot.context.through,
+      },
+      driver: { effort: "high", harness: "codex", model: "gpt-6-astra", profile: "headless-turn" },
+      epoch: snapshot.epoch,
+      inputId,
+      kind: "attempt-started",
+      native: { kind: "resume", sessionId: f.controls.registration.nativeSessionId },
+      turnId: `prepared-turn-${attempt}`,
+    },
+    stamp: snapshot.stamp,
+  };
+}
+
+test("a matching pre-start failure releases its launch for an explicit same-input retry", () => {
+  const f = boundFixture();
+  try {
+    f.acquire();
+    expect(
+      f.host.enqueueInput({ id: "pre-start", mode: "queue", text: "Keep the same request" })
+        .verdict,
+    ).toBe("accepted");
+    expect(
+      f.host.writeExecution({ kind: "legacy-adopted", inputId: "pre-start", attempt: 0 }).verdict,
+    ).toBe("accepted");
+    f.controls.probe = () => false;
+    const prepared = preparedAttempt(f, "pre-start");
+    expect(f.host.writePreparedExecution(prepared.fact, prepared.stamp).verdict).toBe("accepted");
+    const intent = Object.values(f.host.state().connection?.actions ?? {})
+      .map((action) => parseConnectionFact(JSON.parse(action)))
+      .find((action) => action?.kind === "launch-intended");
+    if (intent?.kind !== "launch-intended") throw new Error("Missing launch intent");
+    const refusal = {
+      actionId: crypto.randomUUID(),
+      kind: "launch-refused",
+      launchId: intent.launch.id,
+    };
+    expect(f.host.writeConnection(refusal)).toMatchObject({
+      verdict: "refused",
+      issue: "execution-blocked",
+    });
+    const failure = {
+      code: "native-not-found",
+      evidence: "harness-refusal" as const,
+      reason: "The selected executable could not be started.",
+    };
+    expect(
+      f.host.writeExecution({
+        kind: "attempt-ended",
+        inputId: "pre-start",
+        attempt: 1,
+        turnId: prepared.fact.turnId,
+        outcome: { kind: "pre-start-failed", failure },
+      }).verdict,
+    ).toBe("accepted");
+    expect(f.host.writeConnection(refusal).verdict).toBe("accepted");
+    const settled = f.host.state();
+    expect(f.host.writeConnection(refusal).verdict).toBe("accepted");
+    expect(f.host.state()).toEqual(settled);
+    expect(f.host.transcript().events.at(-1)?.event).toMatchObject({
+      kind: EventKind.failure,
+      code: failure.code,
+      message: failure.reason,
+    });
+    expect(
+      f.host.writeExecution({
+        kind: "retry-authorized",
+        actionId: crypto.randomUUID(),
+        inputId: "pre-start",
+        attempt: 1,
+        acknowledgeEffects: false,
+      }).verdict,
+    ).toBe("accepted");
+    const repaired = preparedAttempt(f, "pre-start", 2);
+    expect(f.host.writePreparedExecution(repaired.fact, repaired.stamp).verdict).toBe("accepted");
+    expect(f.host.state().executions["pre-start"]).toMatchObject({
+      attempt: 2,
+      native: prepared.fact.native,
+      inputId: "pre-start",
+    });
+    expect(f.host.transcript().inputs).toHaveLength(1);
+    expect(f.host.transcript().inputs[0]).toMatchObject({
+      text: "Keep the same request",
+      status: "outstanding",
+    });
+    expect(
+      f.host.transcript().events.filter((entry) => entry.event.kind === EventKind.message),
+    ).toHaveLength(2);
+    expect(viewConversation(f.paths.dir).state).toEqual(f.host.state());
+  } finally {
+    f.close();
+  }
+});
+
+test("an uncertain execution cannot release its native launch as a pre-start refusal", () => {
+  const f = boundFixture();
+  try {
+    f.acquire();
+    expect(
+      f.host.enqueueInput({ id: "uncertain-launch", mode: "queue", text: "Do not replay" }).verdict,
+    ).toBe("accepted");
+    expect(
+      f.host.writeExecution({ kind: "legacy-adopted", inputId: "uncertain-launch", attempt: 0 })
+        .verdict,
+    ).toBe("accepted");
+    f.controls.probe = () => false;
+    const prepared = preparedAttempt(f, "uncertain-launch");
+    expect(f.host.writePreparedExecution(prepared.fact, prepared.stamp).verdict).toBe("accepted");
+    const intent = Object.values(f.host.state().connection?.actions ?? {})
+      .map((action) => parseConnectionFact(JSON.parse(action)))
+      .find((action) => action?.kind === "launch-intended");
+    if (intent?.kind !== "launch-intended") throw new Error("Missing launch intent");
+    expect(
+      f.host.writeExecution({
+        kind: "attempt-ended",
+        inputId: "uncertain-launch",
+        attempt: 1,
+        turnId: prepared.fact.turnId,
+        outcome: {
+          kind: "uncertain",
+          failure: {
+            code: "process-lost",
+            evidence: "process-lost",
+            reason: "Native outcome is unknown.",
+          },
+        },
+      }).verdict,
+    ).toBe("accepted");
+    const state = f.host.state();
+    expect(
+      f.host.writeConnection({
+        actionId: crypto.randomUUID(),
+        kind: "launch-refused",
+        launchId: intent.launch.id,
+      }),
+    ).toMatchObject({ verdict: "refused", issue: "execution-blocked" });
+    expect(f.host.state()).toEqual(state);
+    expect(f.status()).toMatchObject({ state: "launch-uncertain" });
+    expect(f.host.transcript().inputs[0]).toMatchObject({
+      status: "outstanding",
+      text: "Do not replay",
+    });
+  } finally {
+    f.close();
+  }
+});
+
+test.each(["unknown-launch", "different-start", "completed"] as const)(
+  "launch refusal rejects %s evidence without changing the reservation",
+  (scenario) => {
+    const f = boundFixture();
+    try {
+      f.acquire();
+      expect(
+        f.host.enqueueInput({ id: "reserved", mode: "queue", text: "Preserve this input" }).verdict,
+      ).toBe("accepted");
+      expect(
+        f.host.writeExecution({ kind: "legacy-adopted", inputId: "reserved", attempt: 0 }).verdict,
+      ).toBe("accepted");
+      f.controls.probe = () => false;
+      const prepared = preparedAttempt(f, "reserved");
+      expect(f.host.writePreparedExecution(prepared.fact, prepared.stamp).verdict).toBe("accepted");
+      const pending = Object.values(f.host.state().connection?.launches ?? {})[0];
+      if (!pending) throw new Error("Missing launch intent");
+      expect(
+        f.host.writeExecution({
+          attempt: 1,
+          inputId: "reserved",
+          kind: "attempt-ended",
+          outcome: {
+            failure: {
+              code: "dispatch-not-called",
+              evidence: "dispatch-not-called",
+              reason: "Dispatch was not invoked.",
+            },
+            kind: "pre-start-failed",
+          },
+          turnId: prepared.fact.turnId,
+        }).verdict,
+      ).toBe("accepted");
+      const durable = f.host.state();
+      const execution = durable.executions.reserved;
+      if (execution?.kind !== "attempt-ended") throw new Error("Missing execution outcome");
+      // Synthetic protocol states exercise defensive cross-ledger checks. The host
+      // does not yet admit a bound process, so no live completion is claimed here.
+      const state = {
+        ...durable,
+        executions: {
+          ...durable.executions,
+          reserved: {
+            ...execution,
+            ...(scenario === "different-start"
+              ? { start: { ...execution.start, turnId: "another-turn" } }
+              : {}),
+            ...(scenario === "completed"
+              ? { outcome: { kind: "completed" as const, terminalSeq: durable.seq } }
+              : {}),
+          },
+        },
+      };
+      const refusal = {
+        actionId: crypto.randomUUID(),
+        kind: "launch-refused" as const,
+        launchId: scenario === "unknown-launch" ? crypto.randomUUID() : pending.launch.id,
+      };
+      expect(reduceConnection(state, refusal, f.controls.now)).toMatchObject({
+        issue: scenario === "unknown-launch" ? "connection-conflict" : "execution-blocked",
+        state,
+        verdict: "refused",
+      });
+      if (scenario === "unknown-launch")
+        expect(f.host.writeConnection(refusal)).toMatchObject({
+          issue: "connection-unverified",
+          verdict: "refused",
+        });
+      expect(f.host.state()).toEqual(durable);
+      expect(f.status()).toMatchObject({ state: "launch-uncertain" });
+    } finally {
+      f.close();
+    }
+  },
+);
+
+test("cancelled feedback invalidates a prepared launch before its notice or attempt is saved", () => {
+  const f = boundFixture();
+  try {
+    f.acquire();
+    for (const id of ["keep-prepared", "cancel-prepared"])
+      expect(f.host.enqueueInput({ id, mode: "queue", text: id }).verdict).toBe("accepted");
+    expect(
+      f.host.writeExecution({ kind: "legacy-adopted", inputId: "keep-prepared", attempt: 0 })
+        .verdict,
+    ).toBe("accepted");
+    const prepared = preparedAttempt(f, "keep-prepared");
+    expect(
+      f.host.controlConnection({ kind: "cancel-input", inputId: "cancel-prepared" }).verdict,
+    ).toBe("accepted");
+    f.controls.probe = () => false;
+    expect(f.host.writePreparedExecution(prepared.fact, prepared.stamp)).toMatchObject({
+      verdict: "refused",
+      issue: "execution-stale",
+    });
+    expect(f.host.transcript().events).toHaveLength(0);
+    expect(f.host.state().executions["keep-prepared"]).toMatchObject({
+      kind: "requested",
+      attempt: 0,
+    });
+    expect(f.host.transcript().inputs.find((input) => input.id === "cancel-prepared")?.status).toBe(
+      "cancelled",
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("a prepared bound attempt and its launch notice are admitted in one durable write", () => {
+  const f = boundFixture();
+  try {
+    f.acquire();
+    expect(
+      f.host.enqueueInput({
+        id: "prepared-native",
+        mode: "queue",
+        text: "Continue the original review",
+      }).verdict,
+    ).toBe("accepted");
+    expect(
+      f.host.writeExecution({ kind: "legacy-adopted", inputId: "prepared-native", attempt: 0 })
+        .verdict,
+    ).toBe("accepted");
+    const { fact, stamp } = preparedAttempt(f, "prepared-native");
+    f.controls.probe = () => false;
+    const seq = f.host.state().seq;
+    expect(f.host.writePreparedExecution(fact, stamp).verdict).toBe("accepted");
+    expect(f.host.state().seq).toBe(seq + 1);
+    expect(f.host.state().executions["prepared-native"]).toMatchObject(fact);
+    expect(Object.values(f.host.state().connection?.launches ?? {})).toHaveLength(1);
+    expect(f.host.transcript().events).toHaveLength(1);
+    expect(f.host.transcript().events[0]?.event).toMatchObject({
+      text: "No interactive session detected. Resuming headlessly with session native-one.",
+    });
+    expect(viewConversation(f.paths.dir).state).toEqual(f.host.state());
+    expect(f.host.transcript().inputs[0]).toMatchObject({
+      status: "outstanding",
+      text: "Continue the original review",
+    });
+    const saved = Object.values(f.host.state().connection?.actions ?? {})
+      .map((action) => parseConnectionFact(JSON.parse(action)))
+      .find((action) => action?.kind === "launch-intended");
+    if (!saved) throw new Error("Missing saved launch");
+    const admitted = f.host.state();
+    expect(f.host.writeConnection(saved).verdict).toBe("accepted");
+    expect(f.host.state()).toEqual(admitted);
+    expect(f.host.transcript().events).toHaveLength(1);
+  } finally {
+    f.close();
+  }
+});
 
 test("headless launch selects the first eligible saved input", () => {
   const f = boundFixture();

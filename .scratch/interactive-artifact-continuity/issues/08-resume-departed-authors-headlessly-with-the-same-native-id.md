@@ -44,3 +44,15 @@ The intent projects the agreed notice exactly once. An unresolved launch blocks 
 Seven real-record/replay tests cover these invariants. Four Muse review axes completed; replay fencing, owner-conflict presentation, shared history identity and append-lock duration findings were fixed. Full check passes 1,564 tests and the binary build passes. Detailed review and runtime evidence remain under ignored artifacts/evidence/interactive-artifact-wayfinder/launch-intent-*.
 
 This checkpoint starts no native process. Started/refused/settled facts, repaired pre-start retries, final dispatch revalidation, same-session driver selection and reconnect reservations remain required before enabling the runtime. The full acceptance criteria remain unchecked.
+
+## Prepared launch and refusal seams
+
+Continue at writePreparedExecution: a bound, fully prepared attempt and its launch notice belong in one launch-intended record. The connection transition composes the existing execution reducer, retaining that reducer as the attempt/outcome owner. This avoids an append gap between reserving native history and saving the prepared attempt. Bare launch intents from the earlier checkpoint remain conservatively unresolved; they grant no process creation path.
+
+A launch-refused fact may release a reservation only after the matching execution attempt durably proves a pre-start failure and the owning executor records the same failure. The existing retry authorization then controls the same input and native target. Started or uncertain execution cannot supply that proof. Add one test at a time for atomic prepared admission, exact-target refusal, matching pre-start settlement, refusal against uncertain/completed execution, and repaired same-input retry. These are machine-made implementation choices within the accepted shared host, preparation and execution seams.
+
+## Prepared admission checkpoint
+
+Bound writePreparedExecution now records the complete attempt and launch notice atomically. Exact matching durable pre-start failure releases only that launch reservation; explicit retry retains its input and native ID. Unknown launches, different attempts, uncertain/completed execution and stale preparation do not release or admit work. Terminal refusals retain their audit evidence. Four Muse review axes completed and the selected fixes pass the full check: 1,571 tests, zero failures. Runtime remains fenced pending process launch, cleanup, model selection and reconnect integration.
+
+A disposable Codex 0.154.0 native CLI probe confirms that exec resume without explicit model/effort uses current config instead of the interactive session's saved model/effort. Thus omitting settings cannot prove preservation. HCN native settings selection must be resolved before runtime admission. The probe also found that the local HCN build classifies Codex warning messages as terminal failures; native response completion is not counted as normalized success. Evidence is under ignored native-model-inheritance-* artifacts.

@@ -651,6 +651,21 @@ const collectTranscript = (
     const input = index === undefined ? undefined : acc.inputs[index];
     if (input && index !== undefined) acc.inputs[index] = { ...input, status };
   };
+  const pushLaunchEvent = (
+    launch: import("../protocol/connection.js").NativeLaunch,
+    event: TranscriptEvent["event"],
+  ): void => {
+    if (result.record.seq === undefined) return;
+    acc.events.push(
+      deepFreeze({
+        epoch: launch.epoch,
+        event,
+        harness: launch.registration.harness,
+        seq: result.record.seq,
+        turnId: launch.id,
+      }),
+    );
+  };
   if (
     entry.src === "execution" &&
     entry.payloadVersion === 2 &&
@@ -658,22 +673,29 @@ const collectTranscript = (
     result.record.seq !== undefined
   ) {
     const launch = entry.connection.launch;
-    acc.events.push(
-      deepFreeze({
-        epoch: launch.epoch,
-        event: {
-          kind: EventKind.message,
-          role: "system",
-          text: `No interactive session detected. Resuming headlessly with session ${launch.registration.nativeSessionId}.`,
-        },
-        harness: launch.registration.harness,
-        seq: result.record.seq,
-        turnId: launch.id,
-      }),
-    );
+    pushLaunchEvent(launch, {
+      kind: EventKind.message,
+      role: "system",
+      text: `No interactive session detected. Resuming headlessly with session ${launch.registration.nativeSessionId}.`,
+    });
   }
   if (frameOrNull?.kind === "disposition") {
     setInputStatus(frameOrNull.inputId, frameOrNull.outcome);
+  }
+  if (
+    entry.src === "execution" &&
+    entry.payloadVersion === 2 &&
+    entry.connection.kind === "launch-refused" &&
+    result.record.seq !== undefined
+  ) {
+    const refused = result.state.connection?.launches[entry.connection.launchId];
+    if (refused?.kind === "refused")
+      pushLaunchEvent(refused.launch, {
+        class: "refusal",
+        code: refused.failure.code,
+        kind: EventKind.failure,
+        message: refused.failure.reason,
+      });
   }
   if (
     entry.src === "execution" &&

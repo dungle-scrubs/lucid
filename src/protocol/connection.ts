@@ -1,5 +1,13 @@
 import { EventKind } from "./events.js";
-import { type ContextBoundary, hasUnsettledExecution, parseContextBoundary } from "./execution.js";
+import {
+  type AttemptStart,
+  type ContextBoundary,
+  type ExecutionFailure,
+  hasUnsettledExecution,
+  parseContextBoundary,
+  parseExecutionFact,
+  reduceExecution,
+} from "./execution.js";
 import type { HarnessName, ProtocolIssue } from "./frames.js";
 import { isWireId, isWireText } from "./frames.js";
 import { InputLedger } from "./ledgers/input.js";
@@ -33,7 +41,8 @@ export interface ConnectionState {
   readonly disabledReason: ListenerDisabledReason | null;
   readonly explicitListenerEpoch: number;
   readonly heldInputs: Readonly<Record<string, NativeInputHold>>;
-  readonly launches: Readonly<Record<string, NativeLaunch>>;
+  /** Terminal entries retain each launch's identity and refusal evidence for replay and audit. */
+  readonly launches: Readonly<Record<string, NativeLaunchState>>;
   readonly listenerId: string | null;
   readonly offers: Readonly<Record<string, NativeOfferState>>;
   readonly participations: Readonly<Record<string, ListenerParticipation>>;
@@ -42,6 +51,7 @@ export interface ConnectionState {
 
 export interface NativeLaunch {
   readonly epoch: number;
+  readonly execution?: AttemptStart;
   readonly id: string;
   readonly inputId: string;
   readonly registration: NativeBinding;
@@ -49,8 +59,12 @@ export interface NativeLaunch {
   readonly role: "headless";
 }
 
+export type NativeLaunchState =
+  | { readonly kind: "intended"; readonly launch: NativeLaunch }
+  | { readonly failure: ExecutionFailure; readonly kind: "refused"; readonly launch: NativeLaunch };
+
 export function hasUnsettledLaunch(connection: ConnectionState | null): boolean {
-  return Object.keys(connection?.launches ?? {}).length > 0;
+  return Object.values(connection?.launches ?? {}).some((entry) => entry.kind === "intended");
 }
 
 export const LISTENER_WAIT_MAX_MS = 45_000;
@@ -139,7 +153,13 @@ export function hasUnsettledNativeWork(state: ChannelState): boolean {
 }
 
 export type ConnectionFact =
-  | { readonly actionId: string; readonly kind: "launch-intended"; readonly launch: NativeLaunch }
+  | { readonly actionId: string; readonly kind: "launch-refused"; readonly launchId: string }
+  | {
+      readonly actionId: string;
+      readonly kind: "launch-intended";
+      readonly launch: NativeLaunch;
+      readonly stamp?: string;
+    }
   | { readonly actionId: string; readonly inputId: string; readonly kind: "input-cancelled" }
   | { readonly actionId: string; readonly hold: NativeInputHold; readonly kind: "input-held" }
   | {
@@ -244,9 +264,11 @@ export function connectionRegistration(
 ): NativeBinding | undefined {
   return fact.kind === "launch-intended"
     ? fact.launch.registration
-    : fact.kind === "bound"
-      ? fact.binding
-      : connectionParticipation(connection, fact)?.registration;
+    : fact.kind === "launch-refused"
+      ? connection?.launches[fact.launchId]?.launch.registration
+      : fact.kind === "bound"
+        ? fact.binding
+        : connectionParticipation(connection, fact)?.registration;
 }
 
 export function connectionParticipation(
@@ -254,6 +276,7 @@ export function connectionParticipation(
   fact: ConnectionFact,
 ): ListenerParticipation | undefined {
   switch (fact.kind) {
+    case "launch-refused":
     case "launch-intended":
     case "input-cancelled":
     case "bound":
@@ -295,6 +318,8 @@ const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 const positive = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+const isStamp = (value: unknown): value is string =>
+  typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 const path = (value: unknown): value is string =>
   typeof value === "string" &&
   value.startsWith("/") &&
@@ -331,6 +356,8 @@ export function parseNativeBinding(value: unknown): NativeBinding | null {
 
 export function parseConnectionFact(value: unknown): ConnectionFact | null {
   if (!object(value) || !connectionId(value.actionId)) return null;
+  if (value.kind === "launch-refused" && connectionId(value.launchId))
+    return { actionId: value.actionId, kind: value.kind, launchId: value.launchId };
   if (value.kind === "launch-intended" && object(value.launch)) {
     const launch = value.launch;
     const registration = parseNativeBinding(launch.registration);
@@ -348,17 +375,34 @@ export function parseConnectionFact(value: unknown): ConnectionFact | null {
       launch.role !== "headless"
     )
       return null;
+    let execution: AttemptStart | undefined;
+    if (launch.execution !== undefined) {
+      const parsed = parseExecutionFact(launch.execution);
+      if (
+        parsed?.kind !== "attempt-started" ||
+        parsed.inputId !== launch.inputId ||
+        parsed.epoch !== launch.epoch ||
+        parsed.driver.harness !== registration.harness ||
+        parsed.native.kind !== "resume" ||
+        parsed.native.sessionId !== registration.nativeSessionId ||
+        !isStamp(value.stamp)
+      )
+        return null;
+      execution = parsed;
+    } else if (value.stamp !== undefined) return null;
     return {
       actionId: value.actionId,
       kind: value.kind,
       launch: {
         epoch: launch.epoch,
+        ...(execution ? { execution } : {}),
         id: launch.id,
         inputId: launch.inputId,
         registration,
         requester,
         role: launch.role,
       },
+      ...(execution ? { stamp: value.stamp as string } : {}),
     };
   }
   if (value.kind === "input-held" && object(value.hold)) {
@@ -371,8 +415,7 @@ export function parseConnectionFact(value: unknown): ConnectionFact | null {
       typeof hold.message !== "string" ||
       !isWireText(hold.message) ||
       hold.message.length > 4096 ||
-      typeof hold.prerequisite !== "string" ||
-      !/^[a-f0-9]{64}$/.test(hold.prerequisite) ||
+      !isStamp(hold.prerequisite) ||
       !NATIVE_PREPARATION_REASONS.includes(hold.reason as NativePreparationReason)
     )
       return null;
@@ -496,8 +539,7 @@ export function parseConnectionFact(value: unknown): ConnectionFact | null {
       !isWireId(o.turnId) ||
       !positive(o.attempt) ||
       !positive(o.epoch) ||
-      typeof value.stamp !== "string" ||
-      !/^[a-f0-9]{64}$/.test(value.stamp)
+      !isStamp(value.stamp)
     )
       return null;
     return {
@@ -632,12 +674,49 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
         Object.hasOwn(state.appliedInputs, fact.launch.inputId)
       )
         return refuseConnection(state, now, "execution-ineligible");
+      const execution = fact.launch.execution
+        ? reduceExecution(state, fact.launch.execution, now, true)
+        : undefined;
+      if (execution?.verdict === "refused") return refuseConnection(state, now, execution.issue);
+      next = {
+        ...(execution?.state ?? state),
+        connection: {
+          ...connection,
+          actions,
+          launches: {
+            ...connection.launches,
+            [fact.launch.id]: { kind: "intended", launch: fact.launch },
+          },
+          revision: state.seq + 1,
+        },
+        seq: state.seq + 1,
+      };
+    } else if (fact.kind === "launch-refused") {
+      const connection = state.connection;
+      const pending = connection?.launches[fact.launchId];
+      if (!connection || pending?.kind !== "intended")
+        return refuseConnection(state, now, "connection-conflict");
+      const execution = state.executions[pending.launch.inputId];
+      if (
+        !pending.launch.execution ||
+        execution?.kind !== "attempt-ended" ||
+        execution.outcome.kind !== "pre-start-failed" ||
+        JSON.stringify(execution.start) !== JSON.stringify(pending.launch.execution)
+      )
+        return refuseConnection(state, now, "execution-blocked");
       next = {
         ...state,
         connection: {
           ...connection,
           actions,
-          launches: { ...connection.launches, [fact.launch.id]: fact.launch },
+          launches: {
+            ...connection.launches,
+            [fact.launchId]: {
+              failure: execution.outcome.failure,
+              kind: "refused",
+              launch: pending.launch,
+            },
+          },
           revision: state.seq + 1,
         },
         seq: state.seq + 1,
@@ -669,7 +748,9 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
       const execution = state.executions[fact.inputId];
       if (
         Object.hasOwn(state.appliedInputs, fact.inputId) ||
-        Object.values(connection.launches).some((launch) => launch.inputId === fact.inputId) ||
+        Object.values(connection.launches).some(
+          (entry) => entry.kind === "intended" && entry.launch.inputId === fact.inputId,
+        ) ||
         Object.values(connection.offers).some((entry) => entry.offer.inputId === fact.inputId) ||
         execution?.kind === "attempt-started" ||
         execution?.kind === "attempt-ended"

@@ -520,6 +520,32 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     }
   };
 
+  const preparedExecutionIssue = (
+    state: ChannelState,
+    fact: AttemptStart,
+    stamp: string | undefined,
+    heads = log.artifactHeads(),
+  ): ProtocolIssue | undefined =>
+    dispatchStamp(
+      dir,
+      fact.inputId,
+      fact.context,
+      state.epoch,
+      heads,
+      state.connection?.revision,
+    ) === stamp
+      ? undefined
+      : "execution-stale";
+
+  const launchOwnerIssue = (
+    requester: NativeBinding["owner"] | undefined,
+  ): ProtocolIssue | undefined => {
+    if (!deps.executorLease()) return "executor-required";
+    return requester && sameProcessOwner(readProcessOwner(process.pid) ?? undefined, requester)
+      ? undefined
+      : "connection-unverified";
+  };
+
   const evaluateConnection = (
     state: ChannelState,
     raw: unknown,
@@ -527,18 +553,30 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     requireLease: boolean,
   ): { readonly fact: ConnectionFact | null; readonly result: ReduceResult } => {
     const fact = parseConnectionFact(raw);
+    if (fact?.kind === "launch-refused") {
+      const pending = state.connection?.launches[fact.launchId];
+      const issue = launchOwnerIssue(pending?.launch.requester);
+      const result = issue ? refuseConnection(state, at, issue) : reduceConnection(state, fact, at);
+      return { fact, result };
+    }
     if (fact?.kind === "launch-intended") {
       const decide = (): ReduceResult => {
-        if (!deps.executorLease()) return refuseConnection(state, at, "executor-required");
-        if (!sameProcessOwner(readProcessOwner(process.pid) ?? undefined, fact.launch.requester))
-          return refuseConnection(state, at, "connection-unverified");
+        const ownerIssue = launchOwnerIssue(fact.launch.requester);
+        if (ownerIssue) return refuseConnection(state, at, ownerIssue);
         const folderIssue = nativeFolderIssue(dir, fact.launch.registration);
         if (folderIssue) return refuseConnection(state, at, folderIssue);
+        const heads = log.artifactHeads();
         if (
           !hasUnsettledNativeWork(state) &&
-          nativeInputCandidates(dir, state, log.artifactHeads())[0] !== fact.launch.inputId
+          nativeInputCandidates(dir, state, heads)[0] !== fact.launch.inputId
         )
           return refuseConnection(state, at, "execution-ineligible");
+        if (
+          fact.launch.execution &&
+          state.connection?.actions[fact.actionId] !== JSON.stringify(fact) &&
+          preparedExecutionIssue(state, fact.launch.execution, fact.stamp, heads) !== undefined
+        )
+          return refuseConnection(state, at, "execution-stale");
         let present: boolean | undefined;
         try {
           present = terminalPresence(nativeOwners(state), (owner) =>
@@ -680,33 +718,35 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     return written;
   };
 
+  const writeAdmittedConnection = (fact: unknown): ReduceResult => {
+    const parsed = parseConnectionFact(fact);
+    if (parsed?.kind !== "launch-intended") return writeConnection(() => ({ fact }));
+    if (!deps.nativeSessionRoot)
+      return refuseConnection(log.state(), deps.now(), "connection-unverified");
+    const result = withNativeSessionAdmission(
+      deps.nativeSessionRoot,
+      parsed.launch.registration,
+      deps.ownerPresence ?? ownerPresence,
+      () => {
+        const issue = relatedLaunchIssue(parsed.launch.registration);
+        return issue
+          ? refuseConnection(log.state(), deps.now(), issue)
+          : writeConnection(() => ({ fact }));
+      },
+    );
+    return result.ok
+      ? result.value
+      : refuseConnection(
+          log.state(),
+          deps.now(),
+          result.reason === "native-identity-conflict"
+            ? "connection-conflict"
+            : "connection-unverified",
+        );
+  };
+
   return {
-    writeConnection: (fact) => {
-      const parsed = parseConnectionFact(fact);
-      if (parsed?.kind !== "launch-intended") return writeConnection(() => ({ fact }));
-      if (!deps.nativeSessionRoot)
-        return refuseConnection(log.state(), deps.now(), "connection-unverified");
-      const result = withNativeSessionAdmission(
-        deps.nativeSessionRoot,
-        parsed.launch.registration,
-        deps.ownerPresence ?? ownerPresence,
-        () => {
-          const issue = relatedLaunchIssue(parsed.launch.registration);
-          return issue
-            ? refuseConnection(log.state(), deps.now(), issue)
-            : writeConnection(() => ({ fact }));
-        },
-      );
-      return result.ok
-        ? result.value
-        : refuseConnection(
-            log.state(),
-            deps.now(),
-            result.reason === "native-identity-conflict"
-              ? "connection-conflict"
-              : "connection-unverified",
-          );
-    },
+    writeConnection: writeAdmittedConnection,
     controlConnection: (control) =>
       writeConnection((state) => {
         if (control.kind === "cancel-input")
@@ -781,23 +821,32 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     },
     captureDispatch: (inputId, from) =>
       log.inspect((snapshot) => captureDispatchContext(dir, inputId, from, snapshot)),
-    writePreparedExecution: (fact, stamp) =>
-      writeExecution((state) => {
-        if (
-          dispatchStamp(
-            dir,
-            fact.inputId,
-            fact.context,
-            state.epoch,
-            log.artifactHeads(),
-            state.connection?.revision,
-          ) !== stamp
-        )
-          return { issue: "execution-stale" };
-        // Concurrent appends do not change the captured immutable range.
-        // Confirmation stops at that gap so the next turn receives it.
-        return fact;
-      }),
+    writePreparedExecution: (fact, stamp) => {
+      const binding = log.state().connection?.binding;
+      if (binding) {
+        const requester = readProcessOwner(process.pid);
+        if (!requester) return refuseConnection(log.state(), deps.now(), "connection-unverified");
+        return writeAdmittedConnection({
+          actionId: crypto.randomUUID(),
+          kind: "launch-intended",
+          stamp,
+          launch: {
+            epoch: fact.epoch,
+            execution: fact,
+            id: crypto.randomUUID(),
+            inputId: fact.inputId,
+            registration: binding,
+            requester,
+            role: "headless",
+          },
+        });
+      }
+      return writeExecution((state) => {
+        const issue = preparedExecutionIssue(state, fact, stamp);
+        // A binding created during preparation is refused by writeExecution.
+        return issue ? { issue } : fact;
+      });
+    },
     hasAcceptedInput: (id) => log.acceptedInput(id) !== undefined,
     recoveryInputs: () => {
       const state = log.state();
