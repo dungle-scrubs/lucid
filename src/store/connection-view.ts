@@ -3,6 +3,7 @@ import type { NativeInterface } from "../protocol/connection.js";
 import {
   currentListener,
   currentReconnect,
+  hasUncertainReconnect,
   hasUnsettledLaunch,
   nativeOwners,
 } from "../protocol/connection.js";
@@ -27,6 +28,7 @@ export interface ConnectionStatus {
     | "outcome-unknown"
     | "launch-uncertain"
     | "reconnect-waiting"
+    | "resume-failed"
     | "closed";
 }
 
@@ -113,6 +115,27 @@ export function observeConnection(
         };
   const reconnect = currentReconnect(state.connection);
   if (reconnect?.kind === "intended" && conflict) return OWNER_CONFLICT;
+  if (hasUncertainReconnect(state.connection))
+    return {
+      message:
+        "Lucid could not verify the final reconnect result and native process cleanup. Saved feedback is held; reconnect will not be retried automatically.",
+      reason: "reconnect-result-unverified",
+      state: "launch-uncertain",
+    };
+  if (reconnect?.kind === "intended" && reconnect.completion)
+    return reconnect.completion.result.kind === "refused"
+      ? {
+          message:
+            "Reconnect did not start a native session. Saved feedback and the reconnect request remain held.",
+          reason: "reconnect-refused",
+          state: "resume-failed",
+        }
+      : {
+          message:
+            "The interactive session ended before its listener connected. Process cleanup is complete. Saved feedback and the reconnect request remain held.",
+          reason: "reconnect-closed",
+          state: "resume-failed",
+        };
   if (reconnect?.kind === "intended" && reconnect.started && !conflict) {
     const child = present(reconnect.started.owner);
     if (child !== undefined && observations.some((entry) => entry.present === undefined))

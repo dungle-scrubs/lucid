@@ -97,6 +97,8 @@ export async function runNativeReconnect(
     }
     const result = await handle.settled;
     completed = true;
+    const saved = writer.recordReconnectResult({ launchId, result });
+    if (saved.verdict === "refused") return held(saved.issue);
     return { kind: "completed", launchId, result };
   } catch (cause) {
     return held(classifyStoreFailure(cause) ?? "reconnect-failed");

@@ -1,4 +1,5 @@
 import { ARTIFACT_BYTES_MAX } from "../protocol/frames.js";
+import type { InteractiveResult } from "../protocol/native-interactive.js";
 import { closeFinishedNativeContextOffers, closeNativeContextOffers } from "./context-offer.js";
 import { completeLegacyPreference, type DriverChoice } from "./driver-preference.js";
 import type { PresenceHandle } from "./presence.js";
@@ -267,6 +268,10 @@ function reconnectWithdrawalFact(
 }
 
 export interface ConversationHost {
+  recordReconnectResult(outcome: {
+    readonly launchId: string;
+    readonly result: InteractiveResult;
+  }): ReduceResult;
   recordReconnectStarted(started: NativeReconnectCreation): ReduceResult;
   reconcileReconnect(requestId: string): ReduceResult;
   prepareReconnect(requestId: string): ReduceResult;
@@ -703,6 +708,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     if (!sameProcessOwner(readProcessOwner(process.pid) ?? undefined, pending.request.requester))
       return "connection-unverified";
     if (hasUnsettledNativeExecution(state) || state.attachment !== null) return "execution-blocked";
+    if (pending.kind === "intended" && pending.completion !== null) return "execution-blocked";
     return nativeFolderIssue(dir, state.connection.binding) ?? terminalDepartureIssue(state);
   };
 
@@ -712,8 +718,35 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     at: number,
     requireLease: boolean,
     cleanupTurnId?: string,
+    reconnectCompletionId?: string,
   ): { readonly fact: ConnectionFact | null; readonly result: ReduceResult } => {
     const fact = parseConnectionFact(raw);
+    if (fact?.kind === "reconnect-settled") {
+      if (state.connection?.actions[fact.actionId] === JSON.stringify(fact))
+        return { fact, result: reduceConnection(state, fact, at) };
+      const executor = reconnectExecutor;
+      const pending = state.connection?.reconnects[fact.requestId];
+      const uninvoked =
+        fact.result.kind === "refused" && fact.result.evidence === "dispatch-not-called";
+      const authorized =
+        executor &&
+        executor.requestId === fact.requestId &&
+        executor.launchId === fact.launchId &&
+        reconnectCompletionId === fact.launchId &&
+        // The host consumes its callback before calling it. The owned transport
+        // can still observe cancellation before spawning HCN inside that callback.
+        (executor.invoked || uninvoked) &&
+        pending &&
+        "started" in pending &&
+        sameProcessOwner(readProcessOwner(process.pid) ?? undefined, pending.request.requester) &&
+        (pending.started !== null || (executor.lease.held() && deps.executorLease()));
+      return {
+        fact,
+        result: authorized
+          ? reduceConnection(state, fact, at)
+          : refuseConnection(state, at, "connection-not-admitted"),
+      };
+    }
     if (fact?.kind === "reconnect-started") {
       if (state.connection?.actions[fact.actionId] === JSON.stringify(fact))
         return { fact, result: reduceConnection(state, fact, at) };
@@ -972,6 +1005,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
       state: ChannelState,
     ) => { readonly fact: unknown } | { readonly issue: ProtocolIssue },
     cleanupTurnId?: string,
+    reconnectCompletionId?: string,
   ): ReduceResult => {
     const at = deps.now();
     let settled: { owner: NativeBinding["owner"]; offerId: string } | undefined;
@@ -979,7 +1013,14 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
       const decision = produce(state);
       if ("issue" in decision)
         return { entry: null, frame: null, result: refuseConnection(state, at, decision.issue) };
-      const { fact, result } = evaluateConnection(state, decision.fact, at, true, cleanupTurnId);
+      const { fact, result } = evaluateConnection(
+        state,
+        decision.fact,
+        at,
+        true,
+        cleanupTurnId,
+        reconnectCompletionId,
+      );
       const registration = fact ? connectionRegistration(state.connection, fact) : undefined;
       if (result.verdict === "accepted" && fact?.kind === "offer-outcome" && registration)
         settled = { offerId: fact.offerId, owner: registration.owner };
@@ -1070,6 +1111,26 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
 
   return {
     writeConnection: writeAdmittedConnection,
+    recordReconnectResult: ({ launchId, result }) =>
+      writeConnection(
+        (state) => {
+          const requestId = reconnectExecutor?.requestId;
+          const pending = requestId ? state.connection?.reconnects[requestId] : undefined;
+          if (!requestId || !pending || !("launchId" in pending) || pending.launchId !== launchId)
+            return { issue: "connection-not-admitted" };
+          return {
+            fact: {
+              actionId: pending.completion?.actionId ?? crypto.randomUUID(),
+              kind: "reconnect-settled",
+              launchId,
+              requestId,
+              result,
+            },
+          };
+        },
+        undefined,
+        launchId,
+      ),
     recordReconnectStarted: ({ launchId, owner, cwd, interface: nativeInterface, sessionId }) =>
       writeConnection((state) => {
         const pending = currentReconnect(state.connection);

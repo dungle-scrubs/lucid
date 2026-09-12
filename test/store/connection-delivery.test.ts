@@ -4148,6 +4148,117 @@ test("only the verified launched child can acquire the released lease and fulfil
   }
 });
 
+test.each(["closed", "uncertain"] as const)(
+  "an owned reconnect retains a late %s result after listener fulfillment",
+  (kind) => {
+    const f = boundFixture();
+    let listenerHost: ReturnType<typeof createConversationHost> | undefined;
+    try {
+      f.controls.probe = () => false;
+      expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("accepted");
+      const requestId = f.host.state().connection?.reconnectId;
+      if (!requestId) throw new Error("Missing request");
+      const admitted = f.host.acquireExecutor({ kind: "reconnect", requestId }, () =>
+        acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 }),
+      );
+      if (admitted.verdict !== "accepted") throw new Error(admitted.issue);
+      f.controls.lease = admitted.lease;
+      expect(f.host.prepareReconnect(requestId).verdict).toBe("accepted");
+      const pending = f.host.state().connection?.reconnects[requestId];
+      if (pending?.kind !== "intended") throw new Error("Missing intent");
+      const result =
+        kind === "closed"
+          ? { kind: "closed" as const, cleanupComplete: true as const, exitCode: 0 }
+          : { kind: "uncertain" as const, reason: "control-truncated" };
+      const completion = { launchId: pending.launchId, result };
+      expect(f.host.recordReconnectResult(completion).verdict).toBe("refused");
+      expect(f.host.dispatchReconnect(pending.launchId, () => undefined).verdict).toBe("accepted");
+      if (kind === "closed")
+        expect(f.host.recordReconnectResult(completion).verdict).toBe("refused");
+      const child = returningRegistration(f.controls.registration);
+      expect(
+        f.host.recordReconnectStarted({
+          launchId: pending.launchId,
+          owner: child.owner,
+          cwd: child.workingDirectory,
+          interface: child.interface,
+          sessionId: child.nativeSessionId,
+        }).verdict,
+      ).toBe("accepted");
+      admitted.lease.release();
+      f.controls.registration = child;
+      f.controls.probe = (owner) => owner.pid === child.owner.pid;
+      const enabled = f.enableFact();
+      listenerHost = createConversationHost(f.paths.dir, {
+        connectionAuthority: () => child,
+        executorLease: () => f.controls.lease?.held() ?? false,
+        nativeSessionRoot: child.workingDirectory,
+        now: () => f.controls.now,
+        onEffect: () => {},
+        onRecord: () => {},
+        ownerPresence: (owner) => f.controls.probe(owner),
+        presence: () => undefined,
+      });
+      const listener = listenerHost.acquireExecutor({ kind: "listener", fact: enabled }, () =>
+        acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 }),
+      );
+      if (listener.verdict !== "accepted") throw new Error(listener.issue);
+      f.controls.lease = listener.lease;
+      expect(listenerHost.writeConnection(enabled).verdict).toBe("accepted");
+      expect(viewConversation(f.paths.dir).state.connection?.reconnectId).toBeNull();
+      const raw = {
+        actionId: crypto.randomUUID(),
+        kind: "reconnect-settled",
+        requestId,
+        ...completion,
+      };
+      expect(f.host.writeConnection(raw).verdict).toBe("refused");
+      expect(
+        f.host.recordReconnectResult({ ...completion, launchId: crypto.randomUUID() }).verdict,
+      ).toBe("refused");
+      expect(
+        f.host.recordReconnectResult({
+          launchId: pending.launchId,
+          result: { kind: "refused", evidence: "spawn-not-attempted", reason: "spawn-rejected" },
+        }).verdict,
+      ).toBe("refused");
+      expect(f.host.recordReconnectResult(completion).verdict).toBe("accepted");
+      const ended = f.host.state();
+      expect(ended.connection?.reconnects[requestId]).toMatchObject({
+        kind: "fulfilled",
+        completion: { result },
+      });
+      if (kind === "uncertain")
+        expect(f.status()).toMatchObject({
+          state: "launch-uncertain",
+          reason: "reconnect-result-unverified",
+        });
+      expect(f.host.recordReconnectResult(completion).verdict).toBe("accepted");
+      expect(
+        f.host.recordReconnectResult({
+          launchId: pending.launchId,
+          result: { kind: "uncertain", reason: "different-result" },
+        }).verdict,
+      ).toBe("refused");
+      expect(viewConversation(f.paths.dir).state).toEqual(ended);
+      expect(f.host.state().connection?.reconnectId).toBeNull();
+      listener.lease.release();
+      f.controls.probe = () => false;
+      expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("accepted");
+      const nextId = f.host.state().connection?.reconnectId;
+      if (!nextId) throw new Error("Missing next request");
+      const next = f.host.acquireExecutor({ kind: "reconnect", requestId: nextId }, () =>
+        acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 }),
+      );
+      if (next.verdict === "accepted") f.controls.lease = next.lease;
+      expect(next.verdict).toBe(kind === "uncertain" ? "refused" : "accepted");
+    } finally {
+      listenerHost?.close();
+      f.close();
+    }
+  },
+);
+
 test("the native listener fulfills reconnect and offers saved feedback through its normal receipt boundary", async () => {
   const f = boundFixture(false);
   try {
@@ -4402,6 +4513,13 @@ test("reconnect carries normalized HCN creation into the durable record before r
       launchId,
       result: { kind: "closed", cleanupComplete: true, exitCode: 0 },
     });
+    const ended = viewConversation(f.paths.dir).state;
+    expect(ended.connection?.reconnects[requestId]).toMatchObject({
+      kind: "intended",
+      completion: { result: { kind: "closed", cleanupComplete: true, exitCode: 0 } },
+    });
+    expect(ended.connection?.reconnectId).toBe(requestId);
+    expect(f.status()).toMatchObject({ state: "resume-failed", reason: "reconnect-closed" });
     expect(calls).toBe(1);
   } finally {
     controller.abort();
@@ -4411,6 +4529,198 @@ test("reconnect carries normalized HCN creation into the durable record before r
     } finally {
       f.close();
     }
+  }
+});
+
+test("durable reconnect refusal retains only the documented HCN pre-spawn reason set", () => {
+  // Synthetic connection facts exercise parsing, not a captured HCN recording.
+  const fact = {
+    actionId: crypto.randomUUID(),
+    kind: "reconnect-settled",
+    launchId: crypto.randomUUID(),
+    requestId: crypto.randomUUID(),
+    result: { kind: "refused", evidence: "spawn-not-attempted", reason: "unknown-future-reason" },
+  };
+  expect(parseConnectionFact(fact)).toBeNull();
+  for (const reason of [
+    "unsupported-interface",
+    "resume-unavailable",
+    "cwd-refused",
+    "invalid-request",
+    "executable-unavailable",
+    "spawn-rejected",
+  ])
+    expect(parseConnectionFact({ ...fact, result: { ...fact.result, reason } })).not.toBeNull();
+  expect(
+    parseConnectionFact({ ...fact, result: { kind: "uncertain", reason: "control-unverified" } }),
+  ).not.toBeNull();
+  expect(
+    parseConnectionFact({
+      ...fact,
+      result: { kind: "refused", evidence: "dispatch-not-called", reason: "cancelled" },
+    }),
+  ).not.toBeNull();
+});
+
+test("reconnect records HCN refusal only after control drains and its wrapper exits", async () => {
+  const { runNativeReconnect } = await import("../../src/modes/native-reconnect.js");
+  const { createHcnRunner } = await import("../../src/harness/hcn-runner.js");
+  const { FakeHcnProcess } = await import("../harness/fakes.js");
+  const f = boundFixture();
+  const proc = new FakeHcnProcess();
+  const read = Promise.withResolvers<void>();
+  const drained = Promise.withResolvers<void>();
+  const controller = new AbortController();
+  let running: Promise<unknown> | undefined;
+  try {
+    f.controls.probe = () => false;
+    expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("accepted");
+    const requestId = f.host.state().connection?.reconnectId;
+    if (!requestId) throw new Error("Missing request");
+    const runner = createHcnRunner({
+      bin: "/fake/hcn",
+      refusalGraceMs: 1,
+      spawn: () => {
+        throw new Error("Wrong transport");
+      },
+      spawnInteractive: (argv) => {
+        const launchId = argv[argv.indexOf("--launch-id") + 1];
+        proc.emit({
+          v: 1,
+          operation: "interactive",
+          launchId,
+          kind: "refused",
+          evidence: "spawn-not-attempted",
+          reason: "resume-unavailable",
+        });
+        return {
+          control: {
+            async *[Symbol.asyncIterator]() {
+              for await (const chunk of proc.stdout) {
+                yield chunk;
+                read.resolve();
+              }
+              drained.resolve();
+            },
+          },
+          exited: proc.exited,
+          kill: (signal) => proc.kill(signal),
+          disposeControl: () => proc.disposeOutput(),
+        };
+      },
+    });
+    running = runNativeReconnect(
+      {
+        recordDir: f.paths.dir,
+        root: f.controls.registration.workingDirectory,
+        requestId,
+        signal: controller.signal,
+      },
+      runner,
+      { now: () => f.controls.now, ownerPresence: () => false },
+    );
+    await Promise.race([
+      read.promise,
+      running.then(() => {
+        throw new Error("Result saved before stream drain");
+      }),
+    ]);
+    expect(viewConversation(f.paths.dir).state.connection?.reconnects[requestId]).toMatchObject({
+      kind: "intended",
+      completion: null,
+    });
+    expect(presenceHeld(f.paths.dir)).toBe(true);
+    proc.disposeOutput();
+    await drained.promise;
+    expect(viewConversation(f.paths.dir).state.connection?.reconnects[requestId]).toMatchObject({
+      kind: "intended",
+      completion: null,
+    });
+    expect(presenceHeld(f.paths.dir)).toBe(true);
+    proc.exit(2);
+    const result = {
+      kind: "refused",
+      evidence: "spawn-not-attempted",
+      reason: "resume-unavailable",
+    };
+    expect(await running).toMatchObject({ kind: "completed", result });
+    expect(viewConversation(f.paths.dir).state.connection?.reconnects[requestId]).toMatchObject({
+      kind: "intended",
+      started: null,
+      completion: { result },
+    });
+    expect(presenceHeld(f.paths.dir)).toBe(false);
+  } finally {
+    controller.abort();
+    proc.exit(null);
+    try {
+      await running;
+    } finally {
+      f.close();
+    }
+  }
+});
+
+test("reconnect preserves no-dispatch evidence when cancellation arrives during final admission", async () => {
+  const { runNativeReconnect } = await import("../../src/modes/native-reconnect.js");
+  const { createHcnRunner } = await import("../../src/harness/hcn-runner.js");
+  const f = boundFixture();
+  const controller = new AbortController();
+  try {
+    f.controls.probe = () => false;
+    expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("accepted");
+    const requestId = f.host.state().connection?.reconnectId;
+    if (!requestId) throw new Error("Missing request");
+    let intended = false;
+    let calls = 0;
+    const runner = createHcnRunner({
+      bin: "/fake/hcn",
+      spawn: () => {
+        throw new Error("Wrong transport");
+      },
+      spawnInteractive: () => {
+        calls++;
+        throw new Error("Cancelled before spawn");
+      },
+    });
+    const result = await runNativeReconnect(
+      {
+        recordDir: f.paths.dir,
+        root: f.controls.registration.workingDirectory,
+        requestId,
+        signal: controller.signal,
+      },
+      runner,
+      {
+        now: () => f.controls.now,
+        onRecord: () => {
+          intended =
+            viewConversation(f.paths.dir).state.connection?.reconnects[requestId]?.kind ===
+            "intended";
+        },
+        ownerPresence: () => {
+          if (intended) controller.abort();
+          return false;
+        },
+      },
+    );
+    expect(calls).toBe(0);
+    expect(result).toMatchObject({
+      kind: "completed",
+      result: { kind: "refused", evidence: "dispatch-not-called" },
+    });
+    const ended = viewConversation(f.paths.dir).state.connection;
+    expect(ended?.reconnects[requestId]).toMatchObject({
+      kind: "intended",
+      started: null,
+      completion: { result: { kind: "refused", evidence: "dispatch-not-called" } },
+    });
+    expect(ended?.reconnectId).toBe(requestId);
+    expect(presenceHeld(f.paths.dir)).toBe(false);
+    expect(f.status()).toMatchObject({ state: "resume-failed", reason: "reconnect-refused" });
+  } finally {
+    controller.abort();
+    f.close();
   }
 });
 

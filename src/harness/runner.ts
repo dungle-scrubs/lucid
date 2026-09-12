@@ -21,6 +21,7 @@ import { CompatibilityError } from "../protocol/compatibility.js";
 import type { NativeInterface } from "../protocol/connection.js";
 import type { HarnessName } from "../protocol/frames.js";
 import type { ApprovalDecision } from "../protocol/native-approvals.js";
+import type { InteractiveResult } from "../protocol/native-interactive.js";
 import type { ProcessOwner } from "../protocol/process-owner.js";
 import {
   type CompatibilityDiagnostic,
@@ -29,6 +30,7 @@ import {
 } from "./compatibility.js";
 import type { HarnessEvent } from "./events.js";
 
+export type { InteractiveResult } from "../protocol/native-interactive.js";
 /** A harness as hcn names it. Validated by `src/cli/harness.ts`. */
 export type { HarnessName };
 
@@ -274,15 +276,6 @@ export type InteractiveControlRecord = {
     }
   | { readonly kind: "closed"; readonly cleanupComplete: boolean; readonly exitCode: number | null }
 );
-
-export type InteractiveResult =
-  | {
-      readonly kind: "refused";
-      readonly evidence: "spawn-not-attempted" | "dispatch-not-called";
-      readonly reason: string;
-    }
-  | { readonly kind: "closed"; readonly cleanupComplete: true; readonly exitCode: number | null }
-  | { readonly kind: "uncertain"; readonly reason: string };
 
 export interface InteractiveHandle {
   /** Single-use stream. Terminal evidence is final only after settled confirms drainage. */

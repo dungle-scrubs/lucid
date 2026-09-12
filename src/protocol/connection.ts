@@ -12,6 +12,8 @@ import {
 import type { HarnessName, ProtocolIssue } from "./frames.js";
 import { isWireId, isWireText } from "./frames.js";
 import { InputLedger } from "./ledgers/input.js";
+import type { InteractiveResult } from "./native-interactive.js";
+import { isInteractiveRefusalReason } from "./native-interactive.js";
 import type { ProcessOwner } from "./process-owner.js";
 import { parseProcessOwner, sameProcessOwner } from "./process-owner.js";
 import type { ChannelState, ReduceResult } from "./reducer.js";
@@ -69,6 +71,11 @@ export interface NativeReconnectStart extends NativeReconnectCreation {
   readonly actionId: string;
 }
 
+export interface NativeReconnectCompletion {
+  readonly actionId: string;
+  readonly result: InteractiveResult;
+}
+
 export type NativeReconnectState = {
   readonly request: NativeReconnectRequest;
   readonly requestedActionId: string;
@@ -76,12 +83,14 @@ export type NativeReconnectState = {
   | { readonly kind: "requested" }
   | {
       readonly kind: "intended";
+      readonly completion: NativeReconnectCompletion | null;
       readonly launchId: string;
       readonly intendedActionId: string;
       readonly started: NativeReconnectStart | null;
     }
   | {
       readonly kind: "fulfilled";
+      readonly completion: NativeReconnectCompletion | null;
       readonly launchId: string;
       readonly intendedActionId: string;
       readonly started: NativeReconnectStart;
@@ -113,6 +122,7 @@ export function reconnectForListener(
   | undefined {
   const request = currentReconnect(connection);
   return request?.kind === "intended" &&
+    request.completion === null &&
     request.started &&
     sameNativeTarget(connection?.binding, registration) &&
     sameProcessOwner(request.started.owner, registration.owner)
@@ -246,13 +256,27 @@ export function hasUnsettledNativeWork(state: ChannelState): boolean {
 /** A reconnect waiter may proceed only after previous delivery, outcome and cleanup settle. */
 export function hasUnsettledNativeExecution(state: ChannelState): boolean {
   return (
+    hasUncertainReconnect(state.connection) ||
     hasUnresolvedOffer(state.connection) ||
     hasUnsettledLaunch(state.connection) ||
     hasUnsettledExecution(state)
   );
 }
 
+export function hasUncertainReconnect(connection: ConnectionState | null): boolean {
+  return Object.values(connection?.reconnects ?? {}).some(
+    (request) => "completion" in request && request.completion?.result.kind === "uncertain",
+  );
+}
+
 export type ConnectionFact =
+  | {
+      readonly actionId: string;
+      readonly kind: "reconnect-settled";
+      readonly launchId: string;
+      readonly requestId: string;
+      readonly result: InteractiveResult;
+    }
   | {
       readonly actionId: string;
       readonly kind: "reconnect-started";
@@ -391,6 +415,7 @@ export function connectionRegistration(
     fact.kind === "reconnect-withdrawn" ||
     fact.kind === "reconnect-abandoned" ||
     fact.kind === "reconnect-started" ||
+    fact.kind === "reconnect-settled" ||
     fact.kind === "reconnect-intended"
     ? connection?.binding
     : fact.kind === "launch-intended"
@@ -413,6 +438,7 @@ export function connectionParticipation(
     case "reconnect-withdrawn":
     case "reconnect-abandoned":
     case "reconnect-started":
+    case "reconnect-settled":
     case "reconnect-intended":
     case "launch-started":
     case "launch-settled":
@@ -500,8 +526,46 @@ export function parseNativeBinding(value: unknown): NativeBinding | null {
   };
 }
 
+function parseInteractiveResult(value: unknown): InteractiveResult | null {
+  if (!object(value)) return null;
+  if (
+    value.kind === "closed" &&
+    value.cleanupComplete === true &&
+    (value.exitCode === null ||
+      (typeof value.exitCode === "number" &&
+        Number.isSafeInteger(value.exitCode) &&
+        value.exitCode >= 0))
+  )
+    return { kind: "closed", cleanupComplete: true, exitCode: value.exitCode };
+  if (typeof value.reason !== "string" || !isWireId(value.reason)) return null;
+  if (value.kind === "uncertain") return { kind: "uncertain", reason: value.reason };
+  if (
+    value.kind === "refused" &&
+    ((value.evidence === "spawn-not-attempted" && isInteractiveRefusalReason(value.reason)) ||
+      value.evidence === "dispatch-not-called")
+  )
+    return { kind: "refused", evidence: value.evidence, reason: value.reason };
+  return null;
+}
+
 export function parseConnectionFact(value: unknown): ConnectionFact | null {
   if (!object(value) || !connectionId(value.actionId)) return null;
+  if (
+    value.kind === "reconnect-settled" &&
+    connectionId(value.requestId) &&
+    connectionId(value.launchId)
+  ) {
+    const result = parseInteractiveResult(value.result);
+    return result
+      ? {
+          actionId: value.actionId,
+          kind: value.kind,
+          requestId: value.requestId,
+          launchId: value.launchId,
+          result,
+        }
+      : null;
+  }
   if (
     value.kind === "reconnect-started" &&
     connectionId(value.requestId) &&
@@ -914,6 +978,7 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
               kind: "intended",
               launchId: fact.launchId,
               intendedActionId: fact.actionId,
+              completion: null,
               started: null,
             },
           },
@@ -929,7 +994,8 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
         pending?.kind !== "intended" ||
         pending.request.id !== fact.requestId ||
         pending.launchId !== fact.launchId ||
-        pending.started !== null
+        pending.started !== null ||
+        pending.completion !== null
       )
         return refuseConnection(state, now, "connection-conflict");
       if (
@@ -955,6 +1021,38 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
                 sessionId: fact.sessionId,
                 launchId: fact.launchId,
               },
+            },
+          },
+          revision: state.seq + 1,
+        },
+        seq: state.seq + 1,
+      };
+    } else if (fact.kind === "reconnect-settled") {
+      const connection = state.connection;
+      const pending = connection?.reconnects[fact.requestId];
+      if (
+        !connection ||
+        !pending ||
+        (pending.kind !== "intended" && pending.kind !== "fulfilled") ||
+        pending.launchId !== fact.launchId ||
+        pending.completion !== null
+      )
+        return refuseConnection(state, now, "connection-conflict");
+      if (
+        (fact.result.kind === "closed" && !pending.started) ||
+        (fact.result.kind === "refused" && pending.started)
+      )
+        return refuseConnection(state, now, "connection-unverified");
+      next = {
+        ...state,
+        connection: {
+          ...connection,
+          actions,
+          reconnects: {
+            ...connection.reconnects,
+            [fact.requestId]: {
+              ...pending,
+              completion: { actionId: fact.actionId, result: fact.result },
             },
           },
           revision: state.seq + 1,

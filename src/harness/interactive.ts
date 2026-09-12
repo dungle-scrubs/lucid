@@ -1,3 +1,4 @@
+import { isInteractiveRefusalReason } from "../protocol/native-interactive.js";
 import { parseProcessOwner } from "../protocol/process-owner.js";
 import type { HarnessDeps, InteractiveHcnProcess } from "./process.js";
 import { terminateHcn } from "./process.js";
@@ -11,15 +12,6 @@ import { HarnessRefusal } from "./runner.js";
 
 const CONTROL_BYTES_MAX = 16_384;
 const encoder = new TextEncoder();
-// Version 1's documented pre-spawn refusal codes are a closed evidence contract.
-const REFUSAL_REASONS = new Set([
-  "unsupported-interface",
-  "resume-unavailable",
-  "cwd-refused",
-  "invalid-request",
-  "executable-unavailable",
-  "spawn-rejected",
-]);
 
 class InvalidControl extends Error {}
 
@@ -51,8 +43,7 @@ function parseControl(line: string, options: OpenInteractiveOptions): Interactiv
   if (
     record.kind === "refused" &&
     record.evidence === "spawn-not-attempted" &&
-    typeof record.reason === "string" &&
-    REFUSAL_REASONS.has(record.reason)
+    isInteractiveRefusalReason(record.reason)
   )
     return { ...base, kind: "refused", evidence: record.evidence, reason: record.reason };
   if (
