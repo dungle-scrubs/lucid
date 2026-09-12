@@ -29,9 +29,20 @@ export interface HcnProcess {
 
 export type SpawnHcn = (argv: readonly string[], opts: { readonly cwd?: string }) => HcnProcess;
 
+export interface InteractiveHcnProcess extends Pick<HcnProcess, "exited" | "kill"> {
+  readonly control: AsyncIterable<string>;
+  disposeControl(): void;
+}
+
+export type SpawnInteractiveHcn = (
+  argv: readonly string[],
+  opts: { readonly cwd: string },
+) => InteractiveHcnProcess;
+
 export interface HarnessDeps {
   readonly installation?: HcnInstallation;
   readonly spawn: SpawnHcn;
+  readonly spawnInteractive?: SpawnInteractiveHcn;
   /** Grace before escalating a refused child from SIGTERM to SIGKILL. */
   readonly refusalGraceMs?: number;
   /** Context-accounting wall-clock ceiling, including native probe cleanup. */
@@ -65,7 +76,7 @@ export async function* lines(chunks: AsyncIterable<string>): AsyncIterable<strin
 /** One escalation policy. The caller chooses whether process exit or its
  * output pump is the terminal evidence it needs to await. */
 export async function terminateHcn(
-  proc: HcnProcess,
+  proc: Pick<HcnProcess, "exited" | "kill">,
   graceMs: number,
   settled: Promise<unknown> = proc.exited,
 ): Promise<boolean> {

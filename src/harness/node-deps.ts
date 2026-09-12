@@ -2,10 +2,11 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, resolve } from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { HEADLESS_NATIVE_ROLE, NATIVE_ROLE_ENV, selfInvocation } from "../cli/invocation.js";
 import type { CompatibilityDiagnostic, HcnInstallation } from "./compatibility.js";
-import type { HarnessDeps, HcnProcess, SpawnHcn } from "./process.js";
+import type { HarnessDeps, HcnProcess, SpawnHcn, SpawnInteractiveHcn } from "./process.js";
 import { HarnessSpawnError } from "./runner.js";
 
 /** Where to look, injected so both package-local branches are reachable in
@@ -128,6 +129,37 @@ const spawnHcn = (
 
 export const nodeSpawnHcn: SpawnHcn = (argv, opts) => spawnHcn(argv, opts, false);
 
+/** Keep the caller's terminal and process group. HCN supervises its own native child. */
+export const nodeSpawnInteractiveHcn: SpawnInteractiveHcn = (argv, opts) => {
+  const [binary, ...args] = argv;
+  if (!binary) throw new HarnessSpawnError("empty argv");
+  let child: ReturnType<typeof nodeSpawn>;
+  try {
+    child = nodeSpawn(binary, args, {
+      cwd: opts.cwd,
+      stdio: ["inherit", "inherit", "inherit", "pipe"],
+    });
+  } catch (cause) {
+    throw new HarnessSpawnError(cause);
+  }
+  const control = child.stdio[3] instanceof Readable ? child.stdio[3] : null;
+  return {
+    control: decodedOutput(control),
+    exited: new Promise<number | null>((resolve) => {
+      child.once("close", (code) => resolve(code));
+      child.on("error", () => {
+        if (child.pid === undefined) resolve(null);
+      });
+    }),
+    disposeControl: () => {
+      control?.destroy();
+    },
+    kill: (signal = "SIGTERM") => {
+      child.kill(signal);
+    },
+  };
+};
+
 function selectedInstallation(lookup: HcnBinLookup): {
   readonly bin: string;
   readonly installation: HcnInstallation;
@@ -179,6 +211,7 @@ function checkedDeps(
   return {
     installation,
     spawn: (argv, opts) => spawnHcn(argv, opts, true),
+    spawnInteractive: nodeSpawnInteractiveHcn,
     bin,
     ...(log === undefined ? {} : { log }),
   };

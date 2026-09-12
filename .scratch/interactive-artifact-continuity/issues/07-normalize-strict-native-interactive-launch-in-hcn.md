@@ -22,3 +22,9 @@ HCN branch feat/strict-interactive-launch commit 6b5ecb9 implements the strict C
 ## Parent
 
 RFC 26 and planning map https://github.com/dungle-scrubs/lucid/issues/253. Machine-made implementation slice under the approved autonomous continuation.
+
+## Lucid consumer seam
+
+Consume the documented HCN interactive operation through HarnessRunner.openInteractive. A separate injected process primitive inherits terminal input/output and exposes only the control pipe to the parser. The handle owns one control stream, lifecycle completion and cancellation. Admission wraps its synchronous invocation, as in the native approval transport. Tests first prove exact argv, correlated ready/start/closed evidence, and cleanup settlement with fake HCN; then malformed/truncated or wrong-target control, refusal, cancellation and actual inherited terminal I/O. HCN owns native argv and native-process supervision. The ordinary headless supervisor and its headless-role marker cannot be reused for native terminal startup. No runtime activation is included in this transport slice.
+
+The Lucid consumer now validates the versioned lifecycle, exact target, closed refusal-code set and separate owned completion. Cancellation after invocation waits for wrapper exit and retains missing native cleanup as uncertain. Structured diagnostics cannot change control evidence. Tests include invalid control, split records, single-use readers, throwing spawn, withheld invocation, cancellation ordering and inherited I/O. A synthetic Herdr TTY check confirms all three native terminal streams and typed input; its pane is closed. Four Muse review axes and scoped fixes pass 1,644 tests plus build. Detailed results are in ignored interactive-transport-review-01 evidence. Native acceptance and runtime integration remain pending.

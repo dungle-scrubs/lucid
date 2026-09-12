@@ -22,6 +22,7 @@ import {
 import { countContext } from "./context-accounting.js";
 import { decodeHarnessLine, type HarnessEvent } from "./events.js";
 import { inspectedExecutable, nativeContextManagement } from "./inspection-facts.js";
+import { openInteractive } from "./interactive.js";
 import { nativeApprovalStream } from "./native-approval-stream.js";
 import { nativeContinuationSettings } from "./native-settings.js";
 import type { HarnessDeps } from "./process.js";
@@ -659,6 +660,7 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
   };
 
   return {
+    openInteractive: (options) => openInteractive(deps, options),
     inspectNativeContinuation: async (target) => {
       try {
         const { out, code } = await runToCompletion(

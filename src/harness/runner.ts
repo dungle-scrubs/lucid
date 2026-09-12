@@ -18,8 +18,10 @@
  */
 
 import { CompatibilityError } from "../protocol/compatibility.js";
+import type { NativeInterface } from "../protocol/connection.js";
 import type { HarnessName } from "../protocol/frames.js";
 import type { ApprovalDecision } from "../protocol/native-approvals.js";
+import type { ProcessOwner } from "../protocol/process-owner.js";
 import {
   type CompatibilityDiagnostic,
   diagnosticMessage,
@@ -209,6 +211,7 @@ export interface StreamTurnOptions {
 }
 
 export interface HarnessRunner {
+  openInteractive?(options: OpenInteractiveOptions): InteractiveHandle;
   /** Passive, uncached HCN evidence. Unknown permission authority stays unavailable.
    * HCN revalidates and restores the fingerprint before submitting a native turn. */
   inspectNativeContinuation?(target: NativeContinuationTarget): Promise<NativeContinuationSettings>;
@@ -242,6 +245,50 @@ export interface HarnessRunner {
   ): Promise<HarnessFacts>;
   /** `hcn inspect <h> --capabilities`. No spawn. */
   capabilities(harness: HarnessName, model: string, mode: HarnessMode): Promise<CapabilityResult>;
+}
+
+export interface OpenInteractiveOptions {
+  readonly cwd: string;
+  readonly harness: HarnessName;
+  readonly interface: NativeInterface;
+  readonly launchId: string;
+  readonly resume: string;
+  readonly signal?: AbortSignal;
+  /** Invoke synchronously inside the caller's native admission transaction. */
+  readonly dispatch?: (invoke: () => undefined) => undefined;
+}
+
+export type InteractiveControlRecord = {
+  readonly v: 1;
+  readonly operation: "interactive";
+  readonly launchId: string;
+} & (
+  | { readonly kind: "ready" }
+  | { readonly kind: "refused"; readonly evidence: "spawn-not-attempted"; readonly reason: string }
+  | {
+      readonly kind: "started";
+      readonly sessionId: string;
+      readonly cwd: string;
+      readonly interface: NativeInterface;
+      readonly owner: ProcessOwner;
+    }
+  | { readonly kind: "closed"; readonly cleanupComplete: boolean; readonly exitCode: number | null }
+);
+
+export type InteractiveResult =
+  | {
+      readonly kind: "refused";
+      readonly evidence: "spawn-not-attempted" | "dispatch-not-called";
+      readonly reason: string;
+    }
+  | { readonly kind: "closed"; readonly cleanupComplete: true; readonly exitCode: number | null }
+  | { readonly kind: "uncertain"; readonly reason: string };
+
+export interface InteractiveHandle {
+  /** Single-use stream. Terminal evidence is final only after settled confirms drainage. */
+  readonly control: AsyncIterable<InteractiveControlRecord>;
+  readonly settled: Promise<InteractiveResult>;
+  cancel(): void;
 }
 
 export interface ContextCountOptions extends Omit<StreamTurnOptions, "turnId" | "nativeApprovals"> {
