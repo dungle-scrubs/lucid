@@ -52,6 +52,8 @@ import { isTextBytes, sniffImageType, withinAttachmentBound } from "../protocol/
 import { EventKind } from "../protocol/events.js";
 import { executionViews } from "../protocol/execution-view.js";
 import { isWireId, TEXT_MAX } from "../protocol/frames.js";
+import { parseApprovalDecision } from "../protocol/native-approval-codec.js";
+import { approvalView, approvalViews } from "../protocol/native-approval-view.js";
 import { getBlob } from "../store/blobs.js";
 import {
   type ConversationHost,
@@ -421,6 +423,41 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           }
         }
 
+        const approvalDecision = path.match(/^\/api\/conversations\/([^/]+)\/approvals\/decision$/);
+        if (approvalDecision && req.method === "POST") {
+          const id = decodeURIComponent(approvalDecision[1] ?? "");
+          if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+          let raw: unknown;
+          try {
+            raw = await req.json();
+          } catch {
+            return json({ error: "invalid-json" }, 400);
+          }
+          const decision = parseApprovalDecision(raw);
+          if (!decision)
+            return json(
+              {
+                error: "invalid-approval",
+                reason: "Use the offered request and choice with a decision ID.",
+              },
+              400,
+            );
+          return withWriter(dirForRequest(id), id, (host) => {
+            const result = host.decideApproval(decision, () => presenceHeld(host.dir) === true);
+            if (result.verdict === "refused")
+              return json(
+                {
+                  error: result.issue,
+                  reason:
+                    "This request cannot accept that answer. Refresh to check its current state.",
+                },
+                409,
+              );
+            const entry = result.state.approvals[decision.requestId];
+            return json({ approval: entry ? approvalView(entry, presenceHeld(host.dir)) : null });
+          });
+        }
+
         const recovery = path.match(/^\/api\/conversations\/([^/]+)\/inputs\/([^/]+)\/recovery$/);
         if (recovery && req.method === "POST") {
           const id = decodeURIComponent(recovery[1] ?? "");
@@ -507,12 +544,13 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
           const dir = dirForRequest(id);
           let snapshot: ReturnType<typeof viewSnapshot>;
+          const executorPresent = presenceHeld(dir);
           try {
             // Whether anything is driving comes from the presence lock, not
             // from the lease: an idle driver lets its lease lapse while
             // sitting perfectly healthy, and reading the lease alone made
             // the page say "agent-gone" while an agent was answering.
-            snapshot = viewSnapshot(dir, { presence: () => presenceHeld(dir) });
+            snapshot = viewSnapshot(dir, { presence: () => executorPresent });
           } catch (cause) {
             // The fold throws on an unparseable line rather than skipping it,
             // and `goodBytes` only ever covers a torn trailing write. Reporting
@@ -605,6 +643,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
                   : entry.reason,
             }));
           }
+          const approvalRevision = `${snapshot.state.approvalRevision}:${executorPresent ?? "unknown"}`;
           return json({
             conversationId: id,
             lines,
@@ -613,6 +652,10 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             // and working look identical otherwise, and the question "is
             // something happening?" had no answer on the surface.
             executions,
+            approvalRevision,
+            ...(url.searchParams.get("approvalRevision") === approvalRevision
+              ? {}
+              : { approvals: approvalViews(snapshot.state, executorPresent) }),
             activity: {
               // Whether the NEWEST turn has produced a terminal event.
               //

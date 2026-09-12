@@ -49,6 +49,7 @@ import { ATTACHMENT_BYTES_MAX } from "../../protocol/attachment.js";
 import { comparisonMetadata } from "../../protocol/comparison-note.js";
 import type { CompatibilityDiagnostic } from "../../protocol/compatibility.js";
 import type { ExecutionView } from "../../protocol/execution-view.js";
+import type { ApprovalState } from "../../protocol/native-approvals.js";
 import { type Activity as ActivitySnapshot, describeActivity, type Report } from "./activity.js";
 import {
   type Confidence,
@@ -104,6 +105,7 @@ import {
   writeConversationWidth,
 } from "./layout.js";
 import { LocationControl, type LocationState } from "./location-control.js";
+import { NativeApproval } from "./native-approval.js";
 import { NoteAnchorHelp } from "./note-anchor-help.js";
 import { NotePopover } from "./note-popover.js";
 import {
@@ -1837,6 +1839,7 @@ const App = (): React.ReactElement => {
     waiting: 0,
   });
   const [executions, setExecutions] = React.useState<readonly ExecutionView[]>([]);
+  const [approvals, setApprovals] = React.useState<readonly ApprovalState[]>([]);
   /** When the transcript last changed. A conversation that is waiting and a
    * conversation that has stopped look identical without it — which is how
    * a wedged harness sat silent for ninety minutes with eight inputs
@@ -2374,12 +2377,16 @@ const App = (): React.ReactElement => {
     let alive = true;
     let requested = 0;
     let applied = 0;
+    let approvalRevision = "";
     const tick = async (): Promise<void> => {
       const sequence = ++requested;
       try {
-        const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}`, {
-          headers: { [TOKEN_HEADER]: token },
-        });
+        const res = await fetch(
+          `/api/conversations/${encodeURIComponent(conversationId)}?approvalRevision=${encodeURIComponent(approvalRevision)}`,
+          {
+            headers: { [TOKEN_HEADER]: token },
+          },
+        );
         if (!alive) return;
         if (res.status === 401) {
           setDead(true);
@@ -2412,6 +2419,8 @@ const App = (): React.ReactElement => {
           driverChoices?: DriverChoices | null;
           activity?: Activity;
           executions?: readonly ExecutionView[];
+          approvals?: readonly ApprovalState[];
+          approvalRevision?: string;
         };
         if (!alive) return;
         if (sequence < applied) return;
@@ -2450,6 +2459,10 @@ const App = (): React.ReactElement => {
             ? previous
             : (data.executions ?? []),
         );
+        if (data.approvals !== undefined) {
+          approvalRevision = data.approvalRevision ?? "";
+          setApprovals(data.approvals);
+        }
         setDamaged(data.damaged === true);
         if (data.damaged !== true) setProblem(null);
       } catch (e: unknown) {
@@ -3614,7 +3627,12 @@ const App = (): React.ReactElement => {
 
   /** Activity at the end of the transcript, counted and clocked (3c, 6e Wait).
    * No activity produces no status message. */
-  const busy = activity.turn || activity.inFlight > 0 || activity.waiting > 0;
+  const pendingApprovals = React.useMemo(
+    () => approvals.filter((entry) => entry.status === "pending").length,
+    [approvals],
+  );
+  const busy =
+    pendingApprovals === 0 && (activity.turn || activity.inFlight > 0 || activity.waiting > 0);
   // When this stretch of work began. Held across renders because nothing in
   // the record says it: a turn writes no line between its input and its
   // terminal event, so the only witness to the start is the page that saw
@@ -3633,6 +3651,7 @@ const App = (): React.ReactElement => {
     activity,
     (now - since) / 1000,
     status !== "agent-gone" && status !== "no record",
+    pendingApprovals,
   );
   /** The header over the document column, in its three states (README \u00a71):
    * reading on the ground, ink while changes are unsaved, and the one
@@ -4340,38 +4359,70 @@ const App = (): React.ReactElement => {
                           onRestore={restoreComparisonRequest}
                         />
                       }
-                      executionRecovery={executions.map((entry) => (
-                        <ExecutionRecovery
-                          key={`${entry.inputId}:${entry.attempt}`}
-                          entry={entry}
-                          disabled={dead || token === null}
-                          send={async (inputId, body) => {
-                            if (token === null || dead)
-                              return "Reload to reconnect before recovery.";
-                            const response = await fetch(
-                              `/api/conversations/${encodeURIComponent(conversationId)}/inputs/${encodeURIComponent(inputId)}/recovery`,
-                              {
-                                method: "POST",
-                                headers: {
-                                  [TOKEN_HEADER]: token,
-                                  "content-type": "application/json",
-                                },
-                                body,
-                              },
-                            );
-                            if (response.status === 401) {
-                              setDead(true);
-                              return "Lucid restarted. Reload to reconnect.";
-                            }
-                            if (response.ok) return null;
-                            const failure = (await response.json()) as { reason?: string };
-                            return (
-                              failure.reason ??
-                              "Recovery could not be confirmed. Refresh the artifact."
-                            );
-                          }}
-                        />
-                      ))}
+                      executionRecovery={
+                        <>
+                          {approvals.map((entry) => (
+                            <NativeApproval
+                              key={entry.request.requestId}
+                              entry={entry}
+                              disabled={dead || token === null}
+                              send={async (decision) => {
+                                if (token === null || dead)
+                                  return "Reload to reconnect before choosing.";
+                                const response = await fetch(
+                                  `/api/conversations/${encodeURIComponent(conversationId)}/approvals/decision`,
+                                  {
+                                    method: "POST",
+                                    headers: {
+                                      [TOKEN_HEADER]: token,
+                                      "content-type": "application/json",
+                                    },
+                                    body: JSON.stringify(decision),
+                                  },
+                                );
+                                if (response.status === 401) {
+                                  setDead(true);
+                                  return "Lucid restarted. Reload to reconnect.";
+                                }
+                                if (response.ok) return null;
+                                return "Your choice could not be saved. Refresh to check whether this request is still waiting.";
+                              }}
+                            />
+                          ))}
+                          {executions.map((entry) => (
+                            <ExecutionRecovery
+                              key={`${entry.inputId}:${entry.attempt}`}
+                              entry={entry}
+                              disabled={dead || token === null}
+                              send={async (inputId, body) => {
+                                if (token === null || dead)
+                                  return "Reload to reconnect before recovery.";
+                                const response = await fetch(
+                                  `/api/conversations/${encodeURIComponent(conversationId)}/inputs/${encodeURIComponent(inputId)}/recovery`,
+                                  {
+                                    method: "POST",
+                                    headers: {
+                                      [TOKEN_HEADER]: token,
+                                      "content-type": "application/json",
+                                    },
+                                    body,
+                                  },
+                                );
+                                if (response.status === 401) {
+                                  setDead(true);
+                                  return "Lucid restarted. Reload to reconnect.";
+                                }
+                                if (response.ok) return null;
+                                const failure = (await response.json()) as { reason?: string };
+                                return (
+                                  failure.reason ??
+                                  "Recovery could not be confirmed. Refresh the artifact."
+                                );
+                              }}
+                            />
+                          ))}
+                        </>
+                      }
                       recovery={{
                         state: submission.current(),
                         busy: submissionBusy,

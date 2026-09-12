@@ -49,6 +49,7 @@ import {
   type ReduceResult,
   reduce,
 } from "../protocol/index.js";
+import { reduceApproval } from "../protocol/native-approvals.js";
 import { enqueueManagedInput } from "../protocol/reducer.js";
 import { putBlob } from "./blobs.js";
 import { type RecordPaths, StoreError } from "./errors.js";
@@ -63,6 +64,13 @@ import { withRecordLock } from "./record-identity.js";
 /** One durable log entry: the verbatim input to `foldLog`. */
 export type LogEntry =
   | CursorEntry
+  | {
+      readonly v: 1;
+      readonly at: number;
+      readonly src: "execution";
+      readonly payloadVersion: 3;
+      readonly approval: import("../protocol/native-approvals.js").ApprovalFact;
+    }
   | {
       readonly v: 1;
       readonly at: number;
@@ -575,6 +583,8 @@ const applyEntry = (
 ): { result: ReduceResult; frame: import("../protocol/index.js").Frame | null } => {
   switch (entry.src) {
     case "execution":
+      if (entry.payloadVersion === 3)
+        return { result: reduceApproval(state, entry.approval, entry.at, "replay"), frame: null };
       if (entry.payloadVersion === 2)
         return { result: reduceConnection(state, entry.connection, entry.at), frame: null };
       if (entry.payloadVersion !== 1)

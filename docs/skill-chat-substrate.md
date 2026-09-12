@@ -280,6 +280,12 @@ for a malformed fact, `executor-required` without the executor lease,
 the current attempt before selecting a recovery action. These facts are
 internal record entries, not source event frames.
 
+Protected native approval writes report `invalid-approval` for malformed
+facts, `approval-unavailable` when the current managed attempt cannot answer,
+and `approval-conflict` when a request identity names different content.
+Only the current executor can publish these requests. A source event with
+the same event kind carries no approval authority.
+
 Every refusal names its `issue` from a closed set and **never
 half-applies** the frame. The right response depends on the class - "fix
 the cause and resend" is NOT universal:

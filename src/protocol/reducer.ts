@@ -47,6 +47,7 @@ import {
 import { AttachmentLedger, LEASE_RENEW_EVERY_MS, LEASE_TTL_MS } from "./ledgers/attachment.js";
 import { CreditLedger } from "./ledgers/credit.js";
 import { InputLedger } from "./ledgers/input.js";
+import { settleApprovals } from "./native-approvals.js";
 import type { ProcessOwner } from "./process-owner.js";
 
 export type { RefusalIssue } from "./frames.js";
@@ -130,6 +131,8 @@ export interface OpenQuestion {
 }
 
 export interface ChannelState {
+  readonly approvals: Readonly<Record<string, import("./native-approvals.js").ApprovalState>>;
+  readonly approvalRevision: number;
   readonly connection: import("./connection.js").ConnectionState | null;
   readonly conversationId: string;
   /** Minted by the host at record creation (D-004); checked only at attach. */
@@ -301,6 +304,8 @@ export const initialChannelState = (init: {
   readonly conversationId: string;
   readonly secret: string;
 }): ChannelState => ({
+  approvals: {},
+  approvalRevision: 0,
   connection: null,
   conversationId: init.conversationId,
   secret: init.secret,
@@ -638,6 +643,7 @@ const reduceAttach = (
         !Object.hasOwn(state.explicitAttachments, frame.explicitAttachmentId)
           ? { ...state.explicitAttachments, [frame.explicitAttachmentId]: epoch }
           : state.explicitAttachments,
+      ...settleApprovals(state, (request) => request.epoch < epoch, "executor-replaced"),
       terminalParticipations:
         frame.profile === "interactive"
           ? [

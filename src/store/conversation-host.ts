@@ -94,6 +94,11 @@ import {
   reduce,
   type TransitionRecord,
 } from "../protocol/index.js";
+import {
+  browserApprovalFact,
+  parseApprovalFact,
+  reduceApproval,
+} from "../protocol/native-approvals.js";
 import { sameProcessOwner } from "../protocol/process-owner.js";
 import { enqueueManagedInput, inputFrame } from "../protocol/reducer.js";
 import { DiscoveryIndex } from "./discovery.js";
@@ -237,6 +242,8 @@ export const readRecordFiles = (
 };
 
 export interface ConversationHost {
+  decideApproval(decision: unknown, available?: () => boolean): ReduceResult;
+  writeApproval(fact: unknown): ReduceResult;
   /** Checks before locking and again under the append lock. Native listener callers hold the
    * registration lock throughout; the raw kernel handle grants no authority. */
   acquireExecutor(
@@ -463,6 +470,36 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
         entry:
           fact && result.verdict === "accepted" && result.state !== state
             ? { v: 1, at, src: "context", payloadVersion: 1, fact }
+            : null,
+      };
+    });
+  };
+
+  const writeApproval = (
+    raw: unknown,
+    authority: "browser" | "executor",
+    available?: () => boolean,
+  ): ReduceResult => {
+    const at = deps.now();
+    return transactDynamic((state) => {
+      const fact =
+        authority === "browser" ? browserApprovalFact(state, raw) : parseApprovalFact(raw);
+      const proposed = reduceApproval(
+        state,
+        fact,
+        at,
+        authority === "executor" && !deps.executorLease() ? "none" : authority,
+      );
+      const result =
+        proposed.verdict === "accepted" && proposed.state !== state && available && !available()
+          ? refuseExecution(state, at, "approval-unavailable")
+          : proposed;
+      return {
+        result,
+        frame: null,
+        entry:
+          fact && result.verdict === "accepted" && result.state !== state
+            ? { v: 1, at, src: "execution", payloadVersion: 3, approval: fact }
             : null,
       };
     });
@@ -1094,6 +1131,8 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
         ? { verdict: "accepted", receipt: { inputId: input.id, seq: acceptedSeq } }
         : { verdict: "refused", issue: conflict ? "E-COMP-06" : result.issue };
     },
+    decideApproval: (raw, available) => writeApproval(raw, "browser", available),
+    writeApproval: (raw) => writeApproval(raw, "executor"),
     writeExecution: (raw, applicable) =>
       writeExecution(() =>
         applicable && !applicable()

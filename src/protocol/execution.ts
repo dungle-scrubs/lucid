@@ -1,6 +1,11 @@
+import { refuseExecution } from "./execution-result.js";
+
+export { refuseExecution } from "./execution-result.js";
+
 import { type CompatibilityDiagnostic, parseCompatibilityDiagnostic } from "./compatibility.js";
 import type { HarnessName, ProtocolIssue } from "./frames.js";
 import { HARNESS_NAMES, isWireId } from "./frames.js";
+import { settleApprovals } from "./native-approvals.js";
 import type { ChannelState, ReduceResult } from "./reducer.js";
 
 export interface ExecutionDriver {
@@ -302,27 +307,6 @@ export function parseExecutionFact(value: unknown): ExecutionFact | null {
   }
 }
 
-export function refuseExecution(
-  state: ChannelState,
-  now: number,
-  issue: ProtocolIssue,
-): ReduceResult {
-  return {
-    verdict: "refused",
-    issue,
-    state,
-    effects: [],
-    record: {
-      verdict: "refused",
-      kind: "input",
-      conversationId: state.conversationId,
-      epoch: state.epoch,
-      issue,
-      now,
-    },
-  };
-}
-
 export function reduceExecution(
   state: ChannelState,
   raw: unknown,
@@ -378,7 +362,22 @@ export function reduceExecution(
     effects: [],
     state: duplicate
       ? state
-      : { ...state, seq: state.seq + 1, executions: { ...state.executions, [fact.inputId]: next } },
+      : {
+          ...state,
+          seq: state.seq + 1,
+          executions: { ...state.executions, [fact.inputId]: next },
+          ...(next.kind === "attempt-ended"
+            ? settleApprovals(
+                state,
+                (request) =>
+                  request.inputId === fact.inputId &&
+                  request.attempt === next.attempt &&
+                  request.turnId === next.start.turnId &&
+                  request.epoch === next.start.epoch,
+                next.outcome.kind === "completed" ? "turn-ended" : "process-ended",
+              )
+            : {}),
+        },
     record: {
       verdict: "accepted",
       kind: "input",

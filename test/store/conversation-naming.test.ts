@@ -131,7 +131,7 @@ test("a durable submission recovers naming after metadata loss without migrating
     `${JSON.stringify({ v: 1, at: 1, src: "input", input: { id: "old", text: "Legacy prompt", mode: "queue" } })}\n`,
   );
   const before = readFileSync(legacy.metaPath, "utf8");
-  recoverConversationNaming(legacy.dir, "c");
+  await recoverConversationNaming(legacy.dir, "c");
   expect(readFileSync(legacy.metaPath, "utf8")).toBe(before);
 });
 

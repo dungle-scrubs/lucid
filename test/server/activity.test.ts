@@ -110,3 +110,14 @@ describe("formatElapsed", () => {
     expect(formatElapsed(-5)).toBe("0s");
   });
 });
+
+test("a pending permission request waits for the person without a stall alarm", () => {
+  expect(describeActivity(running, 999, true, 1)).toEqual({
+    busy: true,
+    disconnected: false,
+    elapsed: null,
+    label: "Waiting for your permission choice",
+    stalled: false,
+  });
+  expect(describeActivity(running, 999, false, 1).disconnected).toBe(true);
+});

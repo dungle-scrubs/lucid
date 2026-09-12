@@ -89,9 +89,10 @@ export const describeActivity = (
   activity: Activity,
   workingFor: number,
   connected = true,
+  pendingApprovals = 0,
 ): Report => {
   const working = activity.turn || activity.inFlight > 0;
-  const busy = working || activity.waiting > 0;
+  const busy = working || activity.waiting > 0 || pendingApprovals > 0;
   if (!busy) return { busy: false, disconnected: false, stalled: false, label: "", elapsed: null };
   if (!connected) {
     return {
@@ -100,6 +101,15 @@ export const describeActivity = (
       stalled: false,
       label: "No agent is connected. Your message is saved.",
       elapsed: null,
+    };
+  }
+  if (pendingApprovals > 0) {
+    return {
+      busy: true,
+      disconnected: false,
+      elapsed: null,
+      label: "Waiting for your permission choice",
+      stalled: false,
     };
   }
 
