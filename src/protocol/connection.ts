@@ -1,5 +1,6 @@
 import { EventKind } from "./events.js";
 import {
+  type AttemptOutcome,
   type AttemptStart,
   type ContextBoundary,
   type ExecutionFailure,
@@ -61,10 +62,30 @@ export interface NativeLaunch {
 
 export type NativeLaunchState =
   | { readonly kind: "intended"; readonly launch: NativeLaunch }
-  | { readonly failure: ExecutionFailure; readonly kind: "refused"; readonly launch: NativeLaunch };
+  | {
+      readonly identitySeq: number;
+      readonly kind: "started";
+      readonly launch: NativeLaunch;
+      readonly startedActionId: string;
+    }
+  | {
+      readonly kind: "settled";
+      readonly launch: NativeLaunch;
+      readonly outcome: AttemptOutcome;
+      readonly settledActionId: string;
+      readonly start: { readonly actionId: string; readonly identitySeq: number } | null;
+    }
+  | {
+      readonly failure: ExecutionFailure;
+      readonly kind: "refused";
+      readonly launch: NativeLaunch;
+      readonly refusedActionId: string;
+    };
 
 export function hasUnsettledLaunch(connection: ConnectionState | null): boolean {
-  return Object.values(connection?.launches ?? {}).some((entry) => entry.kind === "intended");
+  return Object.values(connection?.launches ?? {}).some(
+    (entry) => entry.kind === "intended" || entry.kind === "started",
+  );
 }
 
 export const LISTENER_WAIT_MAX_MS = 45_000;
@@ -153,6 +174,8 @@ export function hasUnsettledNativeWork(state: ChannelState): boolean {
 }
 
 export type ConnectionFact =
+  | { readonly actionId: string; readonly kind: "launch-started"; readonly launchId: string }
+  | { readonly actionId: string; readonly kind: "launch-settled"; readonly launchId: string }
   | { readonly actionId: string; readonly kind: "launch-refused"; readonly launchId: string }
   | {
       readonly actionId: string;
@@ -264,7 +287,9 @@ export function connectionRegistration(
 ): NativeBinding | undefined {
   return fact.kind === "launch-intended"
     ? fact.launch.registration
-    : fact.kind === "launch-refused"
+    : fact.kind === "launch-refused" ||
+        fact.kind === "launch-started" ||
+        fact.kind === "launch-settled"
       ? connection?.launches[fact.launchId]?.launch.registration
       : fact.kind === "bound"
         ? fact.binding
@@ -276,6 +301,8 @@ export function connectionParticipation(
   fact: ConnectionFact,
 ): ListenerParticipation | undefined {
   switch (fact.kind) {
+    case "launch-started":
+    case "launch-settled":
     case "launch-refused":
     case "launch-intended":
     case "input-cancelled":
@@ -356,7 +383,12 @@ export function parseNativeBinding(value: unknown): NativeBinding | null {
 
 export function parseConnectionFact(value: unknown): ConnectionFact | null {
   if (!object(value) || !connectionId(value.actionId)) return null;
-  if (value.kind === "launch-refused" && connectionId(value.launchId))
+  if (
+    (value.kind === "launch-refused" ||
+      value.kind === "launch-started" ||
+      value.kind === "launch-settled") &&
+    connectionId(value.launchId)
+  )
     return { actionId: value.actionId, kind: value.kind, launchId: value.launchId };
   if (value.kind === "launch-intended" && object(value.launch)) {
     const launch = value.launch;
@@ -691,6 +723,80 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
         },
         seq: state.seq + 1,
       };
+    } else if (fact.kind === "launch-started") {
+      const connection = state.connection;
+      const pending = connection?.launches[fact.launchId];
+      const start = pending?.launch.execution;
+      if (!connection || pending?.kind !== "intended" || !start)
+        return refuseConnection(state, now, "connection-conflict");
+      const native = state.nativeSessions[pending.launch.registration.harness];
+      const context = state.contextTurns[start.turnId];
+      if (
+        pending.launch.epoch !== state.epoch ||
+        JSON.stringify(parseExecutionFact(state.executions[start.inputId])) !==
+          JSON.stringify(start) ||
+        !native?.current ||
+        native.authority !== "harness-minted" ||
+        native.profile !== "headless-turn" ||
+        native.epoch !== start.epoch ||
+        native.turnId !== start.turnId ||
+        native.sessionId !== pending.launch.registration.nativeSessionId ||
+        context?.ambiguous !== false
+      )
+        return refuseConnection(state, now, "connection-unverified");
+      next = {
+        ...state,
+        connection: {
+          ...connection,
+          actions,
+          launches: {
+            ...connection.launches,
+            [fact.launchId]: {
+              identitySeq: native.seq,
+              kind: "started",
+              launch: pending.launch,
+              startedActionId: fact.actionId,
+            },
+          },
+          revision: state.seq + 1,
+        },
+        seq: state.seq + 1,
+      };
+    } else if (fact.kind === "launch-settled") {
+      const connection = state.connection;
+      const pending = connection?.launches[fact.launchId];
+      if (!connection || (pending?.kind !== "intended" && pending?.kind !== "started"))
+        return refuseConnection(state, now, "connection-conflict");
+      const execution = state.executions[pending.launch.inputId];
+      if (
+        pending.launch.epoch !== state.epoch ||
+        !pending.launch.execution ||
+        execution?.kind !== "attempt-ended" ||
+        JSON.stringify(execution.start) !== JSON.stringify(pending.launch.execution)
+      )
+        return refuseConnection(state, now, "execution-blocked");
+      next = {
+        ...state,
+        connection: {
+          ...connection,
+          actions,
+          launches: {
+            ...connection.launches,
+            [fact.launchId]: {
+              kind: "settled",
+              launch: pending.launch,
+              outcome: execution.outcome,
+              settledActionId: fact.actionId,
+              start:
+                pending.kind === "started"
+                  ? { actionId: pending.startedActionId, identitySeq: pending.identitySeq }
+                  : null,
+            },
+          },
+          revision: state.seq + 1,
+        },
+        seq: state.seq + 1,
+      };
     } else if (fact.kind === "launch-refused") {
       const connection = state.connection;
       const pending = connection?.launches[fact.launchId];
@@ -715,6 +821,7 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
               failure: execution.outcome.failure,
               kind: "refused",
               launch: pending.launch,
+              refusedActionId: fact.actionId,
             },
           },
           revision: state.seq + 1,

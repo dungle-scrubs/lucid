@@ -3,6 +3,10 @@
 Status: claimed
 Blocked by: 01, 02
 
+## Launch lifecycle checkpoint
+
+Native start is recorded only after the exact admitted turn reports its expected harness-minted session identity. The launch remains reserved through terminal response evidence until the owned source reports process cleanup and the matching attempt has an outcome. Cleanup retains uncertain execution fences; proven pre-start refusal is recorded automatically without replay. Durable replay and the real-host/source/fake-HCN approval flow cover these transitions. Four Muse review axes report no findings; 1,617 tests and build pass. Runtime activation, reconnect, dependency pin/fixtures and live native acceptance remain pending. Evidence is under ignored native-launch-lifecycle-* artifacts.
+
 ## Final dispatch checkpoint
 
 The admitted native source now rechecks its exact lease, binding, epoch, prepared attempt, owners, related records and context stamp immediately around synchronous HCN creation. Registration and selected-record append ordering remain held through that callback. Each launch can invoke once; a throwing invocation stays uncertain. Returned-owner and edited-document tests prove zero HCN creation and dispatch-not-called evidence. Callback closure/cancellation prevents a retained callback from creating a later process.

@@ -100,6 +100,10 @@ export function createManagedExecution(
         const confirmed = host.confirmConversationContext(turnId);
         if (confirmed.verdict === "refused") refusedWrite(confirmed.issue);
       }
+      if (state.connection) {
+        const cleaned = host.recordNativeExecution({ kind: "settled", turnId });
+        if (cleaned.verdict === "refused") refusedWrite(cleaned.issue);
+      }
     } finally {
       owned.delete(turnId);
       preparation.release(turnId);
@@ -226,6 +230,16 @@ export function createManagedExecution(
       )
         attempt.mayHaveRun = true;
       const result = host.handleFrame(JSON.stringify(frame));
+      if (
+        attempt &&
+        result.verdict === "accepted" &&
+        frame.kind === "event" &&
+        frame.event.kind === EventKind.identity &&
+        host.state().connection
+      ) {
+        const started = host.recordNativeExecution({ kind: "started", turnId: frame.turnId });
+        if (started.verdict === "refused") refusedWrite(started.issue);
+      }
       if (
         attempt &&
         result.verdict === "accepted" &&

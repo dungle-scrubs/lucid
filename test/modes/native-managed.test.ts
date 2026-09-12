@@ -9,7 +9,7 @@ import { createHeadlessHost, hostSeamFor, type SourceChannel } from "../../src/m
 import { createManagedExecution } from "../../src/modes/managed-execution.js";
 import { createManagedPreparation } from "../../src/modes/managed-preparation.js";
 import { createManagedSource } from "../../src/modes/managed-source.js";
-import type { NativeBinding } from "../../src/protocol/connection.js";
+import { hasUnsettledNativeWork, type NativeBinding } from "../../src/protocol/connection.js";
 import { createConversationHost } from "../../src/store/conversation-host.js";
 import { registerNativeSession } from "../../src/store/native-registration.js";
 import { acquirePresence, type PresenceHandle } from "../../src/store/presence.js";
@@ -214,9 +214,85 @@ test("a native owner returning after preparation prevents HCN creation and prove
       kind: "attempt-ended",
       outcome: { kind: "pre-start-failed", failure: { evidence: "dispatch-not-called" } },
     });
+    expect(Object.values(f.host.state().connection?.launches ?? {})).toEqual([
+      expect.objectContaining({
+        kind: "refused",
+        failure: { code: "E-HUB-05", evidence: "dispatch-not-called", reason: expect.any(String) },
+      }),
+    ]);
+    const settled = f.host.state();
+    expect(f.host.recordNativeExecution({ kind: "settled", turnId: "turn" }).verdict).toBe(
+      "accepted",
+    );
+    expect(f.host.state()).toEqual(settled);
     expect(f.host.transcript().inputs).toHaveLength(1);
   } finally {
     proc.exit(0);
+    execution.close();
+    f.close();
+  }
+});
+
+test("owned cleanup preserves an uncertain response and blocks later native work", async () => {
+  const f = setup();
+  const execution = createManagedExecution({
+    cwd: f.root,
+    driver: f.driver,
+    host: f.host,
+    runner: f.runner,
+  });
+  try {
+    const prepared = await execution.prepare({
+      inputId: "feedback",
+      text: "Use the same native session",
+      turnId: "lost-turn",
+      native: { kind: "fresh" },
+      profile: "headless-turn",
+      signal: new AbortController().signal,
+    });
+    if (prepared.kind !== "ready" || !prepared.nativeApprovals) throw new Error("Preparation held");
+    // A synthetic invocation at the owned-execution seam ends without terminal evidence.
+    prepared.nativeApprovals.dispatch?.(() => undefined);
+    expect(
+      execution.sendFrame({
+        kind: "event",
+        epoch: f.host.state().epoch,
+        n: 1,
+        turnId: "lost-turn",
+        event: {
+          kind: "identity",
+          authority: "harness-minted",
+          sessionId: f.binding.nativeSessionId,
+        },
+      }).verdict,
+    ).toBe("accepted");
+    execution.turnSettled("lost-turn");
+    expect(f.host.state().executions.feedback).toMatchObject({
+      kind: "attempt-ended",
+      outcome: { kind: "uncertain" },
+    });
+    expect(Object.values(f.host.state().connection?.launches ?? {})).toEqual([
+      expect.objectContaining({
+        kind: "settled",
+        outcome: expect.objectContaining({ kind: "uncertain" }),
+      }),
+    ]);
+    expect(hasUnsettledNativeWork(f.host.state())).toBe(true);
+    expect(
+      f.host.acceptInput({ id: "later", mode: "queue", text: "Next request" }, { managed: true })
+        .verdict,
+    ).toBe("accepted");
+    const later = await execution.prepare({
+      inputId: "later",
+      text: "Next request",
+      turnId: "later-turn",
+      native: { kind: "resume", sessionId: f.binding.nativeSessionId },
+      profile: "headless-turn",
+      signal: new AbortController().signal,
+    });
+    expect(later.kind).toBe("held");
+    expect(Object.values(f.host.state().connection?.launches ?? {})).toHaveLength(1);
+  } finally {
     execution.close();
     f.close();
   }
@@ -288,10 +364,12 @@ test("an admitted native source records one approval answer and completes the sa
   const spawner = fakeSpawner([proc]);
   const spawned = Promise.withResolvers<void>();
   const requested = Promise.withResolvers<void>();
+  const terminal = Promise.withResolvers<void>();
   const completed = Promise.withResolvers<void>();
   const requestId = randomUUID();
   f.observe(() => {
     if (f.host.state().approvals[requestId]) requested.resolve();
+    if (f.host.state().completedTurns["source-turn-1"] !== undefined) terminal.resolve();
     if (f.host.state().executions.feedback?.kind === "attempt-ended") completed.resolve();
   });
   const wire = createHcnRunner({
@@ -338,6 +416,9 @@ test("an admitted native source records one approval answer and completes the sa
       choices: [{ id: "deny", label: "Deny", scope: "deny" }],
     });
     await requested.promise;
+    expect(Object.values(f.host.state().connection?.launches ?? {})).toEqual([
+      expect.objectContaining({ kind: "started", identitySeq: expect.any(Number) }),
+    ]);
     expect(proc.writes).toEqual([]);
     const decision = { id: randomUUID(), requestId, choiceId: "deny" };
     expect(f.host.decideApproval(decision).verdict).toBe("accepted");
@@ -351,8 +432,19 @@ test("an admitted native source records one approval answer and completes the sa
       text: "The command was denied. Here is the response.",
     });
     proc.emit({ kind: "done", cause: "clean", exitCode: 0 });
+    await terminal.promise;
+    expect(Object.values(f.host.state().connection?.launches ?? {})).toEqual([
+      expect.objectContaining({ kind: "started" }),
+    ]);
+    expect(f.host.state().executions.feedback?.kind).toBe("attempt-started");
     proc.exit(0);
     await completed.promise;
+    expect(Object.values(f.host.state().connection?.launches ?? {})).toEqual([
+      expect.objectContaining({
+        kind: "settled",
+        outcome: { kind: "completed", terminalSeq: expect.any(Number) },
+      }),
+    ]);
     expect(f.host.state().executions.feedback).toMatchObject({
       kind: "attempt-ended",
       outcome: { kind: "completed" },

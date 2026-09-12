@@ -244,6 +244,11 @@ export const readRecordFiles = (
 export interface ConversationHost {
   decideApproval(decision: unknown, available?: () => boolean): ReduceResult;
   writeApproval(fact: unknown, applicable?: () => boolean): ReduceResult;
+  /** Records native identity, or cleanup reported by the source after draining its owned process. */
+  recordNativeExecution(fact: {
+    readonly kind: "started" | "settled";
+    readonly turnId: string;
+  }): ReduceResult;
   /** Synchronous invocation stays inside final native admission ordering. */
   dispatchNativeExecution(
     turnId: string,
@@ -646,11 +651,31 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     raw: unknown,
     at: number,
     requireLease: boolean,
+    cleanupTurnId?: string,
   ): { readonly fact: ConnectionFact | null; readonly result: ReduceResult } => {
     const fact = parseConnectionFact(raw);
-    if (fact?.kind === "launch-refused") {
+    if (
+      fact?.kind === "launch-refused" ||
+      fact?.kind === "launch-started" ||
+      fact?.kind === "launch-settled"
+    ) {
       const pending = state.connection?.launches[fact.launchId];
-      const issue = launchOwnerIssue(pending?.launch.requester);
+      const issue =
+        launchOwnerIssue(pending?.launch.requester) ??
+        (fact.kind === "launch-started" &&
+        (nativeExecutor?.stage.kind !== "attached" ||
+          !nativeExecutor.lease.held() ||
+          nativeExecutor.stage.invokedLaunchId !== fact.launchId)
+          ? "connection-not-admitted"
+          : undefined) ??
+        (fact.kind === "launch-settled" &&
+        (nativeExecutor?.stage.kind !== "attached" ||
+          !nativeExecutor.lease.held() ||
+          nativeExecutor.stage.preparation?.launchId !== fact.launchId ||
+          !cleanupTurnId ||
+          pending?.launch.execution?.turnId !== cleanupTurnId)
+          ? "connection-not-admitted"
+          : undefined);
       const result = issue ? refuseConnection(state, at, issue) : reduceConnection(state, fact, at);
       return { fact, result };
     }
@@ -815,6 +840,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     produce: (
       state: ChannelState,
     ) => { readonly fact: unknown } | { readonly issue: ProtocolIssue },
+    cleanupTurnId?: string,
   ): ReduceResult => {
     const at = deps.now();
     let settled: { owner: NativeBinding["owner"]; offerId: string } | undefined;
@@ -822,7 +848,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
       const decision = produce(state);
       if ("issue" in decision)
         return { entry: null, frame: null, result: refuseConnection(state, at, decision.issue) };
-      const { fact, result } = evaluateConnection(state, decision.fact, at, true);
+      const { fact, result } = evaluateConnection(state, decision.fact, at, true, cleanupTurnId);
       const registration = fact ? connectionRegistration(state.connection, fact) : undefined;
       if (result.verdict === "accepted" && fact?.kind === "offer-outcome" && registration)
         settled = { offerId: fact.offerId, owner: registration.owner };
@@ -880,6 +906,45 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
 
   return {
     writeConnection: writeAdmittedConnection,
+    recordNativeExecution: ({ kind, turnId }) =>
+      writeConnection(
+        (state) => {
+          const launchId =
+            nativeExecutor?.stage.kind === "attached"
+              ? nativeExecutor.stage.preparation?.launchId
+              : undefined;
+          const pending = launchId ? state.connection?.launches[launchId] : undefined;
+          if (!launchId || pending?.launch.execution?.turnId !== turnId)
+            return { issue: "connection-not-admitted" };
+          const execution = state.executions[pending.launch.inputId];
+          const refused =
+            kind === "settled" &&
+            (pending.kind === "refused" ||
+              (pending.kind === "intended" &&
+                execution?.kind === "attempt-ended" &&
+                execution.outcome.kind === "pre-start-failed"));
+          return {
+            fact: {
+              actionId:
+                kind === "started" && pending.kind === "started"
+                  ? pending.startedActionId
+                  : kind === "settled" && pending.kind === "settled"
+                    ? pending.settledActionId
+                    : refused && pending.kind === "refused"
+                      ? pending.refusedActionId
+                      : crypto.randomUUID(),
+              kind:
+                kind === "started"
+                  ? "launch-started"
+                  : refused
+                    ? "launch-refused"
+                    : "launch-settled",
+              launchId,
+            },
+          };
+        },
+        kind === "settled" ? turnId : undefined,
+      ),
     controlConnection: (control) =>
       writeConnection((state) => {
         if (control.kind === "cancel-input")

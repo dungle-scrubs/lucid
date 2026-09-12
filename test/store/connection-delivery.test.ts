@@ -3247,6 +3247,123 @@ test("native dispatch rechecks a returning owner after preparation and invokes t
   }
 });
 
+test("native launch start requires its recorded session identity and retains the launch reservation", () => {
+  const f = boundFixture();
+  try {
+    expect(
+      f.host.acceptInput({ id: "native-start", mode: "queue", text: "Continue" }, { managed: true })
+        .verdict,
+    ).toBe("accepted");
+    f.controls.probe = () => false;
+    const admitted = f.host.acquireExecutor(
+      { binding: f.controls.registration, inputId: "native-start", kind: "native-headless" },
+      () => acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 }),
+    );
+    if (admitted.verdict !== "accepted") throw new Error(admitted.issue);
+    f.controls.lease = admitted.lease;
+    expect(
+      f.host.handleFrame(
+        JSON.stringify(
+          attach({
+            attachmentOrigin: "automatic",
+            capabilities: ["managed-input-v1"],
+            conversationId: "feedback",
+            harness: "codex",
+            profile: "headless-turn",
+            secret: f.host.state().secret,
+          }),
+        ),
+      ).verdict,
+    ).toBe("accepted");
+    const prepared = preparedAttempt(f, "native-start");
+    expect(f.host.writePreparedExecution(prepared.fact, prepared.stamp).verdict).toBe("accepted");
+    const launch = Object.values(f.host.state().connection?.launches ?? {})[0]?.launch;
+    if (!launch) throw new Error("Missing prepared launch");
+    const started = { actionId: crypto.randomUUID(), kind: "launch-started", launchId: launch.id };
+    expect(f.host.writeConnection(started).verdict).toBe("refused");
+    expect(f.host.dispatchNativeExecution(prepared.fact.turnId, () => undefined).verdict).toBe(
+      "accepted",
+    );
+    expect(
+      f.host.handleFrame(
+        JSON.stringify({
+          kind: "event",
+          epoch: f.host.state().epoch,
+          n: 1,
+          turnId: prepared.fact.turnId,
+          event: {
+            kind: EventKind.identity,
+            authority: "harness-minted",
+            sessionId: f.controls.registration.nativeSessionId,
+          },
+        }),
+      ).verdict,
+    ).toBe("accepted");
+    expect(f.host.writeConnection(started).verdict).toBe("accepted");
+    expect(f.host.state().connection?.launches[launch.id]).toMatchObject({
+      kind: "started",
+      launch,
+    });
+    const before = f.host.state();
+    expect(f.host.writeConnection(started).verdict).toBe("accepted");
+    expect(viewConversation(f.paths.dir).state).toEqual(before);
+    expect(
+      f.host.transcript().events.filter(({ event }) => event.kind === EventKind.message),
+    ).toHaveLength(1);
+    expect(
+      f.host.writeConnection({
+        actionId: crypto.randomUUID(),
+        kind: "launch-intended",
+        launch: { ...launch, id: crypto.randomUUID() },
+      }).verdict,
+    ).toBe("refused");
+    const cleanup = { kind: "settled" as const, turnId: prepared.fact.turnId };
+    expect(f.host.recordNativeExecution(cleanup).verdict).toBe("refused");
+    expect(
+      f.host.handleFrame(
+        JSON.stringify({
+          kind: "event",
+          epoch: f.host.state().epoch,
+          n: 2,
+          turnId: prepared.fact.turnId,
+          event: { kind: EventKind.done, cause: "clean", exitCode: 0 },
+        }),
+      ).verdict,
+    ).toBe("accepted");
+    expect(
+      f.host.writeExecution({
+        kind: "attempt-ended",
+        inputId: prepared.fact.inputId,
+        attempt: prepared.fact.attempt,
+        turnId: prepared.fact.turnId,
+        outcome: {
+          kind: "completed",
+          terminalSeq: f.host.state().completedTurns[prepared.fact.turnId],
+        },
+      }).verdict,
+    ).toBe("accepted");
+    expect(
+      f.host.writeConnection({
+        actionId: crypto.randomUUID(),
+        kind: "launch-settled",
+        launchId: launch.id,
+      }).verdict,
+    ).toBe("refused");
+    expect(f.host.recordNativeExecution(cleanup).verdict).toBe("accepted");
+    expect(f.host.state().connection?.launches[launch.id]).toMatchObject({
+      kind: "settled",
+      launch,
+      outcome: { kind: "completed" },
+      start: { identitySeq: expect.any(Number), actionId: started.actionId },
+    });
+    const cleaned = f.host.state();
+    expect(f.host.recordNativeExecution(cleanup).verdict).toBe("accepted");
+    expect(viewConversation(f.paths.dir).state).toEqual(cleaned);
+  } finally {
+    f.close();
+  }
+});
+
 test("native admission releases its lock when the departed owner returns during acquisition", () => {
   const f = boundFixture();
   let lease: PresenceHandle | undefined;

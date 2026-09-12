@@ -32,4 +32,6 @@ Explicit bound executor admission and one lease-bound source attachment are now 
 
 Final dispatch now holds fresh native admission ordering through HCN creation and rejects changed ownership or context before invocation. A complete real-host/source/fake-HCN response records one permission decision and sends it once. The reviewed dispatch slice passes 1,615 tests and build. This is deterministic source integration, not live native or desktop acceptance.
 
-The runtime remains fenced. Launch settlement, reconnect, pin/recording integration and live native acceptance remain required.
+Native launch start and cleanup now have separate durable facts. Start requires the expected harness-minted identity and this host's consumed invocation. Cleanup requires the matching ended attempt and an owned-source cleanup report; a terminal response alone retains the reservation. Proven pre-start refusal is recorded automatically. Cleanup never clears uncertain execution or authorizes replay. Four Muse review axes report no findings; 1,617 tests and build pass. Evidence is under ignored native-launch-lifecycle-* artifacts.
+
+The runtime remains fenced. Reconnect, pin/recording integration and live native acceptance remain required.
