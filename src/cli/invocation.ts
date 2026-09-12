@@ -16,6 +16,10 @@ export const selfInvocation = (args: readonly string[] = []): readonly [string, 
 
 export const BACKGROUND_COMMAND = "LUCID_BACKGROUND_COMMAND";
 
+/** Native role environment variable and headless sentinel. */
+export const NATIVE_ROLE_ENV = "LUCID_NATIVE_ROLE";
+export const HEADLESS_NATIVE_ROLE = "headless";
+
 /** Background workers must never fall through to server startup. */
 export const assertServerProcess = (): void => {
   if (process.env[BACKGROUND_COMMAND] !== undefined) {

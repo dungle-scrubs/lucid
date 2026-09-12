@@ -10,12 +10,10 @@ import { openWriter } from "../store/conversation-host.js";
 import { createWithReceipt } from "../store/creation.js";
 import { validArtifactId } from "../store/log.js";
 import type { RegistrationAuthority } from "../store/native-registration.js";
-import {
-  nativeRegistrationAuthority,
-  withNativeRegistration,
-} from "../store/native-registration.js";
+import { withNativeRegistration } from "../store/native-registration.js";
 import { presenceHeld } from "../store/presence.js";
 import { WorkingFolderError } from "../store/project-directory.js";
+import { nativeCommandAuthority } from "./native-context.js";
 import { commandRecordDir, conversations, validConversationId } from "./record-addressing.js";
 
 interface PublicationConnection extends ConnectionStatus {
@@ -60,7 +58,7 @@ export async function readPublicationRequest(path: string): Promise<unknown> {
 export async function publishArtifact(
   value: unknown,
   rootDir?: string,
-  authority: RegistrationAuthority = nativeRegistrationAuthority(),
+  authority: RegistrationAuthority = nativeCommandAuthority(),
 ): Promise<PublicationResult> {
   if (!object(value) || !object(value.artifact))
     throw new HubError("Expected a publication request with an artifact.", "E-HUB-03");

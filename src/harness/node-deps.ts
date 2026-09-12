@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { selfInvocation } from "../cli/invocation.js";
+import { HEADLESS_NATIVE_ROLE, NATIVE_ROLE_ENV, selfInvocation } from "../cli/invocation.js";
 import type { CompatibilityDiagnostic, HcnInstallation } from "./compatibility.js";
 import type { HarnessDeps, HcnProcess, SpawnHcn } from "./process.js";
 import { HarnessSpawnError } from "./runner.js";
@@ -85,6 +85,7 @@ const spawnHcn = (
     child = nodeSpawn(bin, args, {
       stdio: supervised ? ["pipe", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "pipe"],
       ...(opts.cwd === undefined ? {} : { cwd: opts.cwd }),
+      env: { ...process.env, [NATIVE_ROLE_ENV]: HEADLESS_NATIVE_ROLE },
     });
   } catch (cause) {
     throw new HarnessSpawnError(cause);

@@ -165,6 +165,37 @@ export function currentListener(
   return connection?.listenerId ? connection.participations[connection.listenerId] : undefined;
 }
 
+export function sameNativeBinding(
+  a: NativeBinding | undefined,
+  b: NativeBinding | undefined,
+): boolean {
+  return (
+    !!a &&
+    !!b &&
+    a.generation === b.generation &&
+    a.registrationId === b.registrationId &&
+    a.harness === b.harness &&
+    a.interface === b.interface &&
+    a.nativeSessionId === b.nativeSessionId &&
+    a.workingDirectory === b.workingDirectory &&
+    sameProcessOwner(a.owner, b.owner)
+  );
+}
+
+/** A completed offer permits one further wait until expiry or interruption disables it. */
+export function continuationListener(
+  connection: ConnectionState | null,
+): ListenerParticipation | undefined {
+  const listener = currentListener(connection);
+  return listener &&
+    connection?.disabledReason === null &&
+    Object.values(connection.offers).some(
+      (entry) => entry.kind === "finished" && entry.offer.participationId === listener.id,
+    )
+    ? listener
+    : undefined;
+}
+
 export function connectionRegistration(
   connection: ConnectionState | null,
   fact: ConnectionFact,
@@ -584,15 +615,7 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
       const connection = state.connection;
       const p = fact.participation;
       const binding = connection?.binding;
-      if (
-        fact.source === "continuation" &&
-        (!connection?.listenerId ||
-          connection.disabledReason !== null ||
-          !Object.values(connection.offers).some(
-            (entry) =>
-              entry.kind === "finished" && entry.offer.participationId === connection.listenerId,
-          ))
-      )
+      if (fact.source === "continuation" && !continuationListener(connection))
         return refuseConnection(state, now, "connection-not-admitted");
       if (
         !connection ||

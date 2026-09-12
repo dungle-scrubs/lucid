@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { decodeHarnessLine } from "../../src/harness/events.js";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
-import { nodeSpawnHcn } from "../../src/harness/node-deps.js";
+import { nodeHarnessDeps, nodeSpawnHcn } from "../../src/harness/node-deps.js";
 import { HarnessRefusal } from "../../src/harness/runner.js";
 
 const SYNTHETIC_HCN_IDENTITY = "synthetic";
@@ -15,6 +15,29 @@ const rig = (procs: FakeHcnProcess[] = [new FakeHcnProcess()]) => {
   return { runner, spawner, proc: procs[0] as FakeHcnProcess };
 };
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+
+test("HCN children inherit a managed role through both direct and supervised launch", async () => {
+  for (const spawn of [nodeSpawnHcn, nodeHarnessDeps().spawn]) {
+    const child = spawn(
+      [
+        process.execPath,
+        "-e",
+        "process.stdout.write(process.env.LUCID_NATIVE_ROLE === 'headless' ? 'managed' : 'unmarked')",
+      ],
+      {},
+    );
+    let output = "";
+    try {
+      child.endInput();
+      for await (const part of child.stdout) output += part;
+      expect(await child.exited).toBe(0);
+      expect(output).toBe("managed");
+    } finally {
+      child.disposeOutput();
+      child.kill();
+    }
+  }
+});
 
 describe("decoding hcn's stream", () => {
   test("a known kind decodes to itself", () => {

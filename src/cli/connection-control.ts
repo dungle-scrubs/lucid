@@ -3,10 +3,8 @@ import { TEXT_MAX } from "../protocol/frames.js";
 import { HubError } from "../protocol/hub-errors.js";
 import { openWriter } from "../store/conversation-host.js";
 import type { RegistrationAuthority } from "../store/native-registration.js";
-import {
-  nativeRegistrationAuthority,
-  withNativeRegistration,
-} from "../store/native-registration.js";
+import { withNativeRegistration } from "../store/native-registration.js";
+import { nativeCommandAuthority } from "./native-context.js";
 import type { Conversations } from "./record-addressing.js";
 import { commandRecordDir } from "./record-addressing.js";
 
@@ -75,7 +73,7 @@ export function runConnectionControl(
   records: Conversations,
   conversationId: string,
   control: ConnectionControl,
-  authority: RegistrationAuthority = nativeRegistrationAuthority(),
+  authority: RegistrationAuthority = nativeCommandAuthority(),
 ): ConnectionControlResult {
   const dir = commandRecordDir(records, conversationId);
   const write = (registration?: NativeBinding): ControlOutcome => {

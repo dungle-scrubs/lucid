@@ -4,7 +4,11 @@ import type {
   ListenerDisabledReason,
   ListenerParticipation,
 } from "../protocol/connection.js";
-import { hasUnresolvedOffer, LISTENER_WAIT_MAX_MS } from "../protocol/connection.js";
+import {
+  hasUnresolvedOffer,
+  LISTENER_WAIT_MAX_MS,
+  sameNativeBinding,
+} from "../protocol/connection.js";
 import { hasUnsettledExecution } from "../protocol/execution.js";
 import type { ProtocolIssue } from "../protocol/frames.js";
 import { createConversationHost, viewConversation } from "../store/conversation-host.js";
@@ -32,7 +36,7 @@ interface NativeListenerOptions {
   readonly transport: NativeFeedbackTransport;
 }
 
-interface NativeListenerDeps {
+export interface NativeListenerDeps {
   readonly authority: RegistrationAuthority;
   readonly now: () => number;
   readonly wait: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -79,12 +83,13 @@ async function pause(ms: number, signal: AbortSignal): Promise<void> {
 /** Native adapters supply a verified transport. Waiting owns no model process or registry lock. */
 export async function listenNativeFeedback(
   options: NativeListenerOptions,
-  deps: NativeListenerDeps = {
-    authority: nativeRegistrationAuthority(),
-    now: Date.now,
-    wait: pause,
-  },
+  overrides: Partial<NativeListenerDeps> = {},
 ): Promise<NativeListenerResult> {
+  const deps: NativeListenerDeps = {
+    authority: overrides.authority ?? nativeRegistrationAuthority(),
+    now: overrides.now ?? Date.now,
+    wait: overrides.wait ?? pause,
+  };
   const { recordDir, root, signal, source, transport } = options;
   let lease: PresenceHandle | undefined;
   let host: ReturnType<typeof createConversationHost> | undefined;
@@ -127,7 +132,7 @@ export async function listenNativeFeedback(
         registration.registrationId,
         (current) => {
           // The host's captured authority is valid only while this exact registry entry is locked.
-          if (JSON.stringify(current) !== JSON.stringify(registration))
+          if (!sameNativeBinding(current, registration))
             return held(
               "stale-registration",
               "The native registration changed. Reconnect from the intended session.",

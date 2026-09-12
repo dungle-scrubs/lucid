@@ -70,6 +70,7 @@ export interface DispatchDeps {
   readonly wakeNamingFn?: (root: string) => void;
   readonly serveFn?: (opts: ServeOpts) => Promise<void>;
   readonly announceFn?: (stdin: string) => Promise<AnnounceResult>;
+  readonly codexHookFn?: typeof import("./hooks/codex.js").runCodexHook;
   readonly injectFn?: (stdin: string) => Promise<InjectResult>;
   readonly readStdinFn?: () => Promise<string>;
   /** Sink for help / confirmation lines — defaults to `console.log` in `runCli`. */
@@ -93,6 +94,8 @@ export interface DispatchDeps {
 }
 
 export type DispatchResult =
+  | { readonly kind: "codex-hook" }
+  | { readonly kind: "connection-listen"; readonly verdict: "offered" | "stopped" | "held" }
   | { readonly kind: "connection-control"; readonly verdict: "accepted" | "refused" }
   | { readonly kind: "connection-status" }
   | { readonly kind: "artifact-publish" }
@@ -130,6 +133,49 @@ export const dispatch = async (
 
   // Help is terminal — no seams, no root, no flock.
   if (mapped.kind === "help") return { kind: "help", message: mapped.message };
+  if (mapped.kind === "codex-hook") {
+    const { runCodexHook } = await import("./hooks/codex.js");
+    const records = (deps.conversationsFactory ?? conversations)(deps.rootDir);
+    let payload: unknown;
+    try {
+      payload = JSON.parse(await (deps.readStdinFn ?? readStdin)());
+    } catch {
+      payload = null;
+    }
+    const result = await (deps.codexHookFn ?? runCodexHook)(records, payload, {
+      signal: deps.signal ?? new AbortController().signal,
+    });
+    if (result.kind === "offered") (deps.onOutput ?? console.log)(result.payload);
+    if (result.kind === "held")
+      (deps.onStderr ?? ((line: string) => process.stderr.write(line)))(
+        `${result.reason}: ${result.message}\n`,
+      );
+    return { kind: "codex-hook" };
+  }
+  if (mapped.kind === "connection-listen") {
+    const { listenCodexFeedback } = await import("./codex-listener.js");
+    const records = (deps.conversationsFactory ?? conversations)(deps.rootDir);
+    const result = await listenCodexFeedback(
+      records,
+      mapped.conversationId,
+      {
+        output: mapped.json ? "json" : "text",
+        signal: deps.signal ?? new AbortController().signal,
+        source: "explicit",
+      },
+      { authority: deps.nativeAuthority },
+    );
+    const message =
+      result.kind === "held"
+        ? result.message
+        : result.kind === "stopped"
+          ? `Listening ${result.reason}. Feedback remains saved; explicitly resume listening to check again.`
+          : result.payload;
+    (deps.onOutput ?? console.log)(
+      result.kind === "offered" ? result.payload : mapped.json ? JSON.stringify(result) : message,
+    );
+    return { kind: "connection-listen", verdict: result.kind };
+  }
   if (mapped.kind === "connection-control") {
     const { readResponseRequest, runConnectionControl } = await import("./connection-control.js");
     const records = (deps.conversationsFactory ?? conversations)(deps.rootDir);
@@ -170,6 +216,7 @@ export const dispatch = async (
     const result = await publishArtifact(
       await readPublicationRequest(mapped.request),
       deps.rootDir,
+      deps.nativeAuthority,
     );
     (deps.onOutput ?? console.log)(
       mapped.json ? JSON.stringify(result) : `${result.artifactUrl}\n${result.connection.message}`,

@@ -23,14 +23,14 @@ const run = async (): Promise<void> => {
     console.log(version);
     return;
   }
-  // `watch` is the only long-lived command — give it a signal that
-  // SIGINT/SIGTERM abort. The host forwards it; other commands ignore it.
+  // Watch and native listening record shutdown when SIGINT/SIGTERM aborts the wait.
   const ac = new AbortController();
   const onAbort = (): void => ac.abort();
   process.on("SIGINT", onAbort);
   process.on("SIGTERM", onAbort);
   const result = await runCli(argv, { signal: ac.signal, wakeNamingFn: requestNaming });
   if (result.kind === "connection-control" && result.verdict === "refused") process.exitCode = 1;
+  if (result.kind === "connection-listen" && result.verdict === "held") process.exitCode = 1;
 };
 
 run().catch((e) => {

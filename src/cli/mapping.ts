@@ -14,6 +14,8 @@ import { validConversationId } from "../store/errors.js";
  */
 
 export type MappedCommand =
+  | { readonly kind: "codex-hook" }
+  | { readonly kind: "connection-listen"; readonly conversationId: string; readonly json: boolean }
   | {
       readonly kind: "connection-control";
       readonly conversationId: string;
@@ -80,13 +82,26 @@ export type MappedCommand =
 export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
   const [cmd, ...rest] = argv;
   switch (cmd) {
+    case "_codex-hook":
+      return rest.length === 0
+        ? { kind: "codex-hook" }
+        : { kind: "help", message: "The Codex hook reads its native callback from stdin." };
     case "connection": {
       const help = {
         kind: "help",
         message:
-          "usage: lucid connection status CONVERSATION [--json]\nRead current native connection and ownership evidence.\nlucid connection receipt CONVERSATION --offer OFFER [--json]\nRecord receipt from the verified native session that received the offer.\nlucid connection respond CONVERSATION --offer OFFER --request FILE [--json]\nRecord one answer, question, refusal, or failure after receipt. FILE contains {kind,text}. Repeating the same result is safe. lucid connection cancel-input CONVERSATION --input INPUT [--json]\nCancel saved feedback only before dispatch begins.\nThese commands do not start a native process.",
+          "usage: lucid connection status CONVERSATION [--json]\nRead current native connection and ownership evidence.\nlucid connection resume-listen CONVERSATION [--json]\nWait up to 45 seconds in the verified Codex CLI session for complete saved feedback. Expiry or interruption requires explicit resume-listen. Use a native command output limit of at least 8192 tokens; feedback that cannot fit remains saved.\nlucid connection receipt CONVERSATION --offer OFFER [--json]\nRecord receipt from the verified native session that received the offer.\nlucid connection respond CONVERSATION --offer OFFER --request FILE [--json]\nRecord one answer, question, refusal, or failure after receipt. FILE contains {kind,text}. Repeating the same result is safe. lucid connection cancel-input CONVERSATION --input INPUT [--json]\nCancel saved feedback only before dispatch begins.\nThese commands do not start a native process.",
       } as const;
       const id = rest[1];
+      if (rest[0] === "resume-listen") {
+        if (
+          !id ||
+          !validConversationId(id) ||
+          (rest.length !== 2 && !(rest.length === 3 && rest[2] === "--json"))
+        )
+          return help;
+        return { kind: "connection-listen", conversationId: id, json: rest[2] === "--json" };
+      }
       if (rest[0] === "receipt" || rest[0] === "respond" || rest[0] === "cancel-input") {
         if (!id || !validConversationId(id)) return help;
         let offerId: string | undefined;
