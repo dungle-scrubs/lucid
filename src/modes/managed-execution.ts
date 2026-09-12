@@ -20,6 +20,7 @@ interface OwnedAttempt {
   refused: false | "harness-refusal" | "dispatch-not-called";
 }
 const executionEvents: ReadonlySet<string> = new Set([
+  EventKind.approvalRequest,
   EventKind.message,
   EventKind.token,
   EventKind.tool,
@@ -135,7 +136,13 @@ export function createManagedExecution(
         host,
       });
       attempt.approvals = approvals;
-      return approvals;
+      return {
+        closed: approvals.closed,
+        event: (event) => {
+          if (executionEvents.has(event.kind)) attempt.mayHaveRun = true;
+          approvals.event(event);
+        },
+      };
     },
     recordChanged: () => {
       for (const attempt of owned.values()) attempt.approvals?.recordChanged();
@@ -188,6 +195,13 @@ export function createManagedExecution(
             : {
                 nativeApprovals: {
                   fingerprint: result.nativeFingerprint,
+                  dispatch: (invoke: () => undefined): undefined => {
+                    const admitted = host.dispatchNativeExecution(input.turnId, invoke);
+                    if (admitted.verdict === "refused") {
+                      managed.dispatchRejected(input.turnId, "dispatch-not-called");
+                      refusedWrite(admitted.issue);
+                    }
+                  },
                   connect: (channel: NativeApprovalChannel) =>
                     managed.connectApprovals(input.turnId, channel),
                 },

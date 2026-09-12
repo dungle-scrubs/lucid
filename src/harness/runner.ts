@@ -186,6 +186,8 @@ export type NativeContinuationSettings =
 export interface StreamTurnOptions {
   readonly nativeApprovals?: {
     readonly connect: (channel: NativeApprovalChannel) => NativeApprovalEvents;
+    /** Invoke synchronously while the caller holds native admission ordering. */
+    readonly dispatch?: (invoke: () => undefined) => undefined;
     readonly fingerprint: string;
   };
   /** hcn-enforced wall-clock bound in seconds. Isolated jobs default to 60. */

@@ -197,14 +197,34 @@ test("one managed attempt owns its approval channel until cleanup, with no repla
   }
 });
 
-test.each(["rejected", "failed", "lost", "partial-rejected"] as const)(
+test.each(["rejected", "failed", "lost", "partial-rejected", "approval-rejected"] as const)(
   "managed %s outcome keeps context unconfirmed and preserves the input",
   async (kind) => {
-    const f = await setup();
+    const f = await setup(kind === "approval-rejected" ? "native" : undefined);
     try {
       f.event({ kind: "identity", sessionId: "native", authority: "harness-minted" });
       if (kind === "partial-rejected") f.event({ kind: "tool", name: "write", phase: "end" });
-      if (kind === "rejected" || kind === "partial-rejected")
+      if (kind === "approval-rejected") {
+        const approvals = f.execution.connectApprovals("turn", {
+          alive: () => true,
+          answer: () => {
+            throw new Error("No decision was made");
+          },
+          cancel: () => {},
+        });
+        approvals.event({
+          v: 1,
+          kind: "approval-request",
+          requestId: randomUUID(),
+          sessionId: "native",
+          turnId: "native-turn",
+          category: "command",
+          details: "The running native turn asks for permission",
+          choices: [{ id: "deny", label: "Deny", scope: "deny" }],
+        });
+        approvals.closed();
+      }
+      if (kind === "rejected" || kind === "partial-rejected" || kind === "approval-rejected")
         f.event({ kind: "failure", class: "rejected", message: "Synthetic refusal" });
       if (kind !== "lost") f.event({ kind: "done", cause: "failed", exitCode: 2 });
       f.execution.close();

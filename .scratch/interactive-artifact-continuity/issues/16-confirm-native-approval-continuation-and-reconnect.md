@@ -30,4 +30,6 @@ Four Muse review axes and their scoped fixes pass the full check (1,600 tests) a
 
 Explicit bound executor admission and one lease-bound source attachment are now implemented and reviewed, with 1,608 tests passing. They preserve current native identity and recheck ownership, registration and eligible input under the existing lock ordering.
 
-The runtime remains fenced. Final dispatch revalidation, launch settlement, reconnect, pin/recording integration and live native acceptance remain required. The prepared-channel tests do not claim a completed bound runtime response or desktop support.
+Final dispatch now holds fresh native admission ordering through HCN creation and rejects changed ownership or context before invocation. A complete real-host/source/fake-HCN response records one permission decision and sends it once. The reviewed dispatch slice passes 1,615 tests and build. This is deterministic source integration, not live native or desktop acceptance.
+
+The runtime remains fenced. Launch settlement, reconnect, pin/recording integration and live native acceptance remain required.

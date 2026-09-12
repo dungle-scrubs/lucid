@@ -87,29 +87,47 @@ export function nativeApprovalStream(
         });
         if (cancelled || opts.signal?.aborted)
           throw new HarnessRefusal("aborted", "The turn was canceled before process creation");
-        const child = deps.spawn(
-          [
-            deps.bin,
-            "run",
-            opts.harness,
-            "--json",
-            "--native-approvals",
-            "--resume",
-            resume,
-            "--cwd",
-            cwd,
-            "--native-settings-fingerprint",
-            approval.fingerprint,
-            ...flag(
-              "--timeout",
-              opts.timeoutSeconds === undefined ? undefined : String(opts.timeoutSeconds),
-            ),
-            "--prompt-file",
-            path,
-          ],
-          { cwd },
-        );
-        proc = child;
+        let invoked = false;
+        const invoke = (): undefined => {
+          if (cancelled || opts.signal?.aborted)
+            throw new HarnessRefusal("aborted", "The turn was canceled before process creation");
+          if (invoked)
+            throw new HarnessRefusal(
+              "native-turn-already-started",
+              "This native turn already started.",
+            );
+          invoked = true;
+          proc = deps.spawn(
+            [
+              deps.bin,
+              "run",
+              opts.harness,
+              "--json",
+              "--native-approvals",
+              "--resume",
+              resume,
+              "--cwd",
+              cwd,
+              "--native-settings-fingerprint",
+              approval.fingerprint,
+              ...flag(
+                "--timeout",
+                opts.timeoutSeconds === undefined ? undefined : String(opts.timeoutSeconds),
+              ),
+              "--prompt-file",
+              path,
+            ],
+            { cwd },
+          );
+        };
+        if (approval.dispatch) approval.dispatch(invoke);
+        else invoke();
+        const child = proc;
+        if (!child)
+          throw new HarnessRefusal(
+            "native-dispatch-not-called",
+            "Native process creation was not admitted.",
+          );
         live = true;
         deps.log?.({ event: "hcn_run", harness: opts.harness, turnId: opts.turnId });
         opts.signal?.addEventListener("abort", terminate, { once: true });

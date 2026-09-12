@@ -3,6 +3,14 @@
 Status: claimed
 Blocked by: 01, 02
 
+## Final dispatch checkpoint
+
+The admitted native source now rechecks its exact lease, binding, epoch, prepared attempt, owners, related records and context stamp immediately around synchronous HCN creation. Registration and selected-record append ordering remain held through that callback. Each launch can invoke once; a throwing invocation stays uncertain. Returned-owner and edited-document tests prove zero HCN creation and dispatch-not-called evidence. Callback closure/cancellation prevents a retained callback from creating a later process.
+
+A complete real-host/source/fake-HCN test records one native approval decision, sends it once, completes the same-session response and confirms context coverage. Private approval requests also count as possible execution when a later HCN refusal contradicts them. Four Muse review axes and their fixes pass 1,615 tests and build. Evidence is under native-dispatch-* artifacts.
+
+Runtime activation remains fenced. The next accepted seam is durable launch lifecycle: record started evidence from the exact owned native turn, retain launch reservation through process cleanup, release proven pre-start refusals and settled owned responses through their distinct facts, and keep missing/uncertain evidence fenced. Reconnect reservations, the interactive launch consumer, pin/recording integration and native acceptance remain required.
+
 ## Explicit executor admission checkpoint
 
 An explicit native-headless request now checks the bound target and first eligible input before and after acquiring the existing presence lock. Registration, related-record and selected-record checks share one host-owned wrapper. One managed headless-turn attachment is tied to that exact lease, binding and input, and repeats current checks before its append. Cancellation, returning/unknown owners, a returning registration, released/replaced leases, another harness and repeat attachment remain fenced. Admission and attachment start no native process and emit no launch notice.

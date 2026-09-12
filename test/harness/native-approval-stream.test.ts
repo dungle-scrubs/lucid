@@ -151,6 +151,39 @@ test("a native turn iterable cannot start the same native session twice", async 
   }
 });
 
+test("an expired dispatch callback cannot create an HCN process after its channel closes", async () => {
+  const proc = new FakeHcnProcess();
+  const spawner = fakeSpawner([proc]);
+  const runner = createHcnRunner({ bin: "/fake/hcn", spawn: spawner.spawn });
+  let savedInvoke: (() => undefined) | undefined;
+  let closed = 0;
+  proc.exit(0);
+  const stream = runner.streamTurn({
+    cwd: "/fixture",
+    harness: "codex",
+    prompt: "Keep this queued",
+    resume: "native",
+    turnId: "turn",
+    nativeApprovals: {
+      fingerprint: "a".repeat(64),
+      connect: () => ({
+        event: () => {},
+        closed: () => {
+          closed++;
+        },
+      }),
+      dispatch: (invoke) => {
+        savedInvoke = invoke;
+      },
+    },
+  });
+  await expect(stream[Symbol.asyncIterator]().next()).rejects.toThrow("not admitted");
+  expect(closed).toBe(1);
+  expect(savedInvoke).toBeDefined();
+  expect(() => savedInvoke?.()).toThrow("canceled");
+  expect(spawner.calls).toHaveLength(0);
+});
+
 test("refusing the attempt's channel prevents HCN process creation", async () => {
   const proc = new FakeHcnProcess();
   const spawner = fakeSpawner([proc]);

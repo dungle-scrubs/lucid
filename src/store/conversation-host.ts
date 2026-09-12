@@ -244,6 +244,13 @@ export const readRecordFiles = (
 export interface ConversationHost {
   decideApproval(decision: unknown, available?: () => boolean): ReduceResult;
   writeApproval(fact: unknown, applicable?: () => boolean): ReduceResult;
+  /** Synchronous invocation stays inside final native admission ordering. */
+  dispatchNativeExecution(
+    turnId: string,
+    invoke: () => undefined,
+  ):
+    | { readonly verdict: "accepted" }
+    | { readonly verdict: "refused"; readonly issue: ProtocolIssue };
   /** Checks before locking and again under the append lock. Native listener callers hold the
    * registration lock throughout; the raw kernel handle grants no authority. */
   acquireExecutor(
@@ -369,8 +376,19 @@ export interface ConversationHost {
 
 export const createConversationHost = (dir: string, deps: HostDeps): ConversationHost => {
   const { secret, conversationId, paths } = readRecordFiles(dir);
-  let nativeAttachment:
-    | { readonly binding: NativeBinding; readonly inputId: string; readonly lease: PresenceHandle }
+  let nativeExecutor:
+    | {
+        readonly binding: NativeBinding;
+        readonly lease: PresenceHandle;
+        readonly stage:
+          | { readonly kind: "admitted"; readonly inputId: string }
+          | {
+              readonly kind: "attached";
+              readonly epoch: number;
+              readonly invokedLaunchId: string | null;
+              readonly preparation: { readonly launchId: string; readonly stamp: string } | null;
+            };
+      }
     | undefined;
   const nativeRecords = deps.nativeSessionRoot
     ? new DiscoveryIndex(deps.nativeSessionRoot)
@@ -668,7 +686,34 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
             at,
             present ? "connection-conflict" : "connection-unverified",
           );
-        return reduceConnection(state, fact, at);
+        const result = reduceConnection(state, fact, at);
+        if (
+          result.verdict === "accepted" &&
+          result.state !== state &&
+          fact.launch.execution &&
+          nativeExecutor?.stage.kind === "attached" &&
+          nativeExecutor.stage.epoch === fact.launch.epoch &&
+          sameNativeBinding(nativeExecutor.binding, fact.launch.registration)
+        ) {
+          nativeExecutor = {
+            ...nativeExecutor,
+            stage: {
+              ...nativeExecutor.stage,
+              preparation: {
+                launchId: fact.launch.id,
+                stamp: dispatchStamp(
+                  dir,
+                  fact.launch.inputId,
+                  fact.launch.execution.context,
+                  fact.launch.epoch,
+                  heads,
+                  result.state.connection?.revision,
+                ),
+              },
+            },
+          };
+        }
+        return result;
       };
       return { fact, result: decide() };
     }
@@ -897,15 +942,70 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
           lease.release();
           return { verdict: "refused", issue: after };
         }
-        nativeAttachment =
+        nativeExecutor =
           request.kind === "native-headless"
-            ? { binding: request.binding, inputId: request.inputId, lease }
+            ? {
+                binding: request.binding,
+                lease,
+                stage: { kind: "admitted", inputId: request.inputId },
+              }
             : undefined;
         return { verdict: "accepted", lease };
       } catch (cause) {
         lease.release();
         throw cause;
       }
+    },
+    dispatchNativeExecution: (turnId, invoke) => {
+      const executor = nativeExecutor;
+      const refuse = (issue: ProtocolIssue) => ({ issue, verdict: "refused" as const });
+      if (executor?.stage.kind !== "attached") return refuse("connection-not-admitted");
+      return withNativeAdmission<ReturnType<ConversationHost["dispatchNativeExecution"]>>(
+        executor.binding,
+        () =>
+          log.inspect(({ state }) => {
+            if (
+              nativeExecutor !== executor ||
+              executor.stage.kind !== "attached" ||
+              !executor.lease.held() ||
+              executor.stage.epoch !== state.epoch ||
+              state.attachment?.profile !== "headless-turn" ||
+              state.attachment.harness !== executor.binding.harness ||
+              !supportsManagedInput(state.attachment.capabilities) ||
+              !sameNativeBinding(state.connection?.binding, executor.binding)
+            )
+              return refuse("connection-not-admitted");
+            const preparation = executor.stage.preparation;
+            const pending = preparation
+              ? state.connection?.launches[preparation.launchId]
+              : undefined;
+            const launch = pending?.kind === "intended" ? pending.launch : undefined;
+            if (
+              !launch?.execution ||
+              launch.execution.turnId !== turnId ||
+              launch.epoch !== state.epoch ||
+              executor.stage.invokedLaunchId === launch.id ||
+              JSON.stringify(parseExecutionFact(state.executions[launch.inputId])) !==
+                JSON.stringify(launch.execution)
+            )
+              return refuse("connection-not-admitted");
+            const issue =
+              launchOwnerIssue(launch.requester) ??
+              nativeFolderIssue(dir, executor.binding) ??
+              terminalDepartureIssue(state);
+            if (issue) return refuse(issue);
+            if (preparedExecutionIssue(state, launch.execution, preparation?.stamp) !== undefined)
+              return refuse("execution-stale");
+            // Consume before invocation: a throwing spawn can still have created a child.
+            nativeExecutor = {
+              ...executor,
+              stage: { ...executor.stage, invokedLaunchId: launch.id },
+            };
+            invoke();
+            return { verdict: "accepted" };
+          }),
+        refuse,
+      );
     },
     captureDispatch: (inputId, from) =>
       log.inspect((snapshot) => captureDispatchContext(dir, inputId, from, snapshot)),
@@ -1067,17 +1167,18 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
       const apply = (): ReduceResult =>
         transact(entry, (s) => {
           if (s.connection && decoded.frame.kind === "attach") {
-            const admission = nativeAttachment;
+            const admission = nativeExecutor;
             let issue: ProtocolIssue | undefined;
             if (
               !admission?.lease.held() ||
+              admission.stage.kind !== "admitted" ||
               !deps.executorLease() ||
               decoded.frame.profile !== "headless-turn" ||
               decoded.frame.harness !== admission.binding.harness ||
               !supportsManagedInput(decoded.frame.capabilities)
             )
               issue = "connection-not-admitted";
-            else issue = nativeHeadlessIssue(s, admission.binding, admission.inputId);
+            else issue = nativeHeadlessIssue(s, admission.binding, admission.stage.inputId);
             if (issue) return { result: refuseConnection(s, at, issue), frame: decoded.frame };
           }
           const r = reduce(s, decoded.frame, at, {
@@ -1106,11 +1207,21 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
             }
           }
           if (r.verdict === "accepted" && decoded.frame.kind === "attach")
-            nativeAttachment = undefined;
+            nativeExecutor = nativeExecutor
+              ? {
+                  ...nativeExecutor,
+                  stage: {
+                    kind: "attached",
+                    epoch: r.state.epoch,
+                    invokedLaunchId: null,
+                    preparation: null,
+                  },
+                }
+              : undefined;
           return { result: r, frame: decoded.frame };
         });
       const binding = log.state().connection?.binding;
-      return decoded.frame.kind === "attach" && binding && nativeAttachment
+      return decoded.frame.kind === "attach" && binding && nativeExecutor?.stage.kind === "admitted"
         ? withNativeAdmission(binding, apply, refuseNativeAdmission)
         : apply();
     },

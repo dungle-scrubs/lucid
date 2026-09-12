@@ -3185,6 +3185,68 @@ test("native admission cannot attach a different harness", () => {
   }
 });
 
+test("native dispatch rechecks a returning owner after preparation and invokes the admitted attempt once", () => {
+  const f = boundFixture();
+  try {
+    expect(
+      f.host.acceptInput(
+        { id: "dispatch-race", mode: "queue", text: "Continue" },
+        { managed: true },
+      ).verdict,
+    ).toBe("accepted");
+    f.controls.probe = () => false;
+    const admitted = f.host.acquireExecutor(
+      { binding: f.controls.registration, inputId: "dispatch-race", kind: "native-headless" },
+      () => acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 }),
+    );
+    if (admitted.verdict !== "accepted") throw new Error(admitted.issue);
+    f.controls.lease = admitted.lease;
+    expect(
+      f.host.handleFrame(
+        JSON.stringify(
+          attach({
+            attachmentOrigin: "automatic",
+            capabilities: ["managed-input-v1"],
+            conversationId: "feedback",
+            harness: "codex",
+            profile: "headless-turn",
+            secret: f.host.state().secret,
+          }),
+        ),
+      ).verdict,
+    ).toBe("accepted");
+    const prepared = preparedAttempt(f, "dispatch-race");
+    expect(f.host.writePreparedExecution(prepared.fact, prepared.stamp).verdict).toBe("accepted");
+    const before = f.host.state();
+    let invocations = 0;
+    const invoke = (): undefined => {
+      invocations++;
+    };
+    f.controls.probe = () => true;
+    expect(f.host.dispatchNativeExecution(prepared.fact.turnId, invoke)).toEqual({
+      issue: "connection-conflict",
+      verdict: "refused",
+    });
+    expect(invocations).toBe(0);
+    expect(viewConversation(f.paths.dir).state).toEqual(before);
+    f.controls.probe = () => false;
+    expect(f.host.dispatchNativeExecution(prepared.fact.turnId, invoke)).toEqual({
+      verdict: "accepted",
+    });
+    expect(invocations).toBe(1);
+    expect(f.host.dispatchNativeExecution(prepared.fact.turnId, invoke)).toEqual({
+      issue: "connection-not-admitted",
+      verdict: "refused",
+    });
+    expect(invocations).toBe(1);
+    expect(
+      f.host.transcript().events.filter(({ event }) => event.kind === EventKind.message),
+    ).toHaveLength(1);
+  } finally {
+    f.close();
+  }
+});
+
 test("native admission releases its lock when the departed owner returns during acquisition", () => {
   const f = boundFixture();
   let lease: PresenceHandle | undefined;
