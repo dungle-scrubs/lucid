@@ -39,6 +39,11 @@ export interface ConnectionProjection extends ConnectionStatus {
   readonly savedPreference: DriverPreference | null;
 }
 
+const OWNER_CONFLICT = connectionFailure(
+  "native-identity-conflict",
+  "More than one native session owner is open. Connection is held until ownership is resolved.",
+);
+
 export function connectionFailure(reason: string, message: string): ConnectionStatus {
   return {
     message,
@@ -106,7 +111,33 @@ export function observeConnection(
           reason: "launch-unsettled",
           state: "launch-uncertain",
         };
-  if (currentReconnect(state.connection)?.kind === "intended")
+  const reconnect = currentReconnect(state.connection);
+  if (reconnect?.kind === "intended" && conflict) return OWNER_CONFLICT;
+  if (reconnect?.kind === "intended" && reconnect.started && !conflict) {
+    const child = present(reconnect.started.owner);
+    if (child !== undefined && observations.some((entry) => entry.present === undefined))
+      return {
+        message:
+          "Lucid cannot confirm whether another interactive session is still open. Reconnect and saved feedback remain held.",
+        reason: "reconnect-owner-unverified",
+        state: "owner-unknown",
+      };
+    if (child === true)
+      return {
+        message:
+          "The interactive session started. Waiting for it to connect and listen. Saved feedback is held.",
+        reason: "reconnect-listener-pending",
+        state: "reconnect-waiting",
+      };
+    if (child === undefined)
+      return {
+        message:
+          "The interactive session started, but its process cannot be verified. Saved feedback is held.",
+        reason: "reconnect-child-unverified",
+        state: "owner-unknown",
+      };
+  }
+  if (reconnect?.kind === "intended")
     return {
       message:
         "Interactive reconnect was admitted, but native process creation is not verified. Saved feedback is held.",
@@ -146,13 +177,7 @@ export function observeConnection(
           state: "outcome-unknown",
         };
   const listener = currentListener(state.connection);
-  if (conflict)
-    return {
-      message:
-        "More than one native session owner is open. Connection is held until ownership is resolved.",
-      reason: "native-identity-conflict",
-      state: "owner-conflict",
-    };
+  if (conflict) return OWNER_CONFLICT;
   if (alive === false && currentReconnect(state.connection))
     return {
       message: "Waiting to reconnect to the same native session. Saved feedback is held.",

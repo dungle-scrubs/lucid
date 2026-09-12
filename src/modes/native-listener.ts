@@ -5,8 +5,10 @@ import type {
   ListenerParticipation,
 } from "../protocol/connection.js";
 import {
-  hasUnsettledNativeWork,
+  currentReconnect,
+  hasUnsettledNativeExecution,
   LISTENER_WAIT_MAX_MS,
+  reconnectForListener,
   sameNativeBinding,
 } from "../protocol/connection.js";
 import type { ProtocolIssue } from "../protocol/frames.js";
@@ -119,7 +121,7 @@ export async function listenNativeFeedback(
         "Connect this conversation to its native author before listening.",
       );
     // Advisory precheck only. The host rechecks admission after acquiring presence.
-    if (hasUnsettledNativeWork(before))
+    if (hasUnsettledNativeExecution(before))
       return heldNativeFeedback(
         "execution-blocked",
         "The previous delivery or execution must settle before listening again.",
@@ -132,6 +134,14 @@ export async function listenNativeFeedback(
     );
     if (!resolved.ok) return heldNativeFeedback(resolved.reason, resolved.message);
     const registration = resolved.value;
+    if (
+      currentReconnect(before.connection) &&
+      !reconnectForListener(before.connection, registration)
+    )
+      return heldNativeFeedback(
+        "execution-blocked",
+        "Reconnect is reserved for another native process. Saved feedback remains held.",
+      );
     const executorOwner = readProcessOwner(process.pid);
     if (!executorOwner)
       return heldNativeFeedback("owner-unknown", "The listener process could not be verified.");

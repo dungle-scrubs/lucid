@@ -57,12 +57,37 @@ export interface NativeReconnectRequest {
   readonly requester: ProcessOwner;
 }
 
+export interface NativeReconnectCreation {
+  readonly cwd: string;
+  readonly interface: NativeInterface;
+  readonly launchId: string;
+  readonly owner: ProcessOwner;
+  readonly sessionId: string;
+}
+
+export interface NativeReconnectStart extends NativeReconnectCreation {
+  readonly actionId: string;
+}
+
 export type NativeReconnectState = {
   readonly request: NativeReconnectRequest;
   readonly requestedActionId: string;
 } & (
   | { readonly kind: "requested" }
-  | { readonly kind: "intended"; readonly launchId: string; readonly intendedActionId: string }
+  | {
+      readonly kind: "intended";
+      readonly launchId: string;
+      readonly intendedActionId: string;
+      readonly started: NativeReconnectStart | null;
+    }
+  | {
+      readonly kind: "fulfilled";
+      readonly launchId: string;
+      readonly intendedActionId: string;
+      readonly started: NativeReconnectStart;
+      readonly participationId: string;
+      readonly fulfilledActionId: string;
+    }
   | {
       readonly kind: "withdrawn";
       readonly withdrawnActionId: string;
@@ -74,6 +99,25 @@ export function currentReconnect(
   connection: ConnectionState | null,
 ): NativeReconnectState | undefined {
   return connection?.reconnectId ? connection.reconnects[connection.reconnectId] : undefined;
+}
+
+/** Correlation only. The host still checks native authority, liveness and the acquired lease. */
+export function reconnectForListener(
+  connection: ConnectionState | null,
+  registration: NativeBinding,
+):
+  | {
+      readonly request: Extract<NativeReconnectState, { kind: "intended" }>;
+      readonly started: NativeReconnectStart;
+    }
+  | undefined {
+  const request = currentReconnect(connection);
+  return request?.kind === "intended" &&
+    request.started &&
+    sameNativeTarget(connection?.binding, registration) &&
+    sameProcessOwner(request.started.owner, registration.owner)
+    ? { request, started: request.started }
+    : undefined;
 }
 
 export interface NativeLaunch {
@@ -211,6 +255,16 @@ export function hasUnsettledNativeExecution(state: ChannelState): boolean {
 export type ConnectionFact =
   | {
       readonly actionId: string;
+      readonly kind: "reconnect-started";
+      readonly cwd: string;
+      readonly interface: NativeInterface;
+      readonly sessionId: string;
+      readonly requestId: string;
+      readonly launchId: string;
+      readonly owner: ProcessOwner;
+    }
+  | {
+      readonly actionId: string;
       readonly kind: "reconnect-intended";
       readonly requestId: string;
       readonly launchId: string;
@@ -336,6 +390,7 @@ export function connectionRegistration(
   return fact.kind === "reconnect-requested" ||
     fact.kind === "reconnect-withdrawn" ||
     fact.kind === "reconnect-abandoned" ||
+    fact.kind === "reconnect-started" ||
     fact.kind === "reconnect-intended"
     ? connection?.binding
     : fact.kind === "launch-intended"
@@ -357,6 +412,7 @@ export function connectionParticipation(
     case "reconnect-requested":
     case "reconnect-withdrawn":
     case "reconnect-abandoned":
+    case "reconnect-started":
     case "reconnect-intended":
     case "launch-started":
     case "launch-settled":
@@ -391,6 +447,12 @@ export function nativeOwners(state: ChannelState): readonly { readonly owner?: P
       )
     )
       owners.push(entry.owner ? { owner: entry.owner } : {});
+  // Fulfillment records this same owner in participations above. Only the active
+  // reservation can have started provenance without an admitted participation.
+  const request = currentReconnect(state.connection);
+  const owner = request?.kind === "intended" ? request.started?.owner : undefined;
+  if (owner && !owners.some((prior) => sameProcessOwner(prior.owner, owner)))
+    owners.push({ owner });
   return owners;
 }
 
@@ -440,6 +502,33 @@ export function parseNativeBinding(value: unknown): NativeBinding | null {
 
 export function parseConnectionFact(value: unknown): ConnectionFact | null {
   if (!object(value) || !connectionId(value.actionId)) return null;
+  if (
+    value.kind === "reconnect-started" &&
+    connectionId(value.requestId) &&
+    connectionId(value.launchId)
+  ) {
+    const owner = parseProcessOwner(value.owner);
+    if (
+      !owner ||
+      !path(owner.executable) ||
+      !path(value.cwd) ||
+      typeof value.sessionId !== "string" ||
+      !isWireId(value.sessionId) ||
+      typeof value.interface !== "string" ||
+      !Object.hasOwn(NATIVE_INTERFACES, value.interface)
+    )
+      return null;
+    return {
+      actionId: value.actionId,
+      kind: value.kind,
+      requestId: value.requestId,
+      launchId: value.launchId,
+      owner,
+      cwd: value.cwd,
+      interface: value.interface as NativeInterface,
+      sessionId: value.sessionId,
+    };
+  }
   if (
     value.kind === "reconnect-intended" &&
     connectionId(value.requestId) &&
@@ -809,7 +898,7 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
       if (
         Object.hasOwn(connection.launches, fact.launchId) ||
         Object.values(connection.reconnects).some(
-          (request) => request.kind === "intended" && request.launchId === fact.launchId,
+          (request) => "launchId" in request && request.launchId === fact.launchId,
         )
       )
         return refuseConnection(state, now, "connection-conflict");
@@ -825,6 +914,47 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
               kind: "intended",
               launchId: fact.launchId,
               intendedActionId: fact.actionId,
+              started: null,
+            },
+          },
+          revision: state.seq + 1,
+        },
+        seq: state.seq + 1,
+      };
+    } else if (fact.kind === "reconnect-started") {
+      const connection = state.connection;
+      const pending = currentReconnect(connection);
+      if (
+        !connection ||
+        pending?.kind !== "intended" ||
+        pending.request.id !== fact.requestId ||
+        pending.launchId !== fact.launchId ||
+        pending.started !== null
+      )
+        return refuseConnection(state, now, "connection-conflict");
+      if (
+        fact.cwd !== connection.binding.workingDirectory ||
+        fact.interface !== connection.binding.interface ||
+        fact.sessionId !== connection.binding.nativeSessionId
+      )
+        return refuseConnection(state, now, "connection-unverified");
+      next = {
+        ...state,
+        connection: {
+          ...connection,
+          actions,
+          reconnects: {
+            ...connection.reconnects,
+            [fact.requestId]: {
+              ...pending,
+              started: {
+                actionId: fact.actionId,
+                owner: fact.owner,
+                cwd: fact.cwd,
+                interface: fact.interface,
+                sessionId: fact.sessionId,
+                launchId: fact.launchId,
+              },
             },
           },
           revision: state.seq + 1,
@@ -1066,6 +1196,7 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
       const connection = state.connection;
       const p = fact.participation;
       const binding = connection?.binding;
+      const reconnect = reconnectForListener(connection, p.registration);
       if (fact.source === "continuation" && !continuationListener(connection))
         return refuseConnection(state, now, "connection-not-admitted");
       if (
@@ -1082,7 +1213,8 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
         p.expiresAt - now > LISTENER_WAIT_MAX_MS
       )
         return refuseConnection(state, now, "connection-unverified");
-      if (hasUnsettledNativeWork(state)) return refuseConnection(state, now, "execution-blocked");
+      if (hasUnsettledNativeExecution(state) || (currentReconnect(connection) && !reconnect))
+        return refuseConnection(state, now, "execution-blocked");
       next = {
         ...state,
         connection: {
@@ -1093,6 +1225,19 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
             fact.source === "explicit" ? p.epoch : connection.explicitListenerEpoch,
           listenerId: p.id,
           participations: { ...connection.participations, [p.id]: p },
+          reconnectId: reconnect ? null : connection.reconnectId,
+          reconnects: reconnect
+            ? {
+                ...connection.reconnects,
+                [reconnect.request.request.id]: {
+                  ...reconnect.request,
+                  kind: "fulfilled",
+                  started: reconnect.started,
+                  participationId: p.id,
+                  fulfilledActionId: fact.actionId,
+                },
+              }
+            : connection.reconnects,
           revision: state.seq + 1,
         },
         epoch: p.epoch,

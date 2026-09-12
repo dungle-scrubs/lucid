@@ -49,6 +49,7 @@ import type {
   ConnectionControl,
   ConnectionFact,
   NativeBinding,
+  NativeReconnectCreation,
   NativeReconnectState,
   ReconnectControl,
 } from "../protocol/connection.js";
@@ -266,6 +267,7 @@ function reconnectWithdrawalFact(
 }
 
 export interface ConversationHost {
+  recordReconnectStarted(started: NativeReconnectCreation): ReduceResult;
   reconcileReconnect(requestId: string): ReduceResult;
   prepareReconnect(requestId: string): ReduceResult;
   dispatchReconnect(
@@ -712,6 +714,25 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     cleanupTurnId?: string,
   ): { readonly fact: ConnectionFact | null; readonly result: ReduceResult } => {
     const fact = parseConnectionFact(raw);
+    if (fact?.kind === "reconnect-started") {
+      if (state.connection?.actions[fact.actionId] === JSON.stringify(fact))
+        return { fact, result: reduceConnection(state, fact, at) };
+      const pending = currentReconnect(state.connection);
+      const executor = reconnectExecutor;
+      const issue =
+        !executor?.lease.held() ||
+        !executor.invoked ||
+        executor.launchId !== fact.launchId ||
+        executor.requestId !== fact.requestId
+          ? "connection-not-admitted"
+          : launchOwnerIssue(pending?.request.requester);
+      // HCN's correlated started record proves creation. The child may have exited
+      // already; later listener admission independently corroborates a live owner.
+      return {
+        fact,
+        result: issue ? refuseConnection(state, at, issue) : reduceConnection(state, fact, at),
+      };
+    }
     if (fact?.kind === "reconnect-intended") {
       const executor = reconnectExecutor;
       const pending = currentReconnect(state.connection);
@@ -1049,6 +1070,24 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
 
   return {
     writeConnection: writeAdmittedConnection,
+    recordReconnectStarted: ({ launchId, owner, cwd, interface: nativeInterface, sessionId }) =>
+      writeConnection((state) => {
+        const pending = currentReconnect(state.connection);
+        if (pending?.kind !== "intended" || pending.launchId !== launchId)
+          return { issue: "connection-not-admitted" };
+        return {
+          fact: {
+            actionId: pending.started?.actionId ?? crypto.randomUUID(),
+            kind: "reconnect-started",
+            cwd,
+            interface: nativeInterface,
+            sessionId,
+            launchId,
+            requestId: pending.request.id,
+            owner,
+          },
+        };
+      }),
     reconcileReconnect: (requestId) =>
       writeConnection((state) => {
         if (!connectionId(requestId)) return { issue: "invalid-connection" };
