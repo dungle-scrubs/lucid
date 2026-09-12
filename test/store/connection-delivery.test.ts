@@ -2880,6 +2880,341 @@ test("binding during executor acquisition refuses authority and releases the acq
   }
 });
 
+test("a departed bound owner admits an explicit native worker without recording a launch", () => {
+  const f = boundFixture();
+  let lease: PresenceHandle | undefined;
+  try {
+    expect(
+      f.host.acceptInput(
+        { id: "native-work", mode: "queue", text: "Continue the same session" },
+        { managed: true },
+      ).verdict,
+    ).toBe("accepted");
+    f.controls.probe = () => false;
+    const before = f.host.state().seq;
+    const admission = f.host.acquireExecutor(
+      {
+        kind: "native-headless",
+        binding: f.controls.registration,
+        inputId: "native-work",
+      },
+      () => {
+        lease = acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 });
+        return lease;
+      },
+    );
+    expect(admission.verdict).toBe("accepted");
+    if (admission.verdict !== "accepted") throw new Error(admission.issue);
+    f.controls.lease = admission.lease;
+    expect(admission.lease.held()).toBe(true);
+    expect(f.host.state().seq).toBe(before);
+    expect(f.host.state().attachment).toBeNull();
+    expect(f.host.state().connection?.launches).toEqual({});
+  } finally {
+    lease?.release();
+    f.close();
+  }
+});
+
+test("an admitted native worker attaches once on its acquired lease and preserves the bound session", () => {
+  const f = boundFixture();
+  try {
+    expect(
+      f.host.acceptInput(
+        { id: "native-attach", mode: "queue", text: "Continue here" },
+        { managed: true },
+      ).verdict,
+    ).toBe("accepted");
+    f.controls.probe = () => false;
+    const admission = f.host.acquireExecutor(
+      { binding: f.controls.registration, inputId: "native-attach", kind: "native-headless" },
+      () => acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 }),
+    );
+    if (admission.verdict !== "accepted") throw new Error(admission.issue);
+    f.controls.lease = admission.lease;
+    const frame = JSON.stringify(
+      attach({
+        attachmentOrigin: "automatic",
+        capabilities: ["managed-input-v1"],
+        conversationId: "feedback",
+        harness: "codex",
+        profile: "headless-turn",
+        secret: readFileSync(f.paths.secretPath, "utf8").trim(),
+      }),
+    );
+    const attachedResult = f.host.handleFrame(frame);
+    if (attachedResult.verdict === "refused") throw new Error(attachedResult.issue);
+    expect(attachedResult.verdict).toBe("accepted");
+    expect(f.host.state().attachment).toMatchObject({ harness: "codex", profile: "headless-turn" });
+    expect(f.host.state().connection?.binding).toEqual(f.controls.registration);
+    expect(f.host.state().connection?.launches).toEqual({});
+    const attached = f.host.state();
+    expect(f.host.handleFrame(frame)).toMatchObject({
+      issue: "connection-not-admitted",
+      verdict: "refused",
+    });
+    expect(viewConversation(f.paths.dir).state).toEqual(attached);
+  } finally {
+    f.close();
+  }
+});
+
+test("cancelling the admitted input prevents native attachment and keeps later feedback queued", () => {
+  const f = boundFixture();
+  try {
+    for (const id of ["withdraw", "keep"])
+      expect(f.host.acceptInput({ id, mode: "queue", text: id }, { managed: true }).verdict).toBe(
+        "accepted",
+      );
+    f.controls.probe = () => false;
+    const admission = f.host.acquireExecutor(
+      { binding: f.controls.registration, inputId: "withdraw", kind: "native-headless" },
+      () => acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 }),
+    );
+    if (admission.verdict !== "accepted") throw new Error(admission.issue);
+    f.controls.lease = admission.lease;
+    const writer = openWriter(f.paths.dir);
+    try {
+      expect(writer.controlConnection({ inputId: "withdraw", kind: "cancel-input" }).verdict).toBe(
+        "accepted",
+      );
+    } finally {
+      writer.close();
+    }
+    expect(
+      f.host.handleFrame(
+        JSON.stringify(
+          attach({
+            attachmentOrigin: "automatic",
+            capabilities: ["managed-input-v1"],
+            conversationId: "feedback",
+            harness: "codex",
+            profile: "headless-turn",
+            secret: f.host.state().secret,
+          }),
+        ),
+      ),
+    ).toMatchObject({ issue: "execution-ineligible", verdict: "refused" });
+    expect(f.host.state().attachment).toBeNull();
+    expect(f.host.state().connection?.launches).toEqual({});
+    expect(f.host.transcript().inputs.map(({ id, status }) => ({ id, status }))).toEqual([
+      { id: "withdraw", status: "cancelled" },
+      { id: "keep", status: "outstanding" },
+    ]);
+  } finally {
+    f.close();
+  }
+});
+
+test("a replacement raw lease cannot reuse a native worker's released admission", () => {
+  const f = boundFixture();
+  try {
+    expect(
+      f.host.acceptInput({ id: "native-lock", mode: "queue", text: "Keep this" }, { managed: true })
+        .verdict,
+    ).toBe("accepted");
+    f.controls.probe = () => false;
+    const admission = f.host.acquireExecutor(
+      { binding: f.controls.registration, inputId: "native-lock", kind: "native-headless" },
+      () => acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 }),
+    );
+    if (admission.verdict !== "accepted") throw new Error(admission.issue);
+    admission.lease.release();
+    f.acquire();
+    const before = f.host.state();
+    expect(
+      f.host.handleFrame(
+        JSON.stringify(
+          attach({
+            attachmentOrigin: "automatic",
+            capabilities: ["managed-input-v1"],
+            conversationId: "feedback",
+            harness: "codex",
+            profile: "headless-turn",
+            secret: f.host.state().secret,
+          }),
+        ),
+      ),
+    ).toMatchObject({ issue: "connection-not-admitted", verdict: "refused" });
+    expect(f.controls.lease?.held()).toBe(true);
+    expect(viewConversation(f.paths.dir).state).toEqual(before);
+  } finally {
+    f.close();
+  }
+});
+
+test("native attachment reports unknown ownership after admission without changing the record", () => {
+  const f = boundFixture();
+  try {
+    expect(
+      f.host.acceptInput(
+        { id: "native-probe", mode: "queue", text: "Keep this" },
+        { managed: true },
+      ).verdict,
+    ).toBe("accepted");
+    f.controls.probe = () => false;
+    const admission = f.host.acquireExecutor(
+      { binding: f.controls.registration, inputId: "native-probe", kind: "native-headless" },
+      () => acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 }),
+    );
+    if (admission.verdict !== "accepted") throw new Error(admission.issue);
+    f.controls.lease = admission.lease;
+    f.controls.probe = () => undefined;
+    const before = f.host.state();
+    expect(
+      f.host.handleFrame(
+        JSON.stringify(
+          attach({
+            attachmentOrigin: "automatic",
+            capabilities: ["managed-input-v1"],
+            conversationId: "feedback",
+            harness: "codex",
+            profile: "headless-turn",
+            secret: f.host.state().secret,
+          }),
+        ),
+      ),
+    ).toMatchObject({ issue: "connection-unverified", verdict: "refused" });
+    expect(viewConversation(f.paths.dir).state).toEqual(before);
+  } finally {
+    f.close();
+  }
+});
+
+test("a returning registration during native admission releases the lock and prevents a later attach", () => {
+  const f = boundFixture();
+  let lease: PresenceHandle | undefined;
+  try {
+    expect(
+      f.host.acceptInput(
+        { id: "registry-race", mode: "queue", text: "Wait for me" },
+        { managed: true },
+      ).verdict,
+    ).toBe("accepted");
+    const returning = returningRegistration(f.controls.registration);
+    let present: boolean | undefined = false;
+    f.controls.probe = (owner) => (owner.pid === returning.owner.pid ? present : false);
+    const request = {
+      binding: f.controls.registration,
+      inputId: "registry-race",
+      kind: "native-headless" as const,
+    };
+    const before = f.host.state();
+    expect(
+      f.host.acquireExecutor(request, () => {
+        lease = acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 });
+        expect(
+          registerNativeSession(returning.workingDirectory, returning, {
+            callerOwns: () => true,
+            ownerPresence: () => true,
+          }),
+        ).toMatchObject({ ok: true });
+        present = true;
+        return lease;
+      }),
+    ).toEqual({ issue: "connection-conflict", verdict: "refused" });
+    expect(lease?.held()).toBe(false);
+    present = undefined;
+    expect(
+      f.host.acquireExecutor(request, () => {
+        throw new Error("Unknown registered owner must prevent lock acquisition");
+      }),
+    ).toEqual({ issue: "connection-unverified", verdict: "refused" });
+    present = false;
+    const admitted = f.host.acquireExecutor(request, () =>
+      acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 }),
+    );
+    if (admitted.verdict !== "accepted") throw new Error(admitted.issue);
+    f.controls.lease = admitted.lease;
+    present = true;
+    expect(
+      f.host.handleFrame(
+        JSON.stringify(
+          attach({
+            attachmentOrigin: "automatic",
+            capabilities: ["managed-input-v1"],
+            conversationId: "feedback",
+            harness: "codex",
+            profile: "headless-turn",
+            secret: f.host.state().secret,
+          }),
+        ),
+      ),
+    ).toMatchObject({ issue: "connection-conflict", verdict: "refused" });
+    expect(viewConversation(f.paths.dir).state).toEqual(before);
+  } finally {
+    lease?.release();
+    f.close();
+  }
+});
+
+test("native admission cannot attach a different harness", () => {
+  const f = boundFixture();
+  try {
+    expect(
+      f.host.acceptInput(
+        { id: "wrong-harness", mode: "queue", text: "Keep Codex" },
+        { managed: true },
+      ).verdict,
+    ).toBe("accepted");
+    f.controls.probe = () => false;
+    const admitted = f.host.acquireExecutor(
+      { binding: f.controls.registration, inputId: "wrong-harness", kind: "native-headless" },
+      () => acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 }),
+    );
+    if (admitted.verdict !== "accepted") throw new Error(admitted.issue);
+    f.controls.lease = admitted.lease;
+    const before = f.host.state();
+    expect(
+      f.host.handleFrame(
+        JSON.stringify(
+          attach({
+            attachmentOrigin: "automatic",
+            capabilities: ["managed-input-v1"],
+            conversationId: "feedback",
+            harness: "muse",
+            profile: "headless-turn",
+            secret: f.host.state().secret,
+          }),
+        ),
+      ),
+    ).toMatchObject({ issue: "connection-not-admitted", verdict: "refused" });
+    expect(viewConversation(f.paths.dir).state).toEqual(before);
+  } finally {
+    f.close();
+  }
+});
+
+test("native admission releases its lock when the departed owner returns during acquisition", () => {
+  const f = boundFixture();
+  let lease: PresenceHandle | undefined;
+  try {
+    expect(
+      f.host.acceptInput(
+        { id: "native-race", mode: "queue", text: "Keep this queued" },
+        { managed: true },
+      ).verdict,
+    ).toBe("accepted");
+    f.controls.probe = () => false;
+    const before = f.host.state();
+    const admission = f.host.acquireExecutor(
+      { binding: f.controls.registration, inputId: "native-race", kind: "native-headless" },
+      () => {
+        lease = acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 });
+        f.controls.probe = () => true;
+        return lease;
+      },
+    );
+    expect(admission).toEqual({ issue: "connection-conflict", verdict: "refused" });
+    expect(lease?.held()).toBe(false);
+    expect(presenceHeld(f.paths.dir)).toBe(false);
+    expect(viewConversation(f.paths.dir).state).toEqual(before);
+  } finally {
+    lease?.release();
+    f.close();
+  }
+});
+
 test("terminal ownership appearing during admission prevents executor authority", () => {
   const f = boundFixture(false);
   let kernelLease: PresenceHandle | undefined;

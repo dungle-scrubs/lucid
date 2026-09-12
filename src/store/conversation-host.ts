@@ -250,6 +250,11 @@ export interface ConversationHost {
     request:
       | { readonly kind: "headless" }
       | {
+          readonly binding: NativeBinding;
+          readonly inputId: string;
+          readonly kind: "native-headless";
+        }
+      | {
           readonly kind: "listener";
           readonly fact: Extract<ConnectionFact, { kind: "listener-enabled" }>;
         },
@@ -364,6 +369,12 @@ export interface ConversationHost {
 
 export const createConversationHost = (dir: string, deps: HostDeps): ConversationHost => {
   const { secret, conversationId, paths } = readRecordFiles(dir);
+  let nativeAttachment:
+    | { readonly binding: NativeBinding; readonly inputId: string; readonly lease: PresenceHandle }
+    | undefined;
+  const nativeRecords = deps.nativeSessionRoot
+    ? new DiscoveryIndex(deps.nativeSessionRoot)
+    : undefined;
 
   if (deps.expectedConversationId !== undefined && deps.expectedConversationId !== conversationId)
     throw new StoreError("corrupt-log", "Record identity changed");
@@ -533,8 +544,8 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
   // outside this record's append lock so unrelated feedback can still be saved.
   const relatedLaunchIssue = (registration: NativeBinding): ProtocolIssue | undefined => {
     try {
-      if (!deps.nativeSessionRoot) return "connection-unverified";
-      const listing = new DiscoveryIndex(deps.nativeSessionRoot).scan();
+      if (!nativeRecords) return "connection-unverified";
+      const listing = nativeRecords.scan();
       const id = log.state().conversationId;
       const selectedDir = listing.identities.get(id);
       if (listing.errors.length || !selectedDir || realpathSync(selectedDir) !== realpathSync(dir))
@@ -581,6 +592,35 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     return requester && sameProcessOwner(readProcessOwner(process.pid) ?? undefined, requester)
       ? undefined
       : "connection-unverified";
+  };
+
+  const terminalDepartureIssue = (state: ChannelState): ProtocolIssue | undefined => {
+    try {
+      const present = terminalPresence(nativeOwners(state), (owner) =>
+        owner ? (deps.ownerPresence ?? ownerPresence)(owner) : deps.presence(),
+      );
+      return present === true
+        ? "connection-conflict"
+        : present === undefined
+          ? "connection-unverified"
+          : undefined;
+    } catch {
+      return "connection-unverified";
+    }
+  };
+
+  const nativeHeadlessIssue = (
+    state: ChannelState,
+    binding: NativeBinding,
+    inputId: string,
+  ): ProtocolIssue | undefined => {
+    if (!sameNativeBinding(state.connection?.binding, binding)) return "connection-unverified";
+    return (
+      nativeFolderIssue(dir, binding) ??
+      (nativeInputCandidates(dir, state, log.artifactHeads())[0] !== inputId
+        ? "execution-ineligible"
+        : undefined)
+    );
   };
 
   const evaluateConnection = (
@@ -755,31 +795,42 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     return written;
   };
 
-  const writeAdmittedConnection = (fact: unknown): ReduceResult => {
-    const parsed = parseConnectionFact(fact);
-    if (parsed?.kind !== "launch-intended") return writeConnection(() => ({ fact }));
-    if (!deps.nativeSessionRoot)
-      return refuseConnection(log.state(), deps.now(), "connection-unverified");
+  const withNativeAdmission = <TValue>(
+    binding: NativeBinding,
+    operation: () => TValue,
+    refuse: (issue: ProtocolIssue) => TValue,
+  ): TValue => {
+    if (!deps.nativeSessionRoot) return refuse("connection-unverified");
     const result = withNativeSessionAdmission(
       deps.nativeSessionRoot,
-      parsed.launch.registration,
+      binding,
       deps.ownerPresence ?? ownerPresence,
       () => {
-        const issue = relatedLaunchIssue(parsed.launch.registration);
-        return issue
-          ? refuseConnection(log.state(), deps.now(), issue)
-          : writeConnection(() => ({ fact }));
+        const issue = relatedLaunchIssue(binding);
+        return issue ? refuse(issue) : operation();
       },
     );
     return result.ok
       ? result.value
-      : refuseConnection(
-          log.state(),
-          deps.now(),
+      : refuse(
           result.reason === "native-identity-conflict"
             ? "connection-conflict"
             : "connection-unverified",
         );
+  };
+
+  const refuseNativeAdmission = (issue: ProtocolIssue): ReduceResult =>
+    refuseConnection(log.state(), deps.now(), issue);
+
+  const writeAdmittedConnection = (fact: unknown): ReduceResult => {
+    const parsed = parseConnectionFact(fact);
+    return parsed?.kind === "launch-intended"
+      ? withNativeAdmission(
+          parsed.launch.registration,
+          () => writeConnection(() => ({ fact })),
+          refuseNativeAdmission,
+        )
+      : writeConnection(() => ({ fact }));
   };
 
   return {
@@ -815,7 +866,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
         };
       }),
     acquireExecutor: (request, acquire) => {
-      const check = (): ProtocolIssue | undefined =>
+      const inspect = (): ProtocolIssue | undefined =>
         log.inspect(({ state }) => {
           if (request.kind === "listener") {
             if (request.fact.kind !== "listener-enabled") return "invalid-connection";
@@ -827,20 +878,16 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
             const { result } = evaluateConnection(state, request.fact, deps.now(), false);
             return result.verdict === "refused" ? result.issue : undefined;
           }
-          if (state.connection) return "connection-not-admitted";
-          try {
-            const present = terminalPresence(nativeOwners(state), (owner) =>
-              owner ? (deps.ownerPresence ?? ownerPresence)(owner) : deps.presence(),
-            );
-            return present === true
-              ? "connection-conflict"
-              : present === undefined
-                ? "connection-unverified"
-                : undefined;
-          } catch {
-            return "connection-unverified";
-          }
+          if (request.kind === "native-headless") {
+            const issue = nativeHeadlessIssue(state, request.binding, request.inputId);
+            if (issue) return issue;
+          } else if (state.connection) return "connection-not-admitted";
+          return terminalDepartureIssue(state);
         });
+      const check = (): ProtocolIssue | undefined => {
+        if (request.kind !== "native-headless") return inspect();
+        return withNativeAdmission(request.binding, inspect, (issue) => issue);
+      };
       const before = check();
       if (before) return { verdict: "refused", issue: before };
       const lease = acquire();
@@ -850,6 +897,10 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
           lease.release();
           return { verdict: "refused", issue: after };
         }
+        nativeAttachment =
+          request.kind === "native-headless"
+            ? { binding: request.binding, inputId: request.inputId, lease }
+            : undefined;
         return { verdict: "accepted", lease };
       } catch (cause) {
         lease.release();
@@ -1013,36 +1064,55 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
         ...(presence === undefined ? {} : { presence }),
         ...(owner === undefined ? {} : { owner }),
       };
-      return transact(entry, (s) => {
-        if (s.connection && decoded.frame.kind === "attach")
-          return {
-            result: refuseConnection(s, at, "connection-not-admitted"),
-            frame: decoded.frame,
-          };
-        const r = reduce(s, decoded.frame, at, {
-          ...(decoded.frame.kind === "attach" && decoded.frame.profile !== "interactive"
-            ? { ownersDeparted: true }
-            : {}),
-          ...ctxOf(presence),
-          ...(owner === undefined ? {} : { owner }),
+      const apply = (): ReduceResult =>
+        transact(entry, (s) => {
+          if (s.connection && decoded.frame.kind === "attach") {
+            const admission = nativeAttachment;
+            let issue: ProtocolIssue | undefined;
+            if (
+              !admission?.lease.held() ||
+              !deps.executorLease() ||
+              decoded.frame.profile !== "headless-turn" ||
+              decoded.frame.harness !== admission.binding.harness ||
+              !supportsManagedInput(decoded.frame.capabilities)
+            )
+              issue = "connection-not-admitted";
+            else issue = nativeHeadlessIssue(s, admission.binding, admission.inputId);
+            if (issue) return { result: refuseConnection(s, at, issue), frame: decoded.frame };
+          }
+          const r = reduce(s, decoded.frame, at, {
+            ...(decoded.frame.kind === "attach" && decoded.frame.profile !== "interactive"
+              ? { ownersDeparted: true }
+              : {}),
+            ...ctxOf(presence),
+            ...(owner === undefined ? {} : { owner }),
+          });
+          // Recheck under the append lock. A terminal can attach while a
+          // worker waits for its executor lease or validates a harness.
+          if (
+            r.verdict === "accepted" &&
+            decoded.frame.kind === "attach" &&
+            decoded.frame.profile !== "interactive"
+          ) {
+            const issue = terminalDepartureIssue(s);
+            if (issue) {
+              if (s.connection)
+                return { result: refuseConnection(s, at, issue), frame: decoded.frame };
+              throw new HubError(
+                "The terminal owner has not departed. Keep the input pending.",
+                "E-HUB-03",
+                409,
+              );
+            }
+          }
+          if (r.verdict === "accepted" && decoded.frame.kind === "attach")
+            nativeAttachment = undefined;
+          return { result: r, frame: decoded.frame };
         });
-        // Recheck under the append lock. A terminal can attach while a
-        // worker waits for its executor lease or validates a harness.
-        if (
-          r.verdict === "accepted" &&
-          decoded.frame.kind === "attach" &&
-          decoded.frame.profile !== "interactive" &&
-          terminalPresence(nativeOwners(s), (owner) =>
-            owner === undefined ? deps.presence() : (deps.ownerPresence ?? ownerPresence)(owner),
-          ) !== false
-        )
-          throw new HubError(
-            "The terminal owner has not departed. Keep the input pending.",
-            "E-HUB-03",
-            409,
-          );
-        return { result: r, frame: decoded.frame };
-      });
+      const binding = log.state().connection?.binding;
+      return decoded.frame.kind === "attach" && binding && nativeAttachment
+        ? withNativeAdmission(binding, apply, refuseNativeAdmission)
+        : apply();
     },
     enqueueInput: (
       input: {
