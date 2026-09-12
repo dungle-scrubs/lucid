@@ -63,7 +63,7 @@ else process.exit(2);
   chmodSync(binary, 0o700);
   const argv = [
     process.execPath,
-    resolve(import.meta.dir, "../../src/cli/main.ts"),
+    resolve(import.meta.dir, "../helpers/managed-worker-process.ts"),
     "_managed-worker",
     root,
     "process",

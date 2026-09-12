@@ -22,8 +22,10 @@ import {
 import { countContext } from "./context-accounting.js";
 import { decodeHarnessLine, type HarnessEvent } from "./events.js";
 import { inspectedExecutable, nativeContextManagement } from "./inspection-facts.js";
+import { nativeApprovalStream } from "./native-approval-stream.js";
+import { nativeContinuationSettings } from "./native-settings.js";
 import type { HarnessDeps } from "./process.js";
-import { flag, settlesWithin, terminateHcn } from "./process.js";
+import { flag, lines, settlesWithin, terminateHcn } from "./process.js";
 import { AsyncQueue } from "./queue.js";
 import {
   type CapabilityResult,
@@ -42,22 +44,6 @@ import {
   type SessionHandle,
   type StreamTurnOptions,
 } from "./runner.js";
-
-/** Split a byte/'text' stream into lines, keeping a partial tail. */
-async function* lines(chunks: AsyncIterable<string>): AsyncIterable<string> {
-  let buffer = "";
-  for await (const chunk of chunks) {
-    buffer += chunk;
-    let nl = buffer.indexOf("\n");
-    while (nl !== -1) {
-      yield buffer.slice(0, nl);
-      buffer = buffer.slice(nl + 1);
-      nl = buffer.indexOf("\n");
-    }
-  }
-  // A final line without a trailing newline is still a line.
-  if (buffer.trim() !== "") yield buffer;
-}
 
 /** How long `hcn session --json` may stay silent before lucid gives up on
  * the open. Generous: a cold harness start is slow, and the turn-level
@@ -353,6 +339,10 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
     if (opts.signal?.aborted) throw new HarnessRefusal("aborted", "The turn was canceled");
     if (opts.isolation && opts.resume !== undefined)
       throw new HarnessRefusal("invalid-isolation", "An isolated turn cannot resume a session");
+    if (opts.nativeApprovals)
+      return nativeApprovalStream(deps, opts, (event) =>
+        safeRefusal(event, opts, "execution-check"),
+      );
     const argv = [
       deps.bin,
       "run",
@@ -669,6 +659,30 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
   };
 
   return {
+    inspectNativeContinuation: async (target) => {
+      try {
+        const { out, code } = await runToCompletion(
+          [
+            "inspect",
+            target.harness,
+            "--native-settings",
+            "--resume",
+            target.resume,
+            "--cwd",
+            target.cwd,
+            "--json",
+          ],
+          target.cwd,
+          target.signal,
+        );
+        return nativeContinuationSettings(JSON.parse(out.join("\n")), code, target);
+      } catch (cause) {
+        return {
+          status: "unavailable",
+          reason: cause instanceof HarnessRefusal ? cause.issue : "native-settings-unavailable",
+        };
+      }
+    },
     installation: deps.installation,
     reportCompatibility: (diagnostic) => {
       deps.log?.({ event: "compatibility", diagnostic });

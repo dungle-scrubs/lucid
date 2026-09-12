@@ -243,7 +243,7 @@ export const readRecordFiles = (
 
 export interface ConversationHost {
   decideApproval(decision: unknown, available?: () => boolean): ReduceResult;
-  writeApproval(fact: unknown): ReduceResult;
+  writeApproval(fact: unknown, applicable?: () => boolean): ReduceResult;
   /** Checks before locking and again under the append lock. Native listener callers hold the
    * registration lock throughout; the raw kernel handle grants no authority. */
   acquireExecutor(
@@ -1132,7 +1132,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
         : { verdict: "refused", issue: conflict ? "E-COMP-06" : result.issue };
     },
     decideApproval: (raw, available) => writeApproval(raw, "browser", available),
-    writeApproval: (raw) => writeApproval(raw, "executor"),
+    writeApproval: (raw, applicable) => writeApproval(raw, "executor", applicable),
     writeExecution: (raw, applicable) =>
       writeExecution(() =>
         applicable && !applicable()

@@ -34,6 +34,8 @@ export const INPUT_QUEUE_MAX = 8;
  * never mirror literals (C1). The droppable/lossless partition is
  * derived from the same strings so a rename is a single edit. */
 export const EventKind = {
+  approvalCleared: "approval-cleared",
+  approvalDisposition: "approval-disposition",
   approvalRequest: "approval-request",
   token: "token",
   progress: "progress",
@@ -61,6 +63,8 @@ export type HarnessEventKind = (typeof EventKind)[keyof typeof EventKind];
 export type EventClass = "droppable" | "lossless";
 
 export const EVENT_CLASS = {
+  "approval-cleared": "lossless",
+  "approval-disposition": "lossless",
   "approval-request": "lossless",
   context: "droppable",
   done: "lossless",

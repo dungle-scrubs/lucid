@@ -1,6 +1,6 @@
 # 16: Confirm native approval continuation and reconnect
 
-Status: open
+Status: claimed
 Blocked by: 14, 15
 
 ## What to build
@@ -17,3 +17,15 @@ The disposable native lane proves same-ID settings preservation, one native requ
 ## Parent
 
 RFC 27 v2, extending RFC 26 and ticket 08. Machine-made slicing under Kevin's autonomous implementation instruction. Local tracker only.
+
+## Implementation seams
+
+Machine-made under the accepted RFC and autonomous instruction: first prove the HCN subprocess channel with the existing fake process seam. The native approval mode keeps stdin for exact decisions, puts the complete prompt in a private temporary file, preserves the native fingerprint and ID, and retires its answer channel on process exit or cancellation. The managed executor then binds this channel to one recorded attempt, admits normalized requests privately, and claims each durable write intent before pipe submission. Record-tail notifications trigger only the current owner's saved decisions. Any request admission refusal, including overflow, ends the owned attempt and settles its requests after cleanup. Native settings inspection, connection launch intent, same-ID continuation and reconnect admission follow through the existing runtime and ownership seams. Final checks include public HCN transport, real records, browser decisions, local native confirmation, build and Muse review before activation.
+
+## Transport and preparation
+
+The HCN channel, private managed approval handler, passive settings projection and prepared fingerprint handoff are implemented. Channel admission precedes HCN spawn, a second channel cannot start the same attempt, and cleanup waits for process exit. The source keeps permission events private, forwards saved-decision notifications and treats a native request as a response to its initial silence check. Native preparation records the saved native settings and one atomic launch notice without applying browser setting overrides.
+
+Four Muse review axes and their scoped fixes pass the full check (1,600 tests) and build. Review and test evidence is under ignored artifacts/evidence/interactive-artifact-wayfinder/lucid-native-transport-review-01*. The worker-process fixture uses the existing idle-duration injection to remove its production batching delay; production timing and ownership assertions are unchanged.
+
+The runtime remains fenced. Explicit bound executor admission and attachment, final dispatch revalidation, launch settlement, reconnect, pin/recording integration and live native acceptance remain required. The prepared-channel tests do not claim a completed bound runtime response or desktop support.

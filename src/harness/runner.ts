@@ -19,6 +19,7 @@
 
 import { CompatibilityError } from "../protocol/compatibility.js";
 import type { HarnessName } from "../protocol/frames.js";
+import type { ApprovalDecision } from "../protocol/native-approvals.js";
 import {
   type CompatibilityDiagnostic,
   diagnosticMessage,
@@ -154,7 +155,39 @@ export interface OpenSessionOptions {
   readonly stallSeconds?: number;
 }
 
+export interface NativeApprovalChannel {
+  alive(): boolean;
+  answer(decision: ApprovalDecision): void;
+  cancel(): void;
+}
+
+export interface NativeApprovalEvents {
+  closed(): void;
+  event(event: HarnessEvent): void;
+}
+
+export interface NativeContinuationTarget {
+  readonly cwd: string;
+  readonly harness: HarnessName;
+  readonly resume: string;
+  readonly signal?: AbortSignal;
+}
+
+export type NativeContinuationSettings =
+  | {
+      readonly effort: string;
+      readonly fingerprint: string;
+      readonly model: string;
+      readonly provider: string;
+      readonly status: "available";
+    }
+  | { readonly reason: string; readonly status: "unavailable" };
+
 export interface StreamTurnOptions {
+  readonly nativeApprovals?: {
+    readonly connect: (channel: NativeApprovalChannel) => NativeApprovalEvents;
+    readonly fingerprint: string;
+  };
   /** hcn-enforced wall-clock bound in seconds. Isolated jobs default to 60. */
   readonly timeoutSeconds?: number;
   readonly signal?: AbortSignal;
@@ -174,6 +207,9 @@ export interface StreamTurnOptions {
 }
 
 export interface HarnessRunner {
+  /** Passive, uncached HCN evidence. Unknown permission authority stays unavailable.
+   * HCN revalidates and restores the fingerprint before submitting a native turn. */
+  inspectNativeContinuation?(target: NativeContinuationTarget): Promise<NativeContinuationSettings>;
   readonly installation?: HcnInstallation;
   readonly reportCompatibility?: (diagnostic: CompatibilityDiagnostic) => void;
   /** Count the complete prepared request through hcn, including recalled
@@ -182,8 +218,8 @@ export interface HarnessRunner {
   /** `hcn session <h> --json`. Throws HarnessRefusal when hcn refuses before
    * spawning, HarnessSpawnError when the binary will not start. */
   openSession(opts: OpenSessionOptions): Promise<SessionHandle>;
-  /** `hcn run <h> --json`. Never throws from the first pull: a refusal
-   * arrives as a failure event followed by done. */
+  /** `hcn run <h> --json`. HCN refusals arrive as failure/done events.
+   * Local admission and transport failures can throw; iteration owns cleanup. */
   streamTurn(opts: StreamTurnOptions): AsyncIterable<HarnessEvent>;
   /** `hcn inspect <h> --json`, projected to what lucid reads. No spawn. */
   inspect(
@@ -206,7 +242,7 @@ export interface HarnessRunner {
   capabilities(harness: HarnessName, model: string, mode: HarnessMode): Promise<CapabilityResult>;
 }
 
-export interface ContextCountOptions extends Omit<StreamTurnOptions, "turnId"> {
+export interface ContextCountOptions extends Omit<StreamTurnOptions, "turnId" | "nativeApprovals"> {
   readonly profile: "headless-turn" | "headless-session";
 }
 

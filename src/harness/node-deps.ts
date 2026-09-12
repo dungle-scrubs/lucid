@@ -60,10 +60,16 @@ export const resolveHcnBin = (opts: HcnBinLookup = {}): { bin: string; source: s
   return { bin: "hcn", source: "path" };
 };
 
-const toLines = (stream: NodeJS.ReadableStream | null): AsyncIterable<string> => ({
+const decodedOutput = (stream: NodeJS.ReadableStream | null): AsyncIterable<string> => ({
   async *[Symbol.asyncIterator]() {
     if (stream === null) return;
-    for await (const chunk of stream) yield String(chunk);
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    for await (const chunk of stream) {
+      const text = typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
+      if (text) yield text;
+    }
+    const tail = decoder.decode();
+    if (tail) yield tail;
   },
 });
 
@@ -98,8 +104,8 @@ const spawnHcn = (
   });
   return {
     inputError,
-    stdout: toLines(child.stdout),
-    stderr: toLines(child.stderr),
+    stdout: decodedOutput(child.stdout),
+    stderr: decodedOutput(child.stderr),
     exited: new Promise<number | null>((res) => {
       child.on("close", (code) => res(code));
       child.on("error", () => res(null));

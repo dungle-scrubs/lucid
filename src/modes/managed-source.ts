@@ -78,7 +78,15 @@ export function createManagedSource(
     );
     const settled = opened.settled.finally(execution.close);
     void settled.catch(() => {});
-    return { ...opened, busy: execution.busy, settled };
+    return {
+      ...opened,
+      busy: execution.busy,
+      recordChanged: () => {
+        execution.recordChanged();
+        opened.recordChanged?.();
+      },
+      settled,
+    };
   } catch (cause) {
     execution.close();
     throw cause;

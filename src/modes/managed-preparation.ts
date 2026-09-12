@@ -3,7 +3,7 @@ import {
   failureDiagnostic,
   selectionProblem,
 } from "../harness/compatibility.js";
-import type { HarnessRunner } from "../harness/runner.js";
+import type { HarnessFacts, HarnessRunner } from "../harness/runner.js";
 import { composeAnnotationPrompt } from "../protocol/annotations.js";
 import { composeArtifactPrompt } from "../protocol/artifacts.js";
 import { comparisonMetadata } from "../protocol/comparison-note.js";
@@ -20,7 +20,11 @@ import {
 } from "../store/conversation-context.js";
 import type { ConversationHost } from "../store/conversation-host.js";
 import { preferenceState } from "../store/driver-preference.js";
-import { managedCandidates, managedPrerequisite } from "../store/managed-readiness.js";
+import {
+  managedCandidates,
+  managedPrerequisite,
+  nativeInputCandidates,
+} from "../store/managed-readiness.js";
 import { readRecordMetadata } from "../store/record-identity.js";
 import { locationProjection } from "../store/settings.js";
 import { type ComparisonHold, createComparisonDelivery } from "./comparison-delivery.js";
@@ -35,6 +39,7 @@ type ManagedPrepared =
       readonly accounting: PreparedContext["accounting"] | null;
       readonly kind: "ready";
       readonly native: NativeIntent;
+      readonly nativeFingerprint?: string;
     });
 interface ManagedPreparationDeps {
   readonly cwd: string;
@@ -53,7 +58,7 @@ export interface ManagedPreparation {
 /** The working driver owns this scope until its native process has settled.
  * Preparation creates no task process and derives no execution authority. */
 export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedPreparation {
-  const { cwd, driver, host, runner } = deps;
+  const { cwd, host, runner } = deps;
   const prepareContext = createContextPreparer(runner);
   const offers = new Map<string, Pick<OfferedContext, "path" | "close">>();
   const preparing = new Map<string, AbortController>();
@@ -71,6 +76,7 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
     }
   };
   const prepare: ManagedPreparation["prepare"] = async (request) => {
+    let driver = deps.driver;
     if (preparing.has(request.turnId) || offers.has(request.turnId))
       return { kind: "held", issue: "execution-ineligible" };
     const reservation = new AbortController();
@@ -126,14 +132,19 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
     };
     try {
       const nativeFor = (state: ChannelState): NativeIntent => {
+        if (state.connection)
+          return { kind: "resume", sessionId: state.connection.binding.nativeSessionId };
         const execution = state.executions[input.inputId];
         const authorization =
           execution?.kind === "held" ? execution.authorization : execution?.kind;
         return authorization === "fresh-authorized" ? { kind: "fresh" } : input.native;
       };
+      const candidates = (state: ChannelState): readonly string[] =>
+        state.connection
+          ? nativeInputCandidates(host.dir, state, host.artifactHeads())
+          : managedCandidates(host.dir, state, host.artifactHeads());
       const before = host.state();
-      if (!managedCandidates(host.dir, before, host.artifactHeads()).includes(input.inputId))
-        return { kind: "held" };
+      if (!candidates(before).includes(input.inputId)) return { kind: "held" };
       let captured: ReturnType<ConversationHost["captureDispatch"]>;
       try {
         captured = host.captureDispatch(input.inputId, (state) => {
@@ -188,8 +199,7 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
       }
       const state = captured.state;
       const execution = state.executions[input.inputId];
-      if (!managedCandidates(host.dir, state, host.artifactHeads()).includes(input.inputId))
-        return { kind: "held" };
+      if (!candidates(state).includes(input.inputId)) return { kind: "held" };
       if (!execution || execution.kind === "attempt-started" || execution.kind === "attempt-ended")
         return { kind: "held" };
       if (
@@ -205,70 +215,108 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
       const location = locationProjection(readRecordMetadata(host.dir));
       if (location.status !== "available" || location.workingDirectory !== cwd)
         throw new HubError("Choose an available working folder before continuing.", "E-HUB-04");
-      const saved = preferenceState(host.dir).preference;
-      if (
-        !saved ||
-        saved.harness !== driver.harness ||
-        saved.model !== driver.model ||
-        saved.effort !== driver.effort ||
-        saved.provider !== driver.provider ||
-        saved.profile !== driver.profile ||
-        input.profile !== driver.profile
-      )
-        throw new HubError(
-          "The saved driver differs from this worker. Reconcile the selected settings.",
-          "E-HUB-03",
-        );
-      const identity = host.state().nativeSessions[driver.harness];
-      const latest = host.state().harnessSessions[driver.harness];
-      if (
-        native.kind === "resume"
-          ? !identity?.current ||
-            identity.sessionId !== native.sessionId ||
-            latest !== native.sessionId
-          : latest !== undefined && authorization !== "fresh-authorized"
-      )
-        throw new HubError(
-          "The requested native session is unverified or changed. Keep this input pending.",
-          "E-HUB-03",
-          409,
-          ["continue-fresh", "change-settings"],
-        );
       const resume = native.kind === "resume" ? native.sessionId : undefined;
-      const facts = await runner
-        .inspect(driver.harness, {
-          diagnosticOrigin: "execution-check",
-          signal: input.signal,
-          model: driver.model,
-          effort: driver.effort,
-          provider: driver.provider,
-          runtime: { cwd, profile: driver.profile, resume },
-        })
-        .catch((error) => {
-          const diagnostic =
-            failureDiagnostic(error) ??
-            selectionProblem(
-              driver,
-              runner.installation,
-              "inspection-unavailable",
-              undefined,
-              "execution-check",
-            );
+      let facts: HarnessFacts;
+      let nativeFingerprint: string | undefined;
+      if (state.connection) {
+        const binding = state.connection.binding;
+        if (
+          binding.harness !== driver.harness ||
+          binding.workingDirectory !== cwd ||
+          driver.profile !== "headless-turn" ||
+          input.profile !== "headless-turn"
+        )
           throw new HubError(
-            diagnosticMessage(diagnostic),
+            "Continue with the bound native session and its exact working folder.",
             "E-HUB-03",
-            400,
-            ["Review settings"],
-            diagnostic,
           );
+        const settings = await runner.inspectNativeContinuation?.({
+          cwd,
+          harness: binding.harness,
+          resume: binding.nativeSessionId,
+          signal: input.signal,
         });
-      if (resume !== undefined && facts.runtime?.resume.status !== "supported")
-        throw new HubError(
-          "Native resume compatibility is unverified for this selection.",
-          "E-HUB-03",
-          409,
-          ["continue-fresh", "change-settings"],
-        );
+        if (settings?.status !== "available")
+          throw new HubError(
+            `Native continuation settings are unavailable (${settings?.reason ?? "operation-unavailable"}). Feedback remains saved.`,
+            "E-HUB-03",
+            409,
+            ["retry"],
+          );
+        driver = {
+          harness: binding.harness,
+          profile: "headless-turn",
+          model: settings.model,
+          effort: settings.effort,
+          provider: settings.provider,
+        };
+        nativeFingerprint = settings.fingerprint;
+        facts = await runner.inspect(binding.harness);
+      } else {
+        const saved = preferenceState(host.dir).preference;
+        if (
+          !saved ||
+          saved.harness !== driver.harness ||
+          saved.model !== driver.model ||
+          saved.effort !== driver.effort ||
+          saved.provider !== driver.provider ||
+          saved.profile !== driver.profile ||
+          input.profile !== driver.profile
+        )
+          throw new HubError(
+            "The saved driver differs from this worker. Reconcile the selected settings.",
+            "E-HUB-03",
+          );
+        const identity = host.state().nativeSessions[driver.harness];
+        const latest = host.state().harnessSessions[driver.harness];
+        if (
+          native.kind === "resume"
+            ? !identity?.current ||
+              identity.sessionId !== native.sessionId ||
+              latest !== native.sessionId
+            : latest !== undefined && authorization !== "fresh-authorized"
+        )
+          throw new HubError(
+            "The requested native session is unverified or changed. Keep this input pending.",
+            "E-HUB-03",
+            409,
+            ["continue-fresh", "change-settings"],
+          );
+        facts = await runner
+          .inspect(driver.harness, {
+            diagnosticOrigin: "execution-check",
+            signal: input.signal,
+            model: driver.model,
+            effort: driver.effort,
+            provider: driver.provider,
+            runtime: { cwd, profile: driver.profile, resume },
+          })
+          .catch((error) => {
+            const diagnostic =
+              failureDiagnostic(error) ??
+              selectionProblem(
+                driver,
+                runner.installation,
+                "inspection-unavailable",
+                undefined,
+                "execution-check",
+              );
+            throw new HubError(
+              diagnosticMessage(diagnostic),
+              "E-HUB-03",
+              400,
+              ["Review settings"],
+              diagnostic,
+            );
+          });
+        if (resume !== undefined && facts.runtime?.resume.status !== "supported")
+          throw new HubError(
+            "Native resume compatibility is unverified for this selection.",
+            "E-HUB-03",
+            409,
+            ["continue-fresh", "change-settings"],
+          );
+      }
       if (closed || input.signal.aborted) return { kind: "held" };
       offered = (deps.offerContext ?? offerProjectedContext)(host.dir, captured.context);
       const reference = [
@@ -357,7 +405,12 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
       }
       offers.set(input.turnId, { path: offered.path, close: offered.close });
       offered = undefined;
-      return { ...result, kind: "ready", native };
+      return {
+        ...result,
+        kind: "ready",
+        native,
+        ...(nativeFingerprint === undefined ? {} : { nativeFingerprint }),
+      };
     } catch (cause) {
       if (input.signal.aborted || closed) return { kind: "held" };
       if (cause instanceof HubError && (cause.code === "E-HUB-03" || cause.code === "E-HUB-04")) {

@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
+import type { NativeApprovalChannel } from "../../src/harness/runner.js";
 
 const SYNTHETIC_HCN_IDENTITY = "synthetic";
 
@@ -37,6 +38,8 @@ const rig = (
     process?: FakeHcnProcess;
     beforeProcess?: (resume: string | undefined) => Promise<void>;
     prepareTurn?: HeadlessDeps["prepareTurn"];
+    route?: Pick<HeadlessDeps, "harness" | "cwd" | "model" | "provider" | "effort">;
+    clock?: Pick<HeadlessDeps, "now" | "stallMs" | "stallTickMs">;
     driverChangeAtBoundary?: () => boolean;
     /** An input already in the record before any source attaches - the
      * `lucid send` while nothing was running, folded by the next `run`. */
@@ -77,6 +80,8 @@ const rig = (
     prepareTurn: opts.prepareTurn,
     driverChangeAtBoundary: opts.driverChangeAtBoundary,
     harness: "claude" as const,
+    ...opts.route,
+    ...opts.clock,
     conversationId: "conv-1",
     secret,
     runner: createHcnRunner({ spawn: spawner.spawn, bin: BIN }),
@@ -152,6 +157,123 @@ const rig = (
 };
 
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+test("the turn source carries the prepared native channel without adding browser setting overrides", async () => {
+  const connected = Promise.withResolvers<NativeApprovalChannel>();
+  const requested = Promise.withResolvers<void>();
+  const r = rig({
+    mode: "turn",
+    route: {
+      harness: "codex",
+      cwd: "/fixture",
+      model: "browser-model",
+      effort: "low",
+      provider: "browser-provider",
+    },
+    prepareTurn: async () => ({
+      kind: "ready",
+      prompt: "Complete prepared native prompt",
+      native: { kind: "resume", sessionId: sid },
+      nativeApprovals: {
+        fingerprint: "a".repeat(64),
+        connect: (channel) => {
+          connected.resolve(channel);
+          return {
+            closed: () => {},
+            event: () => {
+              requested.resolve();
+            },
+          };
+        },
+      },
+    }),
+  });
+  try {
+    r.host.enqueueInput({ id: "native-feedback", mode: "queue", text: "Same session feedback" });
+    await flush();
+    const argv = r.spawner.calls[0]?.argv ?? [];
+    expect(argv).toContain("--native-approvals");
+    expect(argv).not.toContain("--model");
+    expect(argv).not.toContain("--effort");
+    expect(argv).not.toContain("--provider");
+    const channel = await connected.promise;
+    r.proc.emit({ ...identity, authority: "harness-minted" });
+    r.proc.emit({
+      v: 1,
+      kind: "approval-request",
+      requestId: "207feafe-e82b-4df4-91ba-4f1aeb987508",
+      sessionId: sid,
+      turnId: "native-turn",
+      category: "command",
+      details: "Synthetic command",
+      choices: [{ id: "deny", label: "Deny", scope: "deny" }],
+    });
+    await requested.promise;
+    expect(r.proc.writes).toEqual([]);
+    channel.answer({
+      id: "307feafe-e82b-4df4-91ba-4f1aeb987508",
+      requestId: "207feafe-e82b-4df4-91ba-4f1aeb987508",
+      choiceId: "deny",
+    });
+    expect(r.proc.commands).toHaveLength(1);
+    r.proc.emit(assistant("Native response completed"));
+    r.proc.emit(doneClean);
+    r.proc.exit(0);
+    await flush();
+    expect(r.logEntries().some((entry) => entry.frame?.event?.kind === "approval-request")).toBe(
+      false,
+    );
+    expect(
+      r.logEntries().some((entry) => entry.frame?.event?.text === "Native response completed"),
+    ).toBe(true);
+  } finally {
+    r.source.close();
+    r.proc.exit(0);
+    await r.source.settled;
+    r.host.close();
+  }
+});
+
+test("waiting on a native permission request does not report the harness as silent or wedged", async () => {
+  let now = 0;
+  const requested = Promise.withResolvers<void>();
+  const r = rig({
+    mode: "turn",
+    route: { harness: "codex", cwd: "/fixture" },
+    clock: { now: () => now, stallMs: 100, stallTickMs: 1 },
+    prepareTurn: async () => ({
+      kind: "ready",
+      prompt: "Synthetic native prompt",
+      native: { kind: "resume", sessionId: sid },
+      nativeApprovals: {
+        fingerprint: "a".repeat(64),
+        connect: () => ({
+          closed: () => {},
+          event: () => {
+            requested.resolve();
+          },
+        }),
+      },
+    }),
+  });
+  try {
+    r.host.enqueueInput({ id: "permission", mode: "queue", text: "Wait for my choice" });
+    await flush();
+    r.proc.emit(identity);
+    r.proc.emit({ v: 1, kind: "approval-request" });
+    await requested.promise;
+    now = 1000;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(
+      r.logEntries().some((entry) => String(entry.frame?.event?.message).includes("may be wedged")),
+    ).toBe(false);
+  } finally {
+    r.source.close();
+    r.proc.exit(0);
+    await r.source.settled;
+    r.host.close();
+  }
+});
 
 test("context preparation holds one input without spawning or applying it and allows later eligible work", async () => {
   let release: (() => void) | undefined;

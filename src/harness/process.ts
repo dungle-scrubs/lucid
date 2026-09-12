@@ -47,6 +47,21 @@ export interface HarnessDeps {
 export const flag = (name: string, value: string | undefined): string[] =>
   value === undefined ? [] : [name, value];
 
+/** Split decoded process output into lines, retaining its partial tail. */
+export async function* lines(chunks: AsyncIterable<string>): AsyncIterable<string> {
+  let buffer = "";
+  for await (const chunk of chunks) {
+    buffer += chunk;
+    let nl = buffer.indexOf("\n");
+    while (nl !== -1) {
+      yield buffer.slice(0, nl);
+      buffer = buffer.slice(nl + 1);
+      nl = buffer.indexOf("\n");
+    }
+  }
+  if (buffer.trim() !== "") yield buffer;
+}
+
 /** One escalation policy. The caller chooses whether process exit or its
  * output pump is the terminal evidence it needs to await. */
 export async function terminateHcn(

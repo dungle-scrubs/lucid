@@ -32,6 +32,7 @@ import { createComparisonDelivery } from "./comparison-delivery.js";
  */
 
 import type { HarnessEvent } from "../harness/events.js";
+import type { StreamTurnOptions } from "../harness/runner.js";
 import {
   type HarnessName,
   type HarnessRunner,
@@ -215,6 +216,7 @@ export interface HeadlessDeps {
         readonly kind: "ready";
         readonly prompt: string;
         readonly native: NativeIntent;
+        readonly nativeApprovals?: StreamTurnOptions["nativeApprovals"];
         readonly notice?: string;
       }
   >;
@@ -486,6 +488,7 @@ interface HostContext {
   readonly artifactSignal: AbortSignal;
   preparedNotice(message: string | undefined): void;
   handedOver(): void;
+  harnessSpoke(): void;
   isStopped(): boolean;
   stop(end: Extract<SourceEnd, { kind: "store-failed" }>): void;
   warning(event: HarnessEvent, operation: string, artifactId: string): void;
@@ -1076,8 +1079,9 @@ const turnStrategy = (
             // preserves the input for explicit recovery, never a fresh retry.
             activeAbort = new AbortController();
             let composedPrompt: string;
+            let nativeApprovals: StreamTurnOptions["nativeApprovals"];
             if (deps.prepareTurn) {
-              const prepared = await deps
+              const managedTurn = await deps
                 .prepareTurn({
                   inputId: next.id,
                   signal: activeAbort.signal,
@@ -1097,14 +1101,30 @@ const turnStrategy = (
                     { cause },
                   );
                 });
-              if (prepared.kind === "held") {
+              if (managedTurn.kind === "held") {
                 const expected = ctx.expected.findIndex((input) => input.inputId === next.id);
                 if (expected !== -1) ctx.expected.splice(expected, 1);
                 continue;
               }
-              composedPrompt = prepared.prompt;
-              ctx.preparedNotice(prepared.notice);
-              resumeId = prepared.native.kind === "resume" ? prepared.native.sessionId : undefined;
+              composedPrompt = managedTurn.prompt;
+              const responder = managedTurn.nativeApprovals;
+              if (responder)
+                nativeApprovals = {
+                  ...responder,
+                  connect: (channel) => {
+                    const receiver = responder.connect(channel);
+                    return {
+                      closed: receiver.closed,
+                      event: (event) => {
+                        ctx.harnessSpoke();
+                        receiver.event(event);
+                      },
+                    };
+                  },
+                };
+              ctx.preparedNotice(managedTurn.notice);
+              resumeId =
+                managedTurn.native.kind === "resume" ? managedTurn.native.sessionId : undefined;
               ctx.owedBytes.clear();
             } else {
               composedPrompt =
@@ -1128,9 +1148,13 @@ const turnStrategy = (
               harness: deps.harness,
               prompt: composedPrompt,
               turnId,
-              ...(deps.model === undefined ? {} : { model: deps.model }),
-              ...(deps.provider === undefined ? {} : { provider: deps.provider }),
-              ...(deps.effort === undefined ? {} : { effort: deps.effort }),
+              ...(nativeApprovals
+                ? { nativeApprovals }
+                : {
+                    ...(deps.model === undefined ? {} : { model: deps.model }),
+                    ...(deps.provider === undefined ? {} : { provider: deps.provider }),
+                    ...(deps.effort === undefined ? {} : { effort: deps.effort }),
+                  }),
               ...(attemptResume && resumeId !== undefined ? { resume: resumeId } : {}),
             });
             if (attemptResume || (deps.probeFirstTurn === true && spawns === 0)) {
@@ -1333,6 +1357,7 @@ export const createHeadlessHost = (
   };
 
   const ctx: HostContext = {
+    harnessSpoke: () => harnessSpoke(),
     artifactSignal: artifactLifetime.signal,
     preparedNotice: (message) => {
       if (message)

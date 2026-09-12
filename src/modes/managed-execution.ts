@@ -1,12 +1,20 @@
+import type {
+  NativeApprovalChannel,
+  NativeApprovalEvents,
+  StreamTurnOptions,
+} from "../harness/runner.js";
 import { EventKind } from "../protocol/events.js";
 import { deriveAttemptOutcome } from "../protocol/execution.js";
 import type { Frame } from "../protocol/frames.js";
 import type { ConversationHost } from "../store/conversation-host.js";
+import { createManagedApprovals } from "./managed-approvals.js";
 import type { ManagedPreparation } from "./managed-preparation.js";
 import { createManagedPreparation } from "./managed-preparation.js";
 
 interface OwnedAttempt {
+  approvals?: ReturnType<typeof createManagedApprovals>;
   readonly attempt: number;
+  readonly epoch: number;
   readonly inputId: string;
   mayHaveRun: boolean;
   refused: false | "harness-refusal" | "dispatch-not-called";
@@ -18,14 +26,19 @@ const executionEvents: ReadonlySet<string> = new Set([
   EventKind.question,
 ]);
 export interface ManagedExecution {
+  connectApprovals(turnId: string, channel: NativeApprovalChannel): NativeApprovalEvents;
+  recordChanged(): void;
   dispatchRejected(turnId: string, evidence: "harness-refusal" | "dispatch-not-called"): void;
   busy(): boolean;
   /** Called only after the source has settled its owned native processes. */
   close(): void;
   offeredPath(turnId: string): string | undefined;
-  readonly prepare: (
-    input: Parameters<ManagedPreparation["prepare"]>[0],
-  ) => Promise<Awaited<ReturnType<ManagedPreparation["prepare"]>> & { readonly notice?: string }>;
+  readonly prepare: (input: Parameters<ManagedPreparation["prepare"]>[0]) => Promise<
+    Awaited<ReturnType<ManagedPreparation["prepare"]>> & {
+      readonly nativeApprovals?: StreamTurnOptions["nativeApprovals"];
+      readonly notice?: string;
+    }
+  >;
   readonly sendFrame: (frame: Frame) => ReturnType<ConversationHost["handleFrame"]>;
   /** The source has drained this turn, including its process cleanup. */
   turnSettled(turnId: string): void;
@@ -91,7 +104,42 @@ export function createManagedExecution(
       preparation.release(turnId);
     }
   };
-  return {
+  const managed: ManagedExecution = {
+    connectApprovals: (turnId, channel) => {
+      const attempt = owned.get(turnId);
+      const current = (): boolean => {
+        const state = host.state();
+        const execution = attempt && state.executions[attempt.inputId];
+        return (
+          !!attempt &&
+          owned.get(turnId) === attempt &&
+          state.epoch === attempt.epoch &&
+          execution?.kind === "attempt-started" &&
+          execution.turnId === turnId &&
+          execution.attempt === attempt.attempt
+        );
+      };
+      if (!attempt || attempt.approvals || !current()) {
+        channel.cancel();
+        return refusedWrite("approval-unavailable");
+      }
+      const approvals = createManagedApprovals({
+        attempt: {
+          attempt: attempt.attempt,
+          epoch: attempt.epoch,
+          inputId: attempt.inputId,
+          turnId,
+        },
+        channel,
+        current,
+        host,
+      });
+      attempt.approvals = approvals;
+      return approvals;
+    },
+    recordChanged: () => {
+      for (const attempt of owned.values()) attempt.approvals?.recordChanged();
+    },
     dispatchRejected: (turnId, evidence) => {
       const attempt = owned.get(turnId);
       if (attempt) attempt.refused = evidence;
@@ -128,16 +176,28 @@ export function createManagedExecution(
         }
         owned.set(input.turnId, {
           attempt: execution.attempt,
+          epoch: execution.epoch,
           inputId: input.inputId,
           mayHaveRun: false,
           refused: false,
         });
-        return result.summary
-          ? {
-              ...result,
-              notice: `Older conversation context was summarized with ${result.summary.model}. The complete record remains available in the offered context copy.`,
-            }
-          : result;
+        return {
+          ...result,
+          ...(result.nativeFingerprint === undefined
+            ? {}
+            : {
+                nativeApprovals: {
+                  fingerprint: result.nativeFingerprint,
+                  connect: (channel: NativeApprovalChannel) =>
+                    managed.connectApprovals(input.turnId, channel),
+                },
+              }),
+          ...(result.summary
+            ? {
+                notice: `Older conversation context was summarized with ${result.summary.model}. The complete record remains available in the offered context copy.`,
+              }
+            : {}),
+        };
       } finally {
         preparing--;
       }
@@ -164,4 +224,5 @@ export function createManagedExecution(
     },
     turnSettled,
   };
+  return managed;
 }
