@@ -50,12 +50,14 @@ import {
   connectionId,
   connectionParticipation,
   connectionRegistration,
+  hasUnsettledNativeWork,
   nativeOwners,
   parseConnectionFact,
   parseNativeBinding,
   reduceConnection,
   refuseConnection,
   sameNativeBinding,
+  sameNativeHistory,
 } from "../protocol/connection.js";
 import {
   type ContextFact,
@@ -94,6 +96,7 @@ import {
 } from "../protocol/index.js";
 import { sameProcessOwner } from "../protocol/process-owner.js";
 import { enqueueManagedInput, inputFrame } from "../protocol/reducer.js";
+import { DiscoveryIndex } from "./discovery.js";
 import {
   captureDispatchContext,
   type DispatchSnapshot,
@@ -112,6 +115,8 @@ import {
   readArtifactVersion,
 } from "./log.js";
 import { nativeInputCandidates, nativePreparationPrerequisite } from "./managed-readiness.js";
+import { withNativeSessionAdmission } from "./native-registration.js";
+import { presenceHeld } from "./presence.js";
 import { readRecordIdentity, readRecordMetadata } from "./record-identity.js";
 
 const REDACTED = "redacted";
@@ -128,6 +133,8 @@ export type {
 } from "./log.js";
 
 export interface HostDeps {
+  /** Configured native registry root. Never inferred from a moved record's parent directory. */
+  readonly nativeSessionRoot?: string;
   /** Called under the append lock. The caller holds the registration lock for this transaction. */
   readonly connectionAuthority?: () => NativeBinding | undefined;
   readonly probeArtifactLink?: WebLinkProbe;
@@ -196,6 +203,21 @@ const ctxOf = (presence: boolean | undefined): { presence?: Presence } =>
   presence === undefined ? {} : { presence: { processAlive: presence } };
 
 const HEX_SECRET = /^[0-9a-f]{16,}$/;
+
+function nativeFolderIssue(
+  dir: string,
+  registration: NativeBinding | undefined,
+): ProtocolIssue | undefined {
+  try {
+    const folder = readRecordMetadata(dir).workingDirectory;
+    if (!registration || typeof folder !== "string") return "connection-folder-unverified";
+    return realpathSync(folder) === realpathSync(registration.workingDirectory)
+      ? undefined
+      : "connection-folder-mismatch";
+  } catch {
+    return "connection-folder-unverified";
+  }
+}
 
 /** Single place the host, the lock-free readers, and the tailer load
  * the record (secret + identity + paths). Thrown per call, not at
@@ -470,6 +492,34 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     });
   };
 
+  // The registration lock stabilizes native admission across records. Keep these reads
+  // outside this record's append lock so unrelated feedback can still be saved.
+  const relatedLaunchIssue = (registration: NativeBinding): ProtocolIssue | undefined => {
+    try {
+      if (!deps.nativeSessionRoot) return "connection-unverified";
+      const listing = new DiscoveryIndex(deps.nativeSessionRoot).scan();
+      const id = log.state().conversationId;
+      const selectedDir = listing.identities.get(id);
+      if (listing.errors.length || !selectedDir || realpathSync(selectedDir) !== realpathSync(dir))
+        return "connection-unverified";
+      for (const [candidateId, candidateDir] of listing.identities) {
+        if (candidateId === id) continue;
+        const candidate = viewConversation(candidateDir).state;
+        if (!sameNativeHistory(candidate.connection?.binding, registration)) continue;
+        const present = terminalPresence(nativeOwners(candidate), (owner) =>
+          owner ? (deps.ownerPresence ?? ownerPresence)(owner) : undefined,
+        );
+        if (present !== false) return present ? "connection-conflict" : "connection-unverified";
+        if (hasUnsettledNativeWork(candidate)) return "execution-blocked";
+        const held = presenceHeld(candidateDir);
+        if (held !== false) return held ? "connection-conflict" : "connection-unverified";
+      }
+      return undefined;
+    } catch {
+      return "connection-unverified";
+    }
+  };
+
   const evaluateConnection = (
     state: ChannelState,
     raw: unknown,
@@ -477,6 +527,36 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     requireLease: boolean,
   ): { readonly fact: ConnectionFact | null; readonly result: ReduceResult } => {
     const fact = parseConnectionFact(raw);
+    if (fact?.kind === "launch-intended") {
+      const decide = (): ReduceResult => {
+        if (!deps.executorLease()) return refuseConnection(state, at, "executor-required");
+        if (!sameProcessOwner(readProcessOwner(process.pid) ?? undefined, fact.launch.requester))
+          return refuseConnection(state, at, "connection-unverified");
+        const folderIssue = nativeFolderIssue(dir, fact.launch.registration);
+        if (folderIssue) return refuseConnection(state, at, folderIssue);
+        if (
+          !hasUnsettledNativeWork(state) &&
+          nativeInputCandidates(dir, state, log.artifactHeads())[0] !== fact.launch.inputId
+        )
+          return refuseConnection(state, at, "execution-ineligible");
+        let present: boolean | undefined;
+        try {
+          present = terminalPresence(nativeOwners(state), (owner) =>
+            owner ? (deps.ownerPresence ?? ownerPresence)(owner) : undefined,
+          );
+        } catch {
+          /* Unknown native ownership cannot admit a launch. */
+        }
+        if (present !== false)
+          return refuseConnection(
+            state,
+            at,
+            present ? "connection-conflict" : "connection-unverified",
+          );
+        return reduceConnection(state, fact, at);
+      };
+      return { fact, result: decide() };
+    }
     const cancellation = fact?.kind === "input-cancelled";
     const disabling = fact?.kind === "listener-disabled";
     const registration = fact ? connectionRegistration(state.connection, fact) : undefined;
@@ -550,16 +630,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
       else if (nativePreparationPrerequisite(dir, state, heads) !== fact.hold.prerequisite)
         preparationIssue = "execution-stale";
     }
-    let folderMatches: boolean | undefined = settlement ? true : undefined;
-    if (registration && !settlement) {
-      const folder = readRecordMetadata(dir).workingDirectory;
-      try {
-        const nativeFolder = realpathSync(registration.workingDirectory);
-        if (typeof folder === "string") folderMatches = realpathSync(folder) === nativeFolder;
-      } catch {
-        /* Unavailable path evidence cannot bind a session. */
-      }
-    }
+    const folderIssue = settlement ? undefined : nativeFolderIssue(dir, registration);
     const decide = (): ReduceResult => {
       if (!fact) return refuseConnection(state, at, "invalid-connection");
       if (requireLease && needsOwnedExecutor && !deps.executorLease())
@@ -570,9 +641,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
       )
         return refuseConnection(state, at, "connection-unverified");
       if (!verified) return refuseConnection(state, at, "connection-unverified");
-      if (folderMatches === undefined)
-        return refuseConnection(state, at, "connection-folder-unverified");
-      if (!folderMatches) return refuseConnection(state, at, "connection-folder-mismatch");
+      if (folderIssue) return refuseConnection(state, at, folderIssue);
       if (otherOwners === undefined) return refuseConnection(state, at, "connection-unverified");
       if (otherOwners) return refuseConnection(state, at, "connection-conflict");
       if (preparationIssue) return refuseConnection(state, at, preparationIssue);
@@ -612,7 +681,32 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
   };
 
   return {
-    writeConnection: (fact) => writeConnection(() => ({ fact })),
+    writeConnection: (fact) => {
+      const parsed = parseConnectionFact(fact);
+      if (parsed?.kind !== "launch-intended") return writeConnection(() => ({ fact }));
+      if (!deps.nativeSessionRoot)
+        return refuseConnection(log.state(), deps.now(), "connection-unverified");
+      const result = withNativeSessionAdmission(
+        deps.nativeSessionRoot,
+        parsed.launch.registration,
+        deps.ownerPresence ?? ownerPresence,
+        () => {
+          const issue = relatedLaunchIssue(parsed.launch.registration);
+          return issue
+            ? refuseConnection(log.state(), deps.now(), issue)
+            : writeConnection(() => ({ fact }));
+        },
+      );
+      return result.ok
+        ? result.value
+        : refuseConnection(
+            log.state(),
+            deps.now(),
+            result.reason === "native-identity-conflict"
+              ? "connection-conflict"
+              : "connection-unverified",
+          );
+    },
     controlConnection: (control) =>
       writeConnection((state) => {
         if (control.kind === "cancel-input")

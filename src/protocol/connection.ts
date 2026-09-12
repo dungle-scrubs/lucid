@@ -33,10 +33,24 @@ export interface ConnectionState {
   readonly disabledReason: ListenerDisabledReason | null;
   readonly explicitListenerEpoch: number;
   readonly heldInputs: Readonly<Record<string, NativeInputHold>>;
+  readonly launches: Readonly<Record<string, NativeLaunch>>;
   readonly listenerId: string | null;
   readonly offers: Readonly<Record<string, NativeOfferState>>;
   readonly participations: Readonly<Record<string, ListenerParticipation>>;
   readonly revision: number;
+}
+
+export interface NativeLaunch {
+  readonly epoch: number;
+  readonly id: string;
+  readonly inputId: string;
+  readonly registration: NativeBinding;
+  readonly requester: ProcessOwner;
+  readonly role: "headless";
+}
+
+export function hasUnsettledLaunch(connection: ConnectionState | null): boolean {
+  return Object.keys(connection?.launches ?? {}).length > 0;
 }
 
 export const LISTENER_WAIT_MAX_MS = 45_000;
@@ -117,10 +131,15 @@ export function hasUnresolvedOffer(connection: ConnectionState | null): boolean 
 }
 
 export function hasUnsettledNativeWork(state: ChannelState): boolean {
-  return hasUnresolvedOffer(state.connection) || hasUnsettledExecution(state);
+  return (
+    hasUnresolvedOffer(state.connection) ||
+    hasUnsettledLaunch(state.connection) ||
+    hasUnsettledExecution(state)
+  );
 }
 
 export type ConnectionFact =
+  | { readonly actionId: string; readonly kind: "launch-intended"; readonly launch: NativeLaunch }
   | { readonly actionId: string; readonly inputId: string; readonly kind: "input-cancelled" }
   | { readonly actionId: string; readonly hold: NativeInputHold; readonly kind: "input-held" }
   | {
@@ -191,11 +210,18 @@ export function sameNativeTarget(
   return (
     !!a &&
     !!b &&
-    a.harness === b.harness &&
+    sameNativeHistory(a, b) &&
     a.interface === b.interface &&
-    a.nativeSessionId === b.nativeSessionId &&
     a.workingDirectory === b.workingDirectory
   );
+}
+
+/** Interfaces and folder spellings do not create independent native histories. */
+export function sameNativeHistory(
+  a: Pick<NativeBinding, "harness" | "nativeSessionId"> | undefined,
+  b: Pick<NativeBinding, "harness" | "nativeSessionId"> | undefined,
+): boolean {
+  return !!a && !!b && a.harness === b.harness && a.nativeSessionId === b.nativeSessionId;
 }
 
 /** A completed offer permits one further wait until expiry or interruption disables it. */
@@ -216,9 +242,11 @@ export function connectionRegistration(
   connection: ConnectionState | null,
   fact: ConnectionFact,
 ): NativeBinding | undefined {
-  return fact.kind === "bound"
-    ? fact.binding
-    : connectionParticipation(connection, fact)?.registration;
+  return fact.kind === "launch-intended"
+    ? fact.launch.registration
+    : fact.kind === "bound"
+      ? fact.binding
+      : connectionParticipation(connection, fact)?.registration;
 }
 
 export function connectionParticipation(
@@ -226,6 +254,7 @@ export function connectionParticipation(
   fact: ConnectionFact,
 ): ListenerParticipation | undefined {
   switch (fact.kind) {
+    case "launch-intended":
     case "input-cancelled":
     case "bound":
       return undefined;
@@ -302,6 +331,36 @@ export function parseNativeBinding(value: unknown): NativeBinding | null {
 
 export function parseConnectionFact(value: unknown): ConnectionFact | null {
   if (!object(value) || !connectionId(value.actionId)) return null;
+  if (value.kind === "launch-intended" && object(value.launch)) {
+    const launch = value.launch;
+    const registration = parseNativeBinding(launch.registration);
+    const requester = parseProcessOwner(launch.requester);
+    if (
+      !registration ||
+      !requester ||
+      !path(requester.executable) ||
+      !connectionId(launch.id) ||
+      typeof launch.epoch !== "number" ||
+      !Number.isSafeInteger(launch.epoch) ||
+      launch.epoch < 0 ||
+      typeof launch.inputId !== "string" ||
+      !isWireId(launch.inputId) ||
+      launch.role !== "headless"
+    )
+      return null;
+    return {
+      actionId: value.actionId,
+      kind: value.kind,
+      launch: {
+        epoch: launch.epoch,
+        id: launch.id,
+        inputId: launch.inputId,
+        registration,
+        requester,
+        role: launch.role,
+      },
+    };
+  }
   if (value.kind === "input-held" && object(value.hold)) {
     const hold = value.hold;
     if (
@@ -551,9 +610,34 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
           disabledReason: state.connection?.disabledReason ?? null,
           explicitListenerEpoch: state.connection?.explicitListenerEpoch ?? 0,
           heldInputs: state.connection?.heldInputs ?? {},
+          launches: state.connection?.launches ?? {},
           listenerId: state.connection?.listenerId ?? null,
           offers: state.connection?.offers ?? {},
           participations: state.connection?.participations ?? {},
+          revision: state.seq + 1,
+        },
+        seq: state.seq + 1,
+      };
+    } else if (fact.kind === "launch-intended") {
+      const connection = state.connection;
+      if (
+        !connection ||
+        !sameNativeBinding(connection.binding, fact.launch.registration) ||
+        fact.launch.epoch !== state.epoch
+      )
+        return refuseConnection(state, now, "connection-unverified");
+      if (hasUnsettledNativeWork(state)) return refuseConnection(state, now, "execution-blocked");
+      if (
+        !state.inputs.some((input) => input.id === fact.launch.inputId) ||
+        Object.hasOwn(state.appliedInputs, fact.launch.inputId)
+      )
+        return refuseConnection(state, now, "execution-ineligible");
+      next = {
+        ...state,
+        connection: {
+          ...connection,
+          actions,
+          launches: { ...connection.launches, [fact.launch.id]: fact.launch },
           revision: state.seq + 1,
         },
         seq: state.seq + 1,
@@ -585,6 +669,7 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
       const execution = state.executions[fact.inputId];
       if (
         Object.hasOwn(state.appliedInputs, fact.inputId) ||
+        Object.values(connection.launches).some((launch) => launch.inputId === fact.inputId) ||
         Object.values(connection.offers).some((entry) => entry.offer.inputId === fact.inputId) ||
         execution?.kind === "attempt-started" ||
         execution?.kind === "attempt-ended"
@@ -667,7 +752,7 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
       const o = fact.offer;
       if (!connection || !matchingListener(state, o, now))
         return refuseConnection(state, now, "connection-unverified");
-      if (hasUnresolvedOffer(connection)) return refuseConnection(state, now, "execution-blocked");
+      if (hasUnsettledNativeWork(state)) return refuseConnection(state, now, "execution-blocked");
       if (Object.hasOwn(connection.offers, o.id) || Object.hasOwn(state.seenTurns, o.turnId))
         return refuseConnection(state, now, "connection-conflict");
       if (

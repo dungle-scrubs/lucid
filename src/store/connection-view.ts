@@ -1,6 +1,6 @@
 import { ownerPresence } from "../process-owner.js";
 import type { NativeInterface } from "../protocol/connection.js";
-import { currentListener, nativeOwners } from "../protocol/connection.js";
+import { currentListener, hasUnsettledLaunch, nativeOwners } from "../protocol/connection.js";
 import type { ProcessOwner } from "../protocol/process-owner.js";
 import { sameProcessOwner } from "../protocol/process-owner.js";
 import type { ChannelState } from "../protocol/reducer.js";
@@ -20,6 +20,7 @@ export interface ConnectionStatus {
     | "owner-conflict"
     | "delivery-uncertain"
     | "outcome-unknown"
+    | "launch-uncertain"
     | "closed";
 }
 
@@ -85,6 +86,20 @@ export function observeConnection(
     conflict = values.filter((value) => value === true).length > 1;
     alive = values.includes(undefined) || conflict ? undefined : values.includes(true);
   }
+  if (hasUnsettledLaunch(state.connection))
+    return observations.some((entry) => entry.present === true)
+      ? {
+          message:
+            "An interactive owner is open while a same-session launch is unsettled. Resolve ownership and launch outcome before continuing.",
+          reason: "native-identity-conflict",
+          state: "owner-conflict",
+        }
+      : {
+          message:
+            "A same-session launch was admitted, but process creation and cleanup are not settled. Saved feedback will not be sent again automatically.",
+          reason: "launch-unsettled",
+          state: "launch-uncertain",
+        };
   const pending = Object.values(state.connection?.offers ?? {}).find(
     (offer) => offer.kind !== "finished",
   );

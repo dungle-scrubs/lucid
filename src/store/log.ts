@@ -35,6 +35,7 @@ import {
 } from "node:fs";
 import { nativeOutcomeEvent, reduceConnection } from "../protocol/connection.js";
 import { reduceContextCoverage } from "../protocol/context-coverage.js";
+import { EventKind } from "../protocol/events.js";
 import { reduceExecution } from "../protocol/execution.js";
 import { ARTIFACT_BYTES_MAX } from "../protocol/frames.js";
 import type { ChannelState, InputMode, ProtocolIssue } from "../protocol/index.js";
@@ -650,6 +651,27 @@ const collectTranscript = (
     const input = index === undefined ? undefined : acc.inputs[index];
     if (input && index !== undefined) acc.inputs[index] = { ...input, status };
   };
+  if (
+    entry.src === "execution" &&
+    entry.payloadVersion === 2 &&
+    entry.connection.kind === "launch-intended" &&
+    result.record.seq !== undefined
+  ) {
+    const launch = entry.connection.launch;
+    acc.events.push(
+      deepFreeze({
+        epoch: launch.epoch,
+        event: {
+          kind: EventKind.message,
+          role: "system",
+          text: `No interactive session detected. Resuming headlessly with session ${launch.registration.nativeSessionId}.`,
+        },
+        harness: launch.registration.harness,
+        seq: result.record.seq,
+        turnId: launch.id,
+      }),
+    );
+  }
   if (frameOrNull?.kind === "disposition") {
     setInputStatus(frameOrNull.inputId, frameOrNull.outcome);
   }

@@ -13,7 +13,7 @@ import {
 import { join } from "node:path";
 import { ownerPresence, readProcessOwner } from "../process-owner.js";
 import type { NativeBinding } from "../protocol/connection.js";
-import { connectionId, parseNativeBinding } from "../protocol/connection.js";
+import { connectionId, parseNativeBinding, sameNativeHistory } from "../protocol/connection.js";
 import type { ProcessOwner } from "../protocol/process-owner.js";
 import { atomicSidecar } from "./atomic-file.js";
 import { classifyStoreFailure, type StoreFailureCode, validConversationId } from "./errors.js";
@@ -159,6 +159,44 @@ function withRegistrations<TValue>(
   }
 }
 
+/** Serialize native history admission with registration and exact-record selection. */
+export function withNativeSessionAdmission<TValue>(
+  root: string,
+  target: Pick<NativeBinding, "harness" | "nativeSessionId">,
+  probe: RegistrationAuthority["ownerPresence"],
+  operation: () => TValue,
+): RegistrationResult<TValue> {
+  const result = withRegistrations(root, (dir): RegistrationResult<TValue> => {
+    let registrations: RegistrationEntry[];
+    try {
+      registrations = readRegistrations(dir);
+    } catch {
+      return failure(
+        "registration-store-unavailable",
+        "Native registrations could not be verified before launch.",
+      );
+    }
+    for (const { binding } of registrations) {
+      if (!sameNativeHistory(binding, target)) continue;
+      const present = probeAuthority(probe, binding.owner);
+      if (present !== false)
+        return failure(
+          present ? "native-identity-conflict" : "owner-unknown",
+          "A native owner is open or could not be verified. Launch remains held.",
+        );
+    }
+    // Admission observes registrations without retiring lifecycle or listening requests.
+    return { ok: true, value: operation() };
+  });
+  return result.ok ? result.value : result;
+}
+
+function readRegistrations(dir: string): RegistrationEntry[] {
+  return readdirSync(dir)
+    .filter((name) => /^[0-9a-f]{64}\.json$/.test(name))
+    .map((name) => readRegistration(join(dir, name)));
+}
+
 function readRegistration(path: string): RegistrationEntry {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
@@ -228,16 +266,12 @@ export function withNativeRegistration<TValue>(
   const result = withRegistrations(root, (dir): RegistrationResult<TValue> => {
     let registrations: RegistrationEntry[];
     try {
-      registrations = readdirSync(dir)
-        .filter((name) => /^[0-9a-f]{64}\.json$/.test(name))
-        .flatMap((name) => {
-          const path = join(dir, name);
-          const registration = readRegistration(path);
-          const alive = probeAuthority(authority.ownerPresence, registration.binding.owner);
-          if (alive !== false) return [registration];
-          unlinkSync(path);
-          return [];
-        });
+      registrations = readRegistrations(dir).flatMap((registration) => {
+        const alive = probeAuthority(authority.ownerPresence, registration.binding.owner);
+        if (alive !== false) return [registration];
+        unlinkSync(registration.path);
+        return [];
+      });
     } catch {
       return failure(
         "registration-store-unavailable",

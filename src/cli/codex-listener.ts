@@ -1,7 +1,12 @@
 import type { NativeListenerDeps, NativeListenerResult } from "../modes/native-listener.js";
 import { heldNativeFeedback, listenNativeFeedback } from "../modes/native-listener.js";
 import { terminalPresence } from "../process-owner.js";
-import { hasUnsettledNativeWork, nativeOwners, sameNativeTarget } from "../protocol/connection.js";
+import {
+  hasUnsettledNativeWork,
+  nativeOwners,
+  sameNativeHistory,
+  sameNativeTarget,
+} from "../protocol/connection.js";
 import { sameProcessOwner } from "../protocol/process-owner.js";
 import { viewConversation } from "../store/conversation-host.js";
 import type { NativeListenRequest, RegistrationAuthority } from "../store/native-registration.js";
@@ -62,11 +67,7 @@ export function requestCodexListening(
         const candidateBinding = candidate.connection?.binding;
         // The same native history remains shared across interfaces and folder spellings.
         // Those differences cannot exempt another record from the session-wide fence.
-        if (
-          candidateBinding?.harness !== registration.harness ||
-          candidateBinding.nativeSessionId !== registration.nativeSessionId
-        )
-          continue;
+        if (!sameNativeHistory(candidateBinding, registration)) continue;
         let otherOwners: boolean | undefined;
         try {
           otherOwners = terminalPresence(

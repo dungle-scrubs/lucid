@@ -9,7 +9,9 @@ import { prepareNativeFeedback } from "../../src/modes/native-preparation.js";
 import { readProcessOwner } from "../../src/process-owner.js";
 import { encodeAnnotationBatch } from "../../src/protocol/annotations.js";
 import type { ConnectionFact, NativeBinding } from "../../src/protocol/connection.js";
+import { reduceConnection } from "../../src/protocol/connection.js";
 import { readContentSource } from "../../src/protocol/content-comparison.js";
+import { EventKind } from "../../src/protocol/events.js";
 import type { ProcessOwner } from "../../src/protocol/process-owner.js";
 import { putBlob } from "../../src/store/blobs.js";
 import { observeConnection, readConnection } from "../../src/store/connection-view.js";
@@ -24,6 +26,7 @@ import {
   withNativeRegistration,
 } from "../../src/store/native-registration.js";
 import { acquirePresence, type PresenceHandle, presenceHeld } from "../../src/store/presence.js";
+import { replaceLocation } from "../../src/store/settings.js";
 import { createConversationRecord } from "../../src/store/store.js";
 import { attach } from "../protocol/helpers.js";
 
@@ -41,6 +44,322 @@ interface BoundFixture {
   readonly paths: ReturnType<typeof createConversationRecord>["paths"];
   readonly status: () => ReturnType<typeof readConnection>;
 }
+
+test("headless launch selects the first eligible saved input", () => {
+  const f = boundFixture();
+  try {
+    const requester = readProcessOwner(process.pid);
+    if (!requester) throw new Error("Cannot verify this test process");
+    for (const id of ["first", "second"])
+      expect(f.host.enqueueInput({ id, mode: "queue", text: id }).verdict).toBe("accepted");
+    f.controls.probe = () => false;
+    f.acquire();
+    expect(
+      f.host.writeConnection({
+        actionId: crypto.randomUUID(),
+        kind: "launch-intended",
+        launch: {
+          epoch: 0,
+          id: crypto.randomUUID(),
+          inputId: "second",
+          registration: f.controls.registration,
+          requester,
+          role: "headless",
+        },
+      }),
+    ).toMatchObject({ verdict: "refused", issue: "execution-ineligible" });
+    expect(f.host.transcript().events).toHaveLength(0);
+    expect(f.host.transcript().inputs.map(({ id, status }) => ({ id, status }))).toEqual([
+      { id: "first", status: "outstanding" },
+      { id: "second", status: "outstanding" },
+    ]);
+  } finally {
+    f.close();
+  }
+});
+
+test("connection replay refuses a native offer while headless creation is unresolved", () => {
+  const f = boundFixture();
+  try {
+    f.acquire();
+    const listener = f.enableFact();
+    expect(f.host.writeConnection(listener).verdict).toBe("accepted");
+    expect(
+      f.host.enqueueInput({ id: "replay-offer", mode: "queue", text: "One recipient" }).verdict,
+    ).toBe("accepted");
+    const offer = prepareOffer(f.host, listener.participation.id, "replay-offer");
+    f.controls.probe = () => false;
+    expect(
+      f.host.writeConnection({
+        actionId: crypto.randomUUID(),
+        kind: "launch-intended",
+        launch: {
+          epoch: f.host.state().epoch,
+          id: crypto.randomUUID(),
+          inputId: "replay-offer",
+          registration: f.controls.registration,
+          requester: readProcessOwner(process.pid),
+          role: "headless",
+        },
+      }).verdict,
+    ).toBe("accepted");
+    const state = f.host.state();
+    expect(reduceConnection(state, offer, f.controls.now)).toMatchObject({
+      verdict: "refused",
+      issue: "execution-blocked",
+      state,
+    });
+  } finally {
+    f.close();
+  }
+});
+
+test("a returning native registration blocks launch before it binds or starts listening", () => {
+  const f = boundFixture();
+  try {
+    const requester = readProcessOwner(process.pid);
+    if (!requester) throw new Error("Cannot verify this test process");
+    const returning = returningRegistration(f.controls.registration);
+    expect(
+      registerNativeSession(f.controls.registration.workingDirectory, returning, {
+        callerOwns: () => true,
+        ownerPresence: () => true,
+      }),
+    ).toMatchObject({ ok: true });
+    expect(f.host.enqueueInput({ id: "returning", mode: "queue", text: "Continue" }).verdict).toBe(
+      "accepted",
+    );
+    f.acquire();
+    const fact = {
+      actionId: crypto.randomUUID(),
+      kind: "launch-intended",
+      launch: {
+        epoch: 0,
+        id: crypto.randomUUID(),
+        inputId: "returning",
+        registration: f.controls.registration,
+        requester,
+        role: "headless",
+      },
+    };
+    for (const present of [true, undefined]) {
+      f.controls.probe = (owner) => (owner.pid === returning.owner.pid ? present : false);
+      expect(f.host.writeConnection(fact)).toMatchObject({
+        verdict: "refused",
+        issue: present ? "connection-conflict" : "connection-unverified",
+      });
+    }
+    expect(f.host.transcript().events).toHaveLength(0);
+  } finally {
+    f.close();
+  }
+});
+
+test("headless launch admission rechecks the saved folder and keeps the original native target", () => {
+  const f = boundFixture();
+  const otherFolder = mkdtempSync(join(tmpdir(), "lucid-other-folder-"));
+  try {
+    const requester = readProcessOwner(process.pid);
+    if (!requester) throw new Error("Cannot verify this test process");
+    expect(
+      f.host.enqueueInput({ id: "folder-feedback", mode: "queue", text: "Continue" }).verdict,
+    ).toBe("accepted");
+    f.controls.probe = () => false;
+    f.acquire();
+    replaceLocation(f.paths.dir, "feedback", 0, otherFolder);
+    expect(
+      f.host.writeConnection({
+        actionId: crypto.randomUUID(),
+        kind: "launch-intended",
+        launch: {
+          epoch: 0,
+          id: crypto.randomUUID(),
+          inputId: "folder-feedback",
+          registration: f.controls.registration,
+          requester,
+          role: "headless",
+        },
+      }),
+    ).toMatchObject({ verdict: "refused", issue: "connection-folder-mismatch" });
+    expect(f.host.transcript().events).toHaveLength(0);
+    expect(f.host.state().connection?.binding).toEqual(f.controls.registration);
+  } finally {
+    f.close();
+    rmSync(otherFolder, { force: true, recursive: true });
+  }
+});
+
+test("an unresolved launch keeps its input reserved after the executor exits", () => {
+  const f = boundFixture();
+  try {
+    const requester = readProcessOwner(process.pid);
+    if (!requester) throw new Error("Cannot verify this test process");
+    expect(
+      f.host.enqueueInput({ id: "reserved", mode: "queue", text: "Keep this input" }).verdict,
+    ).toBe("accepted");
+    f.controls.probe = () => false;
+    f.acquire();
+    expect(
+      f.host.writeConnection({
+        actionId: crypto.randomUUID(),
+        kind: "launch-intended",
+        launch: {
+          epoch: 0,
+          id: crypto.randomUUID(),
+          inputId: "reserved",
+          registration: f.controls.registration,
+          requester,
+          role: "headless",
+        },
+      }).verdict,
+    ).toBe("accepted");
+    f.controls.lease?.release();
+    const writer = openWriter(f.paths.dir);
+    try {
+      expect(writer.controlConnection({ kind: "cancel-input", inputId: "reserved" })).toMatchObject(
+        { verdict: "refused", issue: "input-already-dispatched" },
+      );
+      expect(writer.transcript().inputs[0]).toMatchObject({
+        id: "reserved",
+        status: "outstanding",
+      });
+    } finally {
+      writer.close();
+    }
+  } finally {
+    f.close();
+  }
+});
+
+test("two records cannot reserve the same native history even through different interfaces", () => {
+  const f = boundFixture();
+  const root = f.controls.registration.workingDirectory;
+  const { paths } = createConversationRecord(root, "other-feedback", { workingDirectory: root });
+  const registration = { ...f.controls.registration, interface: "codex-desktop" as const };
+  let departed = false;
+  let lease: PresenceHandle | undefined;
+  const other = createConversationHost(paths.dir, {
+    connectionAuthority: () => registration,
+    executorLease: () => lease?.held() ?? false,
+    nativeSessionRoot: root,
+    now: () => 1000,
+    onEffect: () => {},
+    onRecord: () => {},
+    ownerPresence: () => !departed,
+    presence: () => undefined,
+  });
+  try {
+    expect(
+      other.writeConnection({ actionId: crypto.randomUUID(), binding: registration, kind: "bound" })
+        .verdict,
+    ).toBe("accepted");
+    const requester = readProcessOwner(process.pid);
+    if (!requester) throw new Error("Cannot verify this test process");
+    const intent = (binding: NativeBinding) => ({
+      actionId: crypto.randomUUID(),
+      kind: "launch-intended",
+      launch: {
+        epoch: 0,
+        id: crypto.randomUUID(),
+        inputId: "feedback",
+        registration: binding,
+        requester,
+        role: "headless",
+      },
+    });
+    for (const host of [f.host, other])
+      expect(
+        host.enqueueInput({ id: "feedback", mode: "queue", text: "One response" }).verdict,
+      ).toBe("accepted");
+    f.controls.probe = () => false;
+    departed = true;
+    f.acquire();
+    expect(f.host.writeConnection(intent(f.controls.registration)).verdict).toBe("accepted");
+    // Losing the executor is insufficient evidence that native creation never started.
+    f.controls.lease?.release();
+    lease = acquirePresence(paths.dir, "other-feedback");
+    expect(other.writeConnection(intent(registration))).toMatchObject({
+      verdict: "refused",
+      issue: "execution-blocked",
+    });
+    expect(other.transcript().events).toHaveLength(0);
+    expect(other.transcript().inputs[0]).toMatchObject({ status: "outstanding" });
+  } finally {
+    other.close();
+    lease?.release();
+    f.close();
+  }
+});
+
+test("departed native launch admission records one notice and fences unresolved creation", () => {
+  const f = boundFixture();
+  try {
+    const requester = readProcessOwner(process.pid);
+    if (!requester) throw new Error("Cannot verify this test process");
+    expect(
+      f.host.enqueueInput({ id: "headless-feedback", mode: "queue", text: "Continue this review" })
+        .verdict,
+    ).toBe("accepted");
+    const fact = {
+      actionId: crypto.randomUUID(),
+      kind: "launch-intended",
+      launch: {
+        epoch: f.host.state().epoch,
+        id: crypto.randomUUID(),
+        inputId: "headless-feedback",
+        registration: f.controls.registration,
+        requester,
+        role: "headless",
+      },
+    };
+    f.acquire();
+    expect(f.host.writeConnection(fact)).toMatchObject({
+      verdict: "refused",
+      issue: "connection-conflict",
+    });
+    f.controls.probe = () => undefined;
+    expect(f.host.writeConnection(fact)).toMatchObject({
+      verdict: "refused",
+      issue: "connection-unverified",
+    });
+    expect(f.host.transcript().events).toHaveLength(0);
+    f.controls.probe = () => false;
+    expect(f.host.writeConnection(fact).verdict).toBe("accepted");
+    const seq = f.host.state().seq;
+    expect(f.host.writeConnection(fact).verdict).toBe("accepted");
+    expect(f.host.state().seq).toBe(seq);
+    expect(f.host.transcript().events.map((entry) => entry.event)).toEqual([
+      {
+        kind: EventKind.message,
+        role: "system",
+        text: "No interactive session detected. Resuming headlessly with session native-one.",
+      },
+    ]);
+    expect(viewConversation(f.paths.dir).transcript).toEqual(f.host.transcript());
+    expect(f.status()).toMatchObject({ state: "launch-uncertain", reason: "launch-unsettled" });
+    f.controls.probe = () => true;
+    expect(f.status()).toMatchObject({
+      state: "owner-conflict",
+      reason: "native-identity-conflict",
+    });
+    f.controls.probe = () => false;
+    expect(
+      f.host.writeConnection({
+        ...fact,
+        actionId: crypto.randomUUID(),
+        launch: { ...fact.launch, id: crypto.randomUUID() },
+      }),
+    ).toMatchObject({ verdict: "refused", issue: "execution-blocked" });
+    expect(f.host.transcript().events).toHaveLength(1);
+    expect(f.host.transcript().inputs[0]).toMatchObject({
+      id: "headless-feedback",
+      status: "outstanding",
+      text: "Continue this review",
+    });
+  } finally {
+    f.close();
+  }
+});
 
 function prepareOffer(
   host: BoundFixture["host"],
@@ -104,6 +423,7 @@ function boundFixture(bind = true): BoundFixture {
   const host = createConversationHost(paths.dir, {
     connectionAuthority: () => controls.registration,
     executorLease: () => controls.lease?.held() ?? false,
+    nativeSessionRoot: root,
     now: () => controls.now,
     onEffect: () => {},
     onRecord: () => {},
