@@ -133,7 +133,7 @@ export async function publishArtifact(
   let registration: NativeBinding | undefined;
   const host = openWriter(commandRecordDir(records, id), {
     connectionAuthority: () =>
-      registration && authority.callerOwns(registration.owner) === true ? registration : undefined,
+      registration && authority.callerOwns(registration) === true ? registration : undefined,
     ownerPresence: authority.ownerPresence,
   });
   try {

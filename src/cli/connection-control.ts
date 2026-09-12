@@ -81,9 +81,7 @@ export function runConnectionControl(
   const write = (registration?: NativeBinding): ControlOutcome => {
     const host = openWriter(dir, {
       connectionAuthority: () =>
-        registration && authority.callerOwns(registration.owner) === true
-          ? registration
-          : undefined,
+        registration && authority.callerOwns(registration) === true ? registration : undefined,
       ownerPresence: authority.ownerPresence,
     });
     try {

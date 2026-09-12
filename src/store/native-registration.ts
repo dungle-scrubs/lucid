@@ -20,7 +20,7 @@ import { classifyStoreFailure, type StoreFailureCode } from "./errors.js";
 import { type AppendLock, acquireAppendLock, LockError } from "./flock.js";
 
 export interface RegistrationAuthority {
-  readonly callerOwns: (owner: ProcessOwner) => boolean | undefined;
+  readonly callerOwns: (capture: NativeCapture) => boolean | undefined;
   readonly ownerPresence: (owner: ProcessOwner) => boolean | undefined;
 }
 
@@ -43,7 +43,7 @@ type RegistrationResult<TValue> =
   | { readonly ok: true; readonly value: TValue }
   | RegistrationFailure;
 
-function callerOwns(owner: ProcessOwner, probe = readProcessOwner): boolean | undefined {
+function callerAncestryOwns(owner: ProcessOwner, probe = readProcessOwner): boolean | undefined {
   let pid = process.pid;
   const visited = new Set<number>();
   while (pid > 1 && visited.size < 64 && !visited.has(pid)) {
@@ -57,14 +57,23 @@ function callerOwns(owner: ProcessOwner, probe = readProcessOwner): boolean | un
   }
   return pid <= 1 ? false : undefined;
 }
-/** Cache caller ancestry within one command; final native owner checks stay fresh. */
-export function nativeRegistrationAuthority(): RegistrationAuthority {
+/** Requires ancestry and independent native-session proof; without an adapter it authorizes nothing.
+ * Cache only caller ancestry within one command. Session and final owner checks stay fresh. */
+export function nativeRegistrationAuthority(
+  verifySession: (capture: NativeCapture) => boolean | undefined = () => undefined,
+): RegistrationAuthority {
   const snapshots = new Map<number, ReturnType<typeof readProcessOwner>>();
   const probe = (pid: number): ReturnType<typeof readProcessOwner> => {
     if (!snapshots.has(pid)) snapshots.set(pid, readProcessOwner(pid));
     return snapshots.get(pid);
   };
-  return { callerOwns: (owner) => callerOwns(owner, probe), ownerPresence };
+  return {
+    callerOwns: (capture) => {
+      const ancestry = callerAncestryOwns(capture.owner, probe);
+      return ancestry === true ? verifySession(capture) : ancestry;
+    },
+    ownerPresence,
+  };
 }
 
 const failure = (reason: RegistrationFailure["reason"], message: string): RegistrationFailure => ({
@@ -73,12 +82,12 @@ const failure = (reason: RegistrationFailure["reason"], message: string): Regist
   reason,
 });
 
-function probeAuthority(
-  probe: (owner: ProcessOwner) => boolean | undefined,
-  owner: ProcessOwner,
+function probeAuthority<TIdentity>(
+  probe: (identity: TIdentity) => boolean | undefined,
+  identity: TIdentity,
 ): boolean | undefined {
   try {
-    return probe(owner);
+    return probe(identity);
   } catch {
     return undefined;
   }
@@ -158,7 +167,7 @@ export function registerNativeSession(
       "The native lifecycle callback has an unsupported identity or working folder.",
     );
   if (
-    probeAuthority(authority.callerOwns, registration.owner) !== true ||
+    probeAuthority(authority.callerOwns, registration) !== true ||
     probeAuthority(authority.ownerPresence, registration.owner) !== true
   )
     return failure("owner-unknown", "The native owner could not be corroborated.");
@@ -210,7 +219,7 @@ export function withNativeRegistration<TValue>(
     const matches: NativeBinding[] = [];
     let unknown = false;
     for (const registration of registrations) {
-      const owns = probeAuthority(authority.callerOwns, registration.owner);
+      const owns = probeAuthority(authority.callerOwns, registration);
       if (owns === undefined) unknown = true;
       if (owns === true) matches.push(registration);
     }
