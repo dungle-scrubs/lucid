@@ -1,6 +1,6 @@
 # 03: Connect Codex CLI authors through bounded listening
 
-Status: open
+Status: done
 Blocked by: 01, 02
 
 ## What to build
@@ -9,10 +9,10 @@ Installed Codex CLI integration registers the current session, connects publicat
 
 ## Acceptance criteria
 
-- [ ] Isolated native setup preserves other hooks and excludes subagents and managed headless children.
+- [x] Isolated native setup preserves other hooks and excludes subagents and managed headless children.
 - [x] A 45-second synchronous wait performs no model calls while waiting; interruption or expiry disables listening until explicit resume-listen.
 - [x] Native receipt and response commands preserve identity and full feedback context; output preview or spill cannot masquerade as full delivery.
-- [ ] Real native acceptance covers publication, feedback, cancellation, interruption and same-session identity.
+- [x] Real native acceptance covers publication, feedback, cancellation, interruption and same-session identity.
 
 ## Native probe checkpoint - 2026-09-12
 
@@ -93,3 +93,7 @@ The shared context projection now excludes cancelled input content and refuses a
 A fresh native Codex CLI session used the generated hooks, cancelled the first saved input, and received the next 1,114 feedback bytes in full. The cancelled text was absent from its 3,398-byte context. The same session recorded receipt and response, then Escape saved interrupted; the next ordinary turn did not renew. The failed earlier offer was not replayed. All native/helper processes, pane `w2M:pV`, and the response stub exited. Evidence: `codex-setup-native-result.json`, `codex-setup-native-facts.json`, `cancelled-context-review.md`, and `cancelled-context-reviewed-check.log` under ignored evidence.
 
 These production-adapter runs used a real native CLI with a local response stub. The earlier live-Qwen run established the small hook transport. A production-adapter run with live Qwen remains before closing this lane's live-model confirmation.
+
+## Codex CLI lane complete
+
+Live local Qwen `qwen3.6-35b-a3b-ud-mlx`, selected from mini's current model inventory, ran the production adapter through native Codex CLI with the generated hooks. It published the artifact, requested listening, received the saved feedback, confirmed receipt and recorded `QWEN_NATIVE_FEEDBACK_RECORDED` in the same native session. Escape revoked listening. The native owner and helpers exited, and test pane `w2M:pW` was closed. Evidence: `codex-qwen-production-result.json` and `codex-qwen-production-facts.json` under the ignored evidence directory. Together with the deterministic provenance/exclusion tests and the native subagent, bounded-wait, cancellation and interruption runs above, this closes ticket 03. It does not establish other native interfaces or desktop support, and the integration has not been installed globally.
