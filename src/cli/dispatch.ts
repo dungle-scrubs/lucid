@@ -96,6 +96,7 @@ export interface DispatchDeps {
 export type DispatchResult =
   | { readonly kind: "codex-hook" }
   | { readonly kind: "connection-listen"; readonly verdict: "requested" | "held" }
+  | { readonly kind: "connection-setup"; readonly verdict: "installed" | "unchanged" | "refused" }
   | { readonly kind: "connection-control"; readonly verdict: "accepted" | "refused" }
   | { readonly kind: "connection-status" }
   | { readonly kind: "artifact-publish" }
@@ -133,9 +134,16 @@ export const dispatch = async (
 
   // Help is terminal — no seams, no root, no flock.
   if (mapped.kind === "help") return { kind: "help", message: mapped.message };
+  if (mapped.kind === "connection-setup") {
+    const { setupCodexHooks } = await import("./codex-setup.js");
+    const records = (deps.conversationsFactory ?? conversations)(deps.rootDir);
+    const result = setupCodexHooks(records.rootDir, mapped.hooksFile);
+    (deps.onOutput ?? console.log)(mapped.json ? JSON.stringify(result) : result.message);
+    return { kind: "connection-setup", verdict: result.status };
+  }
   if (mapped.kind === "codex-hook") {
     const { runCodexHook } = await import("./hooks/codex.js");
-    const records = (deps.conversationsFactory ?? conversations)(deps.rootDir);
+    const records = (deps.conversationsFactory ?? conversations)(mapped.root ?? deps.rootDir);
     let payload: unknown;
     try {
       payload = JSON.parse(await (deps.readStdinFn ?? readStdin)());

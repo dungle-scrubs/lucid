@@ -5,8 +5,9 @@ description: >
   conversation. Use for plans, roadmaps, comparisons, checklists, schemas,
   diagrams, specs, walkthroughs, and other structured answers the user may
   want to annotate at an element or phrase. Requires the lucid artifact
-  protocol marker supplied by `lucid chat` or `lucid run`.
-compatibility: Requires lucid and a conversation started through lucid.
+  protocol marker supplied by `lucid chat` or `lucid run`, or a native
+  Codex CLI session using Lucid publication and connection commands.
+compatibility: Requires lucid; native listening requires the Codex CLI integration.
 ---
 
 # Lucid artifact authoring
@@ -16,18 +17,28 @@ operate, or mark up in the browser. In lucid the conversation owns the
 artifact: do not create a sidecar file, call the old `lucid open`/`wait`
 commands, or run a second review loop.
 
-## Activation guard
+## Choose the delivery path
 
-Only emit a Lucid artifact when the current prompt contains
-`[lucid artifact protocol]`. That marker is injected by a lucid headless
-host and means the answer will be captured into the conversation record.
+For feedback containing `<lucid-offer>`, follow the native flow in
+[Native Codex authoring](../../docs/native-codex.md#author-and-revise).
+Record receipt before work, publish revisions into its exact conversation,
+then record a response. A native offer takes precedence over an artifact
+protocol marker included in its context.
 
-If the marker is absent, do not emit a `lucid-artifact` fence: an ordinary
-Pi/Claude/Codex/Muse session has no host that can store it. Answer normally
-and, if browser review is essential, tell the user to reopen the work through
-`lucid chat <conversation> --harness <name>`.
+Otherwise, when the prompt contains `[lucid artifact protocol]`, use the
+artifact fences below. The Lucid host captures them into its conversation.
 
-## Emit the artifact
+In a native Codex CLI session without either marker, use
+[Native Codex authoring](../../docs/native-codex.md#author-and-revise) to
+publish through the CLI, retain the returned conversation ID, and request
+listening. A failed connection does not undo publication or justify creating
+another record. Setup and publication alone do not establish listening.
+
+Other ordinary native interfaces have no enabled authoring integration yet.
+Answer normally and explain that browser review requires a conversation
+started through `lucid chat`. Do not emit an uncaptured artifact fence.
+
+## Emit through a Lucid host
 
 Follow the artifact protocol supplied in the prompt. For the first version,
 emit one complete, self-contained HTML document:
