@@ -116,6 +116,10 @@ export function hasUnresolvedOffer(connection: ConnectionState | null): boolean 
   return Object.values(connection?.offers ?? {}).some((offer) => offer.kind !== "finished");
 }
 
+export function hasUnsettledNativeWork(state: ChannelState): boolean {
+  return hasUnresolvedOffer(state.connection) || hasUnsettledExecution(state);
+}
+
 export type ConnectionFact =
   | { readonly actionId: string; readonly inputId: string; readonly kind: "input-cancelled" }
   | { readonly actionId: string; readonly hold: NativeInputHold; readonly kind: "input-held" }
@@ -172,13 +176,25 @@ export function sameNativeBinding(
   return (
     !!a &&
     !!b &&
+    sameNativeTarget(a, b) &&
     a.generation === b.generation &&
     a.registrationId === b.registrationId &&
+    sameProcessOwner(a.owner, b.owner)
+  );
+}
+
+/** A returning lifecycle may keep this exact target while changing its registration and owner. */
+export function sameNativeTarget(
+  a: NativeBinding | undefined,
+  b: NativeBinding | undefined,
+): boolean {
+  return (
+    !!a &&
+    !!b &&
     a.harness === b.harness &&
     a.interface === b.interface &&
     a.nativeSessionId === b.nativeSessionId &&
-    a.workingDirectory === b.workingDirectory &&
-    sameProcessOwner(a.owner, b.owner)
+    a.workingDirectory === b.workingDirectory
   );
 }
 
@@ -547,8 +563,7 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
       const hold = fact.hold;
       if (!connection || !matchingListener(state, hold, now))
         return refuseConnection(state, now, "connection-unverified");
-      if (hasUnresolvedOffer(connection) || hasUnsettledExecution(state))
-        return refuseConnection(state, now, "execution-blocked");
+      if (hasUnsettledNativeWork(state)) return refuseConnection(state, now, "execution-blocked");
       if (
         !state.inputs.some((input) => input.id === hold.inputId) ||
         Object.hasOwn(state.appliedInputs, hold.inputId)
@@ -620,10 +635,7 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
       if (
         !connection ||
         !binding ||
-        p.registration.nativeSessionId !== binding.nativeSessionId ||
-        p.registration.harness !== binding.harness ||
-        p.registration.interface !== binding.interface ||
-        p.registration.workingDirectory !== binding.workingDirectory ||
+        !sameNativeTarget(p.registration, binding) ||
         Object.hasOwn(connection.participations, p.id) ||
         state.attachment !== null
       )
@@ -634,8 +646,7 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
         p.expiresAt - now > LISTENER_WAIT_MAX_MS
       )
         return refuseConnection(state, now, "connection-unverified");
-      if (hasUnresolvedOffer(connection) || hasUnsettledExecution(state))
-        return refuseConnection(state, now, "execution-blocked");
+      if (hasUnsettledNativeWork(state)) return refuseConnection(state, now, "execution-blocked");
       next = {
         ...state,
         connection: {

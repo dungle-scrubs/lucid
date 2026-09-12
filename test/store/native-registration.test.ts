@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readProcessOwner } from "../../src/process-owner.js";
@@ -10,6 +10,140 @@ import {
   registerNativeSession,
   withNativeRegistration,
 } from "../../src/store/native-registration.js";
+
+test("a native listening request survives lookup but cannot cross a lifecycle refresh", () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-registration-request-"));
+  const authority = { callerOwns: () => true, ownerPresence: () => true };
+  const capture = {
+    harness: "codex" as const,
+    interface: "codex-cli" as const,
+    nativeSessionId: "native-request",
+    owner: { executable: "/native/codex", pid: 123, startedAt: "123:456" },
+    workingDirectory: root,
+  };
+  try {
+    const first = registerNativeSession(root, capture, authority);
+    if (!first.ok) throw new Error(first.message);
+    const request = { actionId: crypto.randomUUID(), conversationId: "selected-record" };
+    expect(
+      withNativeRegistration(
+        root,
+        first.registration.registrationId,
+        (_binding, access) => access.writeListenRequest(request),
+        authority,
+      ),
+    ).toEqual({ ok: true, value: { ok: true, value: undefined } });
+    expect(
+      withNativeRegistration(
+        root,
+        undefined,
+        (_binding, access) => access.readListenRequest(),
+        authority,
+      ),
+    ).toEqual({
+      ok: true,
+      value: { ok: true, value: request },
+    });
+    const refreshed = registerNativeSession(root, capture, authority);
+    expect(refreshed.ok).toBe(true);
+    expect(
+      withNativeRegistration(
+        root,
+        first.registration.registrationId,
+        (_binding, access) => access.writeListenRequest(request),
+        authority,
+      ),
+    ).toMatchObject({
+      ok: false,
+      reason: "stale-registration",
+    });
+    expect(
+      withNativeRegistration(
+        root,
+        undefined,
+        (_binding, access) => access.readListenRequest(),
+        authority,
+      ),
+    ).toEqual({
+      ok: true,
+      value: { ok: true, value: null },
+    });
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("an invalid selection cannot grant listening or corrupt verified receipt authority", () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-registration-hint-"));
+  const authority = { callerOwns: () => true, ownerPresence: () => true };
+  try {
+    const registered = registerNativeSession(
+      root,
+      {
+        harness: "codex",
+        interface: "codex-cli",
+        nativeSessionId: "native-one",
+        owner: { executable: "/native/codex", pid: 123, startedAt: "123:456" },
+        workingDirectory: root,
+      },
+      authority,
+    );
+    if (!registered.ok) throw new Error(registered.message);
+    const name = readdirSync(join(root, ".registrations")).find((value) =>
+      /^[0-9a-f]{64}\.json$/.test(value),
+    );
+    if (!name) throw new Error("Missing registration fixture");
+    writeFileSync(
+      join(root, ".registrations", name),
+      JSON.stringify({
+        ...registered.registration,
+        listenRequest: { conversationId: "../wrong-record", actionId: "invalid" },
+      }),
+    );
+    expect(withNativeRegistration(root, undefined, (binding) => binding, authority)).toEqual({
+      ok: true,
+      value: registered.registration,
+    });
+    expect(
+      withNativeRegistration(
+        root,
+        undefined,
+        (_binding, access) => access.readListenRequest(),
+        authority,
+      ),
+    ).toMatchObject({ ok: true, value: { ok: false, reason: "registration-store-unavailable" } });
+    const request = { actionId: crypto.randomUUID(), conversationId: "repaired" };
+    expect(
+      withNativeRegistration(
+        root,
+        undefined,
+        (_binding, access) => access.writeListenRequest(request),
+        authority,
+      ),
+    ).toMatchObject({ ok: true, value: { ok: true } });
+    expect(
+      withNativeRegistration(
+        root,
+        undefined,
+        (_binding, access) => access.readListenRequest(),
+        authority,
+      ),
+    ).toEqual({ ok: true, value: { ok: true, value: request } });
+    const escaped = withNativeRegistration(
+      root,
+      undefined,
+      (_binding, access) => access,
+      authority,
+    );
+    if (!escaped.ok) throw new Error(escaped.message);
+    expect(escaped.value.writeListenRequest(null)).toMatchObject({
+      ok: false,
+      reason: "stale-registration",
+    });
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
 
 test("a shared native process cannot authorize a different native thread", () => {
   const root = mkdtempSync(join(tmpdir(), "lucid-registration-thread-"));

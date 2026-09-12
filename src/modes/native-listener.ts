@@ -5,11 +5,10 @@ import type {
   ListenerParticipation,
 } from "../protocol/connection.js";
 import {
-  hasUnresolvedOffer,
+  hasUnsettledNativeWork,
   LISTENER_WAIT_MAX_MS,
   sameNativeBinding,
 } from "../protocol/connection.js";
-import { hasUnsettledExecution } from "../protocol/execution.js";
 import type { ProtocolIssue } from "../protocol/frames.js";
 import { createConversationHost, viewConversation } from "../store/conversation-host.js";
 import { classifyStoreFailure, type StoreFailureCode } from "../store/errors.js";
@@ -18,7 +17,12 @@ import {
   nativeInputCandidates,
   nativePreparationPrerequisite,
 } from "../store/managed-readiness.js";
-import type { RegistrationAuthority, RegistrationFailure } from "../store/native-registration.js";
+import type {
+  NativeListenRequest,
+  NativeRegistrationAccess,
+  RegistrationAuthority,
+  RegistrationFailure,
+} from "../store/native-registration.js";
 import {
   nativeRegistrationAuthority,
   withNativeRegistration,
@@ -30,6 +34,7 @@ import { prepareNativeFeedback } from "./native-preparation.js";
 
 interface NativeListenerOptions {
   readonly recordDir: string;
+  readonly request?: NativeListenRequest;
   readonly root: string;
   readonly signal: AbortSignal;
   readonly source: Extract<ConnectionFact, { kind: "listener-enabled" }>["source"];
@@ -58,7 +63,7 @@ export type NativeListenerResult =
         | "listener-failed";
     };
 
-const held = (
+export const heldNativeFeedback = (
   reason: Extract<NativeListenerResult, { kind: "held" }>["reason"],
   message: string,
 ): Extract<NativeListenerResult, { kind: "held" }> => ({
@@ -90,19 +95,32 @@ export async function listenNativeFeedback(
     now: overrides.now ?? Date.now,
     wait: overrides.wait ?? pause,
   };
-  const { recordDir, root, signal, source, transport } = options;
+  const { recordDir, request, root, signal, source, transport } = options;
   let lease: PresenceHandle | undefined;
   let host: ReturnType<typeof createConversationHost> | undefined;
   try {
     const before = viewConversation(recordDir).state;
+    const checkRequest = (access: NativeRegistrationAccess): NativeListenerResult | null => {
+      if (!request) return null;
+      const current = access.readListenRequest();
+      if (!current.ok) return heldNativeFeedback(current.reason, current.message);
+      return current.value?.conversationId === before.conversationId &&
+        request.conversationId === before.conversationId &&
+        current.value.actionId === request.actionId
+        ? null
+        : heldNativeFeedback(
+            "connection-not-admitted",
+            "This listening request is no longer current. Feedback remains saved.",
+          );
+    };
     if (!before.connection)
-      return held(
+      return heldNativeFeedback(
         "connection-setup-required",
         "Connect this conversation to its native author before listening.",
       );
     // Advisory precheck only. The host rechecks admission after acquiring presence.
-    if (hasUnresolvedOffer(before.connection) || hasUnsettledExecution(before))
-      return held(
+    if (hasUnsettledNativeWork(before))
+      return heldNativeFeedback(
         "execution-blocked",
         "The previous delivery or execution must settle before listening again.",
       );
@@ -112,10 +130,11 @@ export async function listenNativeFeedback(
       (registration) => registration,
       deps.authority,
     );
-    if (!resolved.ok) return held(resolved.reason, resolved.message);
+    if (!resolved.ok) return heldNativeFeedback(resolved.reason, resolved.message);
     const registration = resolved.value;
     const executorOwner = readProcessOwner(process.pid);
-    if (!executorOwner) return held("owner-unknown", "The listener process could not be verified.");
+    if (!executorOwner)
+      return heldNativeFeedback("owner-unknown", "The listener process could not be verified.");
     host = createConversationHost(recordDir, {
       connectionAuthority: () => registration,
       executorLease: () => lease?.held() ?? false,
@@ -126,38 +145,6 @@ export async function listenNativeFeedback(
       presence: () => undefined,
     });
     const writer = host;
-    const write = (fact: ConnectionFact): NativeListenerResult | null => {
-      const result = withNativeRegistration(
-        root,
-        registration.registrationId,
-        (current) => {
-          // The host's captured authority is valid only while this exact registry entry is locked.
-          if (!sameNativeBinding(current, registration))
-            return held(
-              "stale-registration",
-              "The native registration changed. Reconnect from the intended session.",
-            );
-          if (fact.kind === "listener-enabled") {
-            const admission = writer.acquireExecutor({ kind: "listener", fact }, () =>
-              acquirePresence(recordDir, before.conversationId, { timeoutMs: 0 }),
-            );
-            if (admission.verdict === "refused")
-              return held(admission.issue, "Listening was not admitted. Feedback remains saved.");
-            lease = admission.lease;
-          }
-          const result = writer.writeConnection(fact);
-          return result.verdict === "accepted"
-            ? null
-            : held(
-                result.issue,
-                "The listener could not verify permission to deliver feedback. Check connection status.",
-              );
-        },
-        deps.authority,
-      );
-      if (!result.ok) return held(result.reason, result.message);
-      return result.value;
-    };
     const participation: ListenerParticipation = {
       epoch: writer.state().epoch + 1,
       executorOwner,
@@ -165,13 +152,6 @@ export async function listenNativeFeedback(
       id: crypto.randomUUID(),
       registration,
     };
-    const enabled = write({
-      actionId: crypto.randomUUID(),
-      kind: "listener-enabled",
-      participation,
-      source,
-    });
-    if (enabled) return enabled;
     const disable = (reason: ListenerDisabledReason): NativeListenerResult | null => {
       const result = writer.writeConnection({
         actionId: crypto.randomUUID(),
@@ -182,25 +162,74 @@ export async function listenNativeFeedback(
       });
       return result.verdict === "accepted"
         ? null
-        : held(
+        : heldNativeFeedback(
             result.issue,
             "Listening ended, but its shutdown could not be recorded. Check connection status.",
           );
     };
+    const write = (fact: ConnectionFact): NativeListenerResult | null => {
+      const result = withNativeRegistration(
+        root,
+        registration.registrationId,
+        (current, access) => {
+          // The host's captured authority is valid only while this exact registry entry is locked.
+          if (!sameNativeBinding(current, registration))
+            return heldNativeFeedback(
+              "stale-registration",
+              "The native registration changed. Reconnect from the intended session.",
+            );
+          const requestIssue = checkRequest(access);
+          if (requestIssue) return (lease?.held() ? disable("interrupted") : null) ?? requestIssue;
+          if (fact.kind === "listener-enabled") {
+            const admission = writer.acquireExecutor({ kind: "listener", fact }, () =>
+              acquirePresence(recordDir, before.conversationId, { timeoutMs: 0 }),
+            );
+            if (admission.verdict === "refused")
+              return heldNativeFeedback(
+                admission.issue,
+                "Listening was not admitted. Feedback remains saved.",
+              );
+            lease = admission.lease;
+          }
+          const result = writer.writeConnection(fact);
+          return result.verdict === "accepted"
+            ? null
+            : heldNativeFeedback(
+                result.issue,
+                "The listener could not verify permission to deliver feedback. Check connection status.",
+              );
+        },
+        deps.authority,
+      );
+      if (!result.ok) return heldNativeFeedback(result.reason, result.message);
+      return result.value;
+    };
+    const enabled = write({
+      actionId: source === "explicit" && request ? request.actionId : crypto.randomUUID(),
+      kind: "listener-enabled",
+      participation,
+      source,
+    });
+    if (enabled) return enabled;
     while (!signal.aborted && deps.now() < participation.expiresAt) {
       const verified = withNativeRegistration(
         root,
         registration.registrationId,
-        () => true,
+        (_current, access) => checkRequest(access),
         deps.authority,
       );
-      if (!verified.ok) return disable("owner-lost") ?? held(verified.reason, verified.message);
+      if (!verified.ok)
+        return disable("owner-lost") ?? heldNativeFeedback(verified.reason, verified.message);
       const snapshot = viewConversation(recordDir);
       if (snapshot.state.connection?.listenerId !== participation.id) {
         return snapshot.state.connection?.disabledReason === "interrupted"
           ? { kind: "stopped", reason: "interrupted" }
-          : held("connection-not-admitted", "Listening was revoked. Feedback remains saved.");
+          : heldNativeFeedback(
+              "connection-not-admitted",
+              "Listening was revoked. Feedback remains saved.",
+            );
       }
+      if (verified.value) return disable("interrupted") ?? verified.value;
       const inputId = nativeInputCandidates(recordDir, snapshot.state, snapshot.artifactHeads)[0];
       if (inputId !== undefined) {
         const prerequisite = nativePreparationPrerequisite(
@@ -244,7 +273,7 @@ export async function listenNativeFeedback(
     const reason = signal.aborted ? "interrupted" : "expired";
     return disable(reason) ?? { kind: "stopped", reason };
   } catch (cause) {
-    return held(
+    return heldNativeFeedback(
       cause instanceof LockError && cause.code === "lock-timeout"
         ? "executor-busy"
         : (classifyStoreFailure(cause) ?? "listener-failed"),

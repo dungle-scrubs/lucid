@@ -95,7 +95,7 @@ export interface DispatchDeps {
 
 export type DispatchResult =
   | { readonly kind: "codex-hook" }
-  | { readonly kind: "connection-listen"; readonly verdict: "offered" | "stopped" | "held" }
+  | { readonly kind: "connection-listen"; readonly verdict: "requested" | "held" }
   | { readonly kind: "connection-control"; readonly verdict: "accepted" | "refused" }
   | { readonly kind: "connection-status" }
   | { readonly kind: "artifact-publish" }
@@ -153,27 +153,10 @@ export const dispatch = async (
     return { kind: "codex-hook" };
   }
   if (mapped.kind === "connection-listen") {
-    const { listenCodexFeedback } = await import("./codex-listener.js");
+    const { requestCodexListening } = await import("./codex-listener.js");
     const records = (deps.conversationsFactory ?? conversations)(deps.rootDir);
-    const result = await listenCodexFeedback(
-      records,
-      mapped.conversationId,
-      {
-        output: mapped.json ? "json" : "text",
-        signal: deps.signal ?? new AbortController().signal,
-        source: "explicit",
-      },
-      { authority: deps.nativeAuthority },
-    );
-    const message =
-      result.kind === "held"
-        ? result.message
-        : result.kind === "stopped"
-          ? `Listening ${result.reason}. Feedback remains saved; explicitly resume listening to check again.`
-          : result.payload;
-    (deps.onOutput ?? console.log)(
-      result.kind === "offered" ? result.payload : mapped.json ? JSON.stringify(result) : message,
-    );
+    const result = requestCodexListening(records, mapped.conversationId, deps.nativeAuthority);
+    (deps.onOutput ?? console.log)(mapped.json ? JSON.stringify(result) : result.message);
     return { kind: "connection-listen", verdict: result.kind };
   }
   if (mapped.kind === "connection-control") {

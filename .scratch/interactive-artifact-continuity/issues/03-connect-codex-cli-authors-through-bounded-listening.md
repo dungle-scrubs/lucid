@@ -10,8 +10,8 @@ Installed Codex CLI integration registers the current session, connects publicat
 ## Acceptance criteria
 
 - [ ] Isolated native setup preserves other hooks and excludes subagents and managed headless children.
-- [ ] A 45-second synchronous wait performs no model calls while waiting; interruption or expiry disables listening until explicit resume-listen.
-- [ ] Native receipt and response commands preserve identity and full feedback context; output preview or spill cannot masquerade as full delivery.
+- [x] A 45-second synchronous wait performs no model calls while waiting; interruption or expiry disables listening until explicit resume-listen.
+- [x] Native receipt and response commands preserve identity and full feedback context; output preview or spill cannot masquerade as full delivery.
 - [ ] Real native acceptance covers publication, feedback, cancellation, interruption and same-session identity.
 
 ## Native probe checkpoint - 2026-09-12
@@ -43,3 +43,29 @@ The verified native parent can now revoke its exact listener without acquiring t
 Four Muse review axes reported no findings. The full check passed 1,541 tests with no failures; the binary build passed. An isolated native Codex CLI resume retained the same session ID after the previous process exited. Escape during the production Stop wait saved `interrupted`; a subsequent ordinary turn did not renew listening. The helper and resumed native process both exited. Evidence: `native-interrupt-review-*.json`, `native-interrupt-final-check.log`, `native-interrupt-build.log`, and `codex-native-interrupt-result.json` under the ignored evidence directory.
 
 Initial empty-queue listening, exact-record selection, isolated setup, and remaining native acceptance still keep this ticket open. CLI evidence does not establish desktop support.
+
+## Next slice: request listening at the native turn boundary
+
+Machine-made implementation detail under RFC 26 sections 2, 5 and 9. Fit: holds scope for the person publishing and reviewing an artifact in an existing native conversation.
+
+`resume-listen` verifies the exact bound conversation, records a private lifecycle-scoped selection hint and returns `requested`. The hint contains the conversation ID and one activation action ID. It grants no readiness or executor lease. The next Stop uses exact record lookup and the shared listener admission; its durable `listener-enabled` action consumes that activation. After an offer finishes, the current participation can continue normally. Expiry or interruption prevents later unrelated turns from renewing. Interrupt clears a pending request even if the listener has not started. Lifecycle refresh clears the hint.
+
+The record remains authoritative. Missing or invalid hints select nothing; they never trigger a newest-record fallback. Explicit selection checks other records for unresolved delivery or active execution in the same native session. Each listener transaction verifies that its selection remains current under the registration-before-append lock order. A stale helper cannot dispatch after selection changes. Setup and the authoring instructions must request listening, finish the native turn, and explain the bounded wait.
+
+Test seams and order:
+
+1. Native registration operations preserve an exact selection only within its verified lifecycle, reject stale callers, and keep invalid hint data separate from valid receipt authority.
+2. Native listener admission consumes one activation ID once; stale selection cannot start or dispatch work.
+3. CLI request plus native Stop delivers complete feedback and starts an empty-queue wait without a long-running tool response. Existing receipt/outcome assertions move across that Stop boundary without weakening them.
+4. Expiry, Interrupt before admission, Interrupt during waiting, repeated Stop, and lifecycle refresh do not renew automatically.
+5. Exact selection ignores unrelated record histories at hook time, refuses conflicting binding, and cannot escape an unresolved offer by selecting another conversation.
+
+## Listening request checkpoint
+
+The slice above is implemented. The CLI returns `requested`; only native Stop starts the bounded wait. Exact selection, single activation, lifecycle refresh, pending and active interruption, unrelated unreadable histories, stale preparation, and cross-record unresolved work/owner checks are covered. Malformed hint data cannot authorize listening and does not invalidate receipt authority.
+
+Four Muse review axes completed. Reuse fixes share target comparison, unsettled-work detection, and held results; the review disposition records why the remaining suggestions were skipped. The final check passed 1,549 tests with no failures; the binary build passed.
+
+The isolated native Codex CLI run observed a 113 ms request round trip, a 45,002 ms initial wait with zero model requests, then complete delivery of 3,067 feedback bytes through Stop. The same native session recorded receipt and response. Escape recorded interruption, and a later ordinary turn did not renew. All helper processes and the native test process exited; test pane `w2M:pT` and the local response stub were closed. Evidence: `codex-listen-request-result.json`, its facts/events, `listen-request-review.md`, `listen-request-review-fixes.md`, and `listen-request-reviewed-check.log` under the main checkout's ignored evidence directory.
+
+Isolated setup, authoring instructions, and remaining native cancellation acceptance keep the ticket open. Global installation, headless continuation, reconnect, other interfaces and desktop acceptance remain separate work.

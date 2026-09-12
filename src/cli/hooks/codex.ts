@@ -11,6 +11,7 @@ import { sameProcessOwner } from "../../protocol/process-owner.js";
 import { openWriter, viewConversation } from "../../store/conversation-host.js";
 import type {
   NativeCapture,
+  NativeListenRequest,
   RegistrationAuthority,
   RegistrationFailure,
 } from "../../store/native-registration.js";
@@ -128,7 +129,16 @@ interface CodexHookOptions {
   readonly listener?: Pick<NativeListenerDeps, "now" | "wait">;
 }
 
-/** Stop can renew only the one completed delivery from this exact native lifecycle. */
+type HookDecision =
+  | NativeListenerResult
+  | { readonly kind: "skipped" }
+  | {
+      readonly kind: "listen";
+      readonly request: NativeListenRequest;
+      readonly source: "explicit" | "continuation";
+    };
+
+/** Stop consumes one exact request, then continues only matching completed deliveries. */
 export async function runCodexHook(
   records: Conversations,
   payload: unknown,
@@ -142,48 +152,24 @@ export async function runCodexHook(
   )
     return { kind: "skipped" };
   const interrupted = (payload as Record<string, unknown>).hook_event_name === "Interrupt";
-  const candidates: string[] = [];
-  try {
-    const listing = records.list();
-    if (listing.errors.length > 0)
-      return {
-        kind: "held",
-        reason: "connection-unverified",
-        message:
-          "Lucid could not identify one conversation to continue. Feedback remains saved; run resume-listen for the intended conversation.",
-      };
-    for (const [id, dir] of listing.identities) {
-      const connection = viewConversation(dir).state.connection;
-      const listener = interrupted ? currentListener(connection) : continuationListener(connection);
-      if (!sameNativeBinding(listener?.registration, captured.registration)) continue;
-      candidates.push(id);
-      if (candidates.length === 2) break;
-    }
-  } catch {
-    return {
-      kind: "held",
-      reason: "connection-unverified",
-      message: "Lucid could not read the connection evidence. Feedback remains saved.",
-    };
-  }
-  if (candidates.length === 0) return { kind: "skipped" };
-  const id = candidates[0];
-  if (candidates.length !== 1 || !id)
-    return {
-      kind: "held",
-      reason: "connection-conflict",
-      message:
-        "More than one conversation can continue in this session. Feedback remains saved; run resume-listen for the intended conversation.",
-    };
-  if (interrupted) {
-    const authority = codexCallbackAuthority(captured.registration);
-    const result = withNativeRegistration(
-      records.rootDir,
-      captured.registration.registrationId,
-      (registration): NativeListenerResult | { readonly kind: "skipped" } => {
-        const host = openWriter(commandRecordDir(records, id), {
+  const authority = codexCallbackAuthority(captured.registration);
+  const selected = withNativeRegistration(
+    records.rootDir,
+    captured.registration.registrationId,
+    (registration, access): HookDecision => {
+      const requested = access.readListenRequest();
+      if (!requested.ok)
+        return { kind: "held", reason: requested.reason, message: requested.message };
+      const request = requested.value;
+      if (!request) return { kind: "skipped" };
+      if (interrupted) {
+        // Clear pending intent before looking up the record: a missing record must
+        // not leave a request that restarts on a later unrelated turn.
+        const cleared = access.writeListenRequest(null);
+        if (!cleared.ok) return { kind: "held", reason: cleared.reason, message: cleared.message };
+        const host = openWriter(commandRecordDir(records, request.conversationId), {
           connectionAuthority: () => registration,
-          expectedConversationId: id,
+          expectedConversationId: request.conversationId,
           ownerPresence: authority.ownerPresence,
         });
         try {
@@ -208,20 +194,28 @@ export async function runCodexHook(
         } finally {
           host.close();
         }
-      },
-      authority,
-    );
-    return result.ok
-      ? result.value
-      : { kind: "held", message: result.message, reason: result.reason };
-  }
+      }
+      const connection = viewConversation(commandRecordDir(records, request.conversationId)).state
+        .connection;
+      if (!connection) return { kind: "skipped" };
+      if (!Object.hasOwn(connection.actions, request.actionId))
+        return { kind: "listen", request, source: "explicit" };
+      const listener = continuationListener(connection);
+      return sameNativeBinding(listener?.registration, registration)
+        ? { kind: "listen", request, source: "continuation" }
+        : { kind: "skipped" };
+    },
+    authority,
+  );
+  if (!selected.ok) return { kind: "held", reason: selected.reason, message: selected.message };
+  if (selected.value.kind !== "listen") return selected.value;
   return listenCodexFeedback(
     records,
-    id,
-    { output: "hook", signal: options.signal, source: "continuation" },
+    selected.value.request.conversationId,
+    { request: selected.value.request, signal: options.signal, source: selected.value.source },
     {
       ...options.listener,
-      authority: codexCallbackAuthority(captured.registration),
+      authority,
     },
   );
 }

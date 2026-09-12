@@ -16,7 +16,7 @@ import type { NativeBinding } from "../protocol/connection.js";
 import { connectionId, parseNativeBinding } from "../protocol/connection.js";
 import type { ProcessOwner } from "../protocol/process-owner.js";
 import { atomicSidecar } from "./atomic-file.js";
-import { classifyStoreFailure, type StoreFailureCode } from "./errors.js";
+import { classifyStoreFailure, type StoreFailureCode, validConversationId } from "./errors.js";
 import { type AppendLock, acquireAppendLock, LockError } from "./flock.js";
 
 export interface RegistrationAuthority {
@@ -42,6 +42,33 @@ export interface RegistrationFailure {
 type RegistrationResult<TValue> =
   | { readonly ok: true; readonly value: TValue }
   | RegistrationFailure;
+
+/** Integration intent only. The record's listener-enabled action consumes this request. */
+export interface NativeListenRequest {
+  readonly actionId: string;
+  readonly conversationId: string;
+}
+
+export interface NativeRegistrationAccess {
+  readonly readListenRequest: () => RegistrationResult<NativeListenRequest | null>;
+  readonly writeListenRequest: (request: NativeListenRequest | null) => RegistrationResult<void>;
+}
+
+interface RegistrationEntry {
+  readonly binding: NativeBinding;
+  readonly path: string;
+  readonly request: unknown;
+}
+
+function parseListenRequest(value: unknown): NativeListenRequest | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const request = value as Record<string, unknown>;
+  return connectionId(request.actionId) &&
+    typeof request.conversationId === "string" &&
+    validConversationId(request.conversationId)
+    ? { actionId: request.actionId as string, conversationId: request.conversationId }
+    : null;
+}
 
 function callerAncestryOwns(owner: ProcessOwner, probe = readProcessOwner): boolean | undefined {
   let pid = process.pid;
@@ -132,7 +159,7 @@ function withRegistrations<TValue>(
   }
 }
 
-function readRegistration(path: string): NativeBinding {
+function readRegistration(path: string): RegistrationEntry {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const stat = fstatSync(fd);
@@ -143,9 +170,10 @@ function readRegistration(path: string): NativeBinding {
       stat.uid !== process.getuid?.()
     )
       throw new Error("Invalid native registration file");
-    const value = parseNativeBinding(JSON.parse(readFileSync(fd, "utf8")));
-    if (!value) throw new Error("Invalid native registration");
-    return value;
+    const raw = JSON.parse(readFileSync(fd, "utf8"));
+    const binding = parseNativeBinding(raw);
+    if (!binding) throw new Error("Invalid native registration");
+    return { binding, path, request: raw.listenRequest };
   } finally {
     closeSync(fd);
   }
@@ -192,20 +220,20 @@ export function registerNativeSession(
 export function withNativeRegistration<TValue>(
   root: string,
   reference: unknown,
-  operation: (registration: NativeBinding) => TValue,
+  operation: (registration: NativeBinding, access: NativeRegistrationAccess) => TValue,
   authority: RegistrationAuthority = nativeRegistrationAuthority(),
 ): RegistrationResult<TValue> {
   if (reference !== undefined && !connectionId(reference))
     return failure("invalid-registration", "The registration reference is invalid.");
   const result = withRegistrations(root, (dir): RegistrationResult<TValue> => {
-    let registrations: NativeBinding[];
+    let registrations: RegistrationEntry[];
     try {
       registrations = readdirSync(dir)
         .filter((name) => /^[0-9a-f]{64}\.json$/.test(name))
         .flatMap((name) => {
           const path = join(dir, name);
           const registration = readRegistration(path);
-          const alive = probeAuthority(authority.ownerPresence, registration.owner);
+          const alive = probeAuthority(authority.ownerPresence, registration.binding.owner);
           if (alive !== false) return [registration];
           unlinkSync(path);
           return [];
@@ -216,10 +244,10 @@ export function withNativeRegistration<TValue>(
         "A native registration is unreadable or invalid. Connection cannot be verified until its storage is repaired.",
       );
     }
-    const matches: NativeBinding[] = [];
+    const matches: RegistrationEntry[] = [];
     let unknown = false;
     for (const registration of registrations) {
-      const owns = probeAuthority(authority.callerOwns, registration);
+      const owns = probeAuthority(authority.callerOwns, registration.binding);
       if (owns === undefined) unknown = true;
       if (owns === true) matches.push(registration);
     }
@@ -231,12 +259,13 @@ export function withNativeRegistration<TValue>(
         "native-identity-conflict",
         "More than one native registration matches this process. Resolve the conflicting registrations before connecting.",
       );
-    const registration = matches[0];
-    if (!registration)
+    const entry = matches[0];
+    if (!entry)
       return failure(
         "registration-missing",
         "No verified native registration matches this process. Set up the native integration and reconnect.",
       );
+    const registration = entry.binding;
     if (reference !== undefined && registration.registrationId !== reference)
       return failure(
         "stale-registration",
@@ -244,8 +273,39 @@ export function withNativeRegistration<TValue>(
       );
     if (probeAuthority(authority.ownerPresence, registration.owner) !== true)
       return failure("owner-unknown", "The native owner could not be corroborated.");
+    let active = true;
+    let request = entry.request;
+    const access: NativeRegistrationAccess = {
+      readListenRequest: () => {
+        if (!active) return failure("stale-registration", "The registration operation has ended.");
+        if (request === undefined || request === null) return { ok: true, value: null };
+        const parsed = parseListenRequest(request);
+        return parsed
+          ? { ok: true, value: parsed }
+          : failure(
+              "registration-store-unavailable",
+              "The listening request is invalid. Explicitly resume listening for the intended conversation.",
+            );
+      },
+      writeListenRequest: (next) => {
+        if (!active) return failure("stale-registration", "The registration operation has ended.");
+        const parsed = next === null ? null : parseListenRequest(next);
+        if (next !== null && !parsed)
+          return failure("invalid-registration", "The listening request is invalid.");
+        try {
+          atomicSidecar(entry.path, { ...registration, listenRequest: parsed });
+          request = parsed;
+          return { ok: true, value: undefined };
+        } catch {
+          return failure(
+            "registration-store-unavailable",
+            "The listening request could not be saved. Check access to native registration storage.",
+          );
+        }
+      },
+    };
     try {
-      return { ok: true, value: operation(registration) };
+      return { ok: true, value: operation(registration, access) };
     } catch (cause) {
       const reason = classifyStoreFailure(cause) ?? "record-write-failed";
       const message =
@@ -255,6 +315,8 @@ export function withNativeRegistration<TValue>(
             ? "The conversation history could not be read. Connection remains unverified."
             : "The connection operation could not be saved. Check access to the conversation before retrying.";
       return failure(reason, message);
+    } finally {
+      active = false;
     }
   });
   return result.ok ? result.value : result;

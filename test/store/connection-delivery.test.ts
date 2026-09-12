@@ -21,6 +21,7 @@ import {
 import {
   type RegistrationAuthority,
   registerNativeSession,
+  withNativeRegistration,
 } from "../../src/store/native-registration.js";
 import { acquirePresence, type PresenceHandle, presenceHeld } from "../../src/store/presence.js";
 import { createConversationRecord } from "../../src/store/store.js";
@@ -175,6 +176,108 @@ function registerBinding(f: BoundFixture, authority: RegistrationAuthority): Nat
   ).toBe("accepted");
   return registered.registration;
 }
+
+test("a requested native wait consumes its activation once and refuses stale selection", async () => {
+  const f = boundFixture(false);
+  const authority = { callerOwns: () => true, ownerPresence: () => true };
+  try {
+    registerBinding(f, authority);
+    const request = { actionId: crypto.randomUUID(), conversationId: "feedback" };
+    expect(
+      withNativeRegistration(
+        f.controls.registration.workingDirectory,
+        undefined,
+        (_binding, access) => access.writeListenRequest(request),
+        authority,
+      ),
+    ).toMatchObject({ ok: true });
+    const options = {
+      recordDir: f.paths.dir,
+      request,
+      root: f.controls.registration.workingDirectory,
+      signal: new AbortController().signal,
+      source: "explicit" as const,
+      transport: { encode: (text: string) => text, maxBytes: 10_000 },
+    };
+    const deps = {
+      authority,
+      now: () => f.controls.now,
+      wait: async (ms: number) => {
+        f.controls.now += ms;
+      },
+    };
+    expect(await listenNativeFeedback(options, deps)).toEqual({
+      kind: "stopped",
+      reason: "expired",
+    });
+    const state = viewConversation(f.paths.dir).state;
+    expect(Object.hasOwn(state.connection?.actions ?? {}, request.actionId)).toBe(true);
+    expect(await listenNativeFeedback(options, deps)).toMatchObject({ kind: "held" });
+    expect(
+      await listenNativeFeedback(
+        { ...options, request: { ...request, actionId: crypto.randomUUID() } },
+        deps,
+      ),
+    ).toMatchObject({ kind: "held" });
+    expect(f.controls.now).toBe(46_000);
+    expect(viewConversation(f.paths.dir).state.epoch).toBe(state.epoch);
+    expect(presenceHeld(f.paths.dir)).toBe(false);
+  } finally {
+    f.close();
+  }
+});
+
+test("selection revoked during preparation leaves feedback unsent and disables the old helper", async () => {
+  const f = boundFixture(false);
+  const authority = { callerOwns: () => true, ownerPresence: () => true };
+  try {
+    const registration = registerBinding(f, authority);
+    const request = { actionId: crypto.randomUUID(), conversationId: "feedback" };
+    withNativeRegistration(
+      registration.workingDirectory,
+      undefined,
+      (_binding, access) => access.writeListenRequest(request),
+      authority,
+    );
+    expect(
+      f.host.acceptInput({ id: "saved", mode: "queue", text: "Keep the complete input" }).verdict,
+    ).toBe("accepted");
+    const result = await listenNativeFeedback(
+      {
+        recordDir: f.paths.dir,
+        request,
+        root: registration.workingDirectory,
+        signal: new AbortController().signal,
+        source: "explicit",
+        transport: {
+          encode: (text) => {
+            expect(
+              withNativeRegistration(
+                registration.workingDirectory,
+                undefined,
+                (_binding, access) => access.writeListenRequest(null),
+                authority,
+              ),
+            ).toMatchObject({ ok: true });
+            return text;
+          },
+          maxBytes: 100_000,
+        },
+      },
+      { authority, now: () => f.controls.now },
+    );
+    expect(result).toMatchObject({ kind: "held", reason: "connection-not-admitted" });
+    const state = viewConversation(f.paths.dir).state;
+    expect(state.connection?.disabledReason).toBe("interrupted");
+    expect(Object.keys(state.connection?.offers ?? {})).toHaveLength(0);
+    expect(state.inputs.find((input) => input.id === "saved")?.text).toBe(
+      "Keep the complete input",
+    );
+    expect(presenceHeld(f.paths.dir)).toBe(false);
+  } finally {
+    f.close();
+  }
+});
 
 test("listening requires an executor lease and expires without implying native departure", () => {
   const f = boundFixture();

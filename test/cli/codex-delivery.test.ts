@@ -2,14 +2,28 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { requestCodexListening } from "../../src/cli/codex-listener.js";
+import type { DispatchDeps } from "../../src/cli/dispatch.js";
 import { dispatch } from "../../src/cli/dispatch.js";
 import { captureCodexAuthor, runCodexHook } from "../../src/cli/hooks/codex.js";
 import { nativeCommandAuthority } from "../../src/cli/native-context.js";
 import { conversations } from "../../src/cli/record-addressing.js";
 import { readProcessOwner } from "../../src/process-owner.js";
+import type { ProcessOwner } from "../../src/protocol/process-owner.js";
 import { openWriter, viewConversation } from "../../src/store/conversation-host.js";
+import { presenceHeld } from "../../src/store/presence.js";
+import { createConversationRecord } from "../../src/store/store.js";
 
-test("native command delivery preserves full feedback and only its parent can settle the offer", async () => {
+interface NativeFixture {
+  readonly deps: DispatchDeps;
+  readonly dir: string;
+  readonly id: string;
+  readonly output: string[];
+  readonly owner: ProcessOwner;
+  readonly root: string;
+}
+
+async function nativeFixture(): Promise<NativeFixture> {
   const root = mkdtempSync(join(tmpdir(), "lucid-codex-delivery-"));
   try {
     const owner = readProcessOwner(process.pid);
@@ -56,6 +70,116 @@ test("native command delivery preserves full feedback and only its parent can se
     });
     const id = publication.conversationId;
     const dir = conversations(root).dirFor(id);
+    return { deps, dir, id, output, owner, root };
+  } catch (cause) {
+    rmSync(root, { force: true, recursive: true });
+    throw cause;
+  }
+}
+
+test("selecting another record cannot escape an unresolved offer to the same native session", async () => {
+  const { deps, dir, id, owner, root } = await nativeFixture();
+  try {
+    const binding = viewConversation(dir).state.connection?.binding;
+    if (!binding) throw new Error("Missing native binding");
+    const other = createConversationRecord(root, "second", { workingDirectory: root });
+    const second = openWriter(other.paths.dir, { connectionAuthority: () => binding });
+    try {
+      expect(
+        second.writeConnection({ actionId: crypto.randomUUID(), binding, kind: "bound" }).verdict,
+      ).toBe("accepted");
+      second.acceptInput({ id: "second-feedback", mode: "queue", text: "Second input" });
+    } finally {
+      second.close();
+    }
+    const first = openWriter(dir);
+    try {
+      first.acceptInput({ id: "first-feedback", mode: "queue", text: "First input" });
+    } finally {
+      first.close();
+    }
+    expect(await dispatch(["connection", "resume-listen", id, "--json"], deps)).toMatchObject({
+      verdict: "requested",
+    });
+    const callback = { cwd: root, hook_event_name: "Stop", session_id: "native-author" };
+    const options = {
+      native: { owner: async () => owner, role: undefined },
+      signal: new AbortController().signal,
+    };
+    expect(await runCodexHook(conversations(root), callback, options)).toMatchObject({
+      kind: "offered",
+    });
+    const before = viewConversation(dir).state;
+    expect(await dispatch(["connection", "resume-listen", "second", "--json"], deps)).toMatchObject(
+      { verdict: "held" },
+    );
+    expect(await runCodexHook(conversations(root), callback, options)).toMatchObject({
+      kind: "skipped",
+    });
+    expect(viewConversation(dir).state.seq).toBe(before.seq);
+    expect(
+      Object.keys(viewConversation(other.paths.dir).state.connection?.offers ?? {}),
+    ).toHaveLength(0);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("a listening request checks other owners of the same native session across records", async () => {
+  const { deps, dir, id, root } = await nativeFixture();
+  try {
+    const original = viewConversation(dir).state.connection?.binding;
+    if (!original || !deps.nativeAuthority) throw new Error("Missing fixture authority");
+    const binding = { ...original, owner: { ...original.owner, pid: 43210 } };
+    const other = createConversationRecord(root, "other-owner", { workingDirectory: root });
+    const writer = openWriter(other.paths.dir, {
+      connectionAuthority: () => binding,
+      ownerPresence: () => true,
+    });
+    try {
+      expect(
+        writer.writeConnection({ actionId: crypto.randomUUID(), binding, kind: "bound" }).verdict,
+      ).toBe("accepted");
+    } finally {
+      writer.close();
+    }
+    for (const present of [true, undefined]) {
+      expect(
+        requestCodexListening(conversations(root), id, {
+          callerOwns: deps.nativeAuthority.callerOwns,
+          ownerPresence: (owner) => (owner.pid === 43210 ? present : true),
+        }),
+      ).toMatchObject({
+        kind: "held",
+        reason: present ? "connection-conflict" : "connection-unverified",
+      });
+    }
+    expect(
+      requestCodexListening(conversations(root), id, {
+        callerOwns: deps.nativeAuthority.callerOwns,
+        ownerPresence: (owner) => owner.pid !== 43210,
+      }),
+    ).toMatchObject({ kind: "requested" });
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("native command delivery preserves full feedback and only its parent can settle the offer", async () => {
+  const { deps, dir, id, output, owner, root } = await nativeFixture();
+  try {
+    let now = Date.now();
+    const hookOptions = {
+      listener: {
+        now: () => now,
+        wait: async (ms: number) => {
+          now += ms;
+        },
+      },
+      native: { owner: async () => owner, role: undefined },
+      signal: new AbortController().signal,
+    };
+    const callback = { cwd: root, hook_event_name: "Stop", session_id: "native-author" };
     const host = openWriter(dir);
     const feedback = "Complete feedback including Unicode: ก🙂 and its final sentence.";
     try {
@@ -68,12 +192,20 @@ test("native command delivery preserves full feedback and only its parent can se
     }
     expect(await dispatch(["connection", "resume-listen", id, "--json"], deps)).toEqual({
       kind: "connection-listen",
-      verdict: "offered",
+      verdict: "requested",
     });
-    const delivered = JSON.parse(output.pop() ?? "null");
-    expect(delivered.kind).toBe("offered");
-    expect(delivered.text).toContain(feedback);
-    expect(delivered.text).toContain("<h1>Exact artifact context</h1>");
+    expect(JSON.parse(output.pop() ?? "null")).toMatchObject({
+      kind: "requested",
+      conversationId: id,
+    });
+    expect(Object.keys(viewConversation(dir).state.connection?.offers ?? {})).toHaveLength(0);
+    const delivery = await runCodexHook(conversations(root), callback, hookOptions);
+    expect(delivery.kind).toBe("offered");
+    if (delivery.kind !== "offered") throw new Error("Missing native Stop delivery");
+    const delivered = JSON.parse(delivery.payload);
+    expect(delivered.decision).toBe("block");
+    expect(delivered.reason).toContain(feedback);
+    expect(delivered.reason).toContain("<h1>Exact artifact context</h1>");
     const offerId = Object.keys(viewConversation(dir).state.connection?.offers ?? {})[0];
     if (!offerId) throw new Error("Missing durable offer");
     const child = nativeCommandAuthority({
@@ -126,7 +258,10 @@ test("native command delivery preserves full feedback and only its parent can se
       returned.close();
     }
     expect(await dispatch(["connection", "resume-listen", id, "--json"], deps)).toMatchObject({
-      verdict: "offered",
+      verdict: "requested",
+    });
+    expect(await runCodexHook(conversations(root), callback, hookOptions)).toMatchObject({
+      kind: "offered",
     });
     const returnedOfferId = Object.keys(viewConversation(dir).state.connection?.offers ?? {}).find(
       (key) => key !== offerId,
@@ -141,19 +276,7 @@ test("native command delivery preserves full feedback and only its parent can se
         deps,
       ),
     ).toMatchObject({ verdict: "accepted" });
-    let now = Date.now();
     const started = now;
-    const hookOptions = {
-      listener: {
-        now: () => now,
-        wait: async (ms: number) => {
-          now += ms;
-        },
-      },
-      native: { owner: async () => owner, role: undefined },
-      signal: new AbortController().signal,
-    };
-    const callback = { cwd: root, hook_event_name: "Stop", session_id: "native-author" };
     expect(await runCodexHook(conversations(root), callback, hookOptions)).toEqual({
       kind: "stopped",
       reason: "expired",
@@ -163,6 +286,89 @@ test("native command delivery preserves full feedback and only its parent can se
     expect(await runCodexHook(conversations(root), callback, hookOptions)).toEqual({
       kind: "skipped",
     });
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("the first empty wait starts at Stop, expires once, and a pending Interrupt prevents re-entry", async () => {
+  const { deps, dir, id, owner, root } = await nativeFixture();
+  try {
+    const records = conversations(root);
+    const callback = { cwd: root, hook_event_name: "Stop", session_id: "native-author" };
+    let now = Date.now();
+    const start = now;
+    const options = {
+      listener: {
+        now: () => now,
+        wait: async (ms: number) => {
+          now += ms;
+        },
+      },
+      native: { owner: async () => owner, role: undefined },
+      signal: new AbortController().signal,
+    };
+    const before = viewConversation(dir).state;
+    expect(await dispatch(["connection", "resume-listen", id, "--json"], deps)).toMatchObject({
+      verdict: "requested",
+    });
+    expect(viewConversation(dir).state.seq).toBe(before.seq);
+    expect(presenceHeld(dir)).toBe(false);
+    expect(await runCodexHook(records, callback, options)).toEqual({
+      kind: "stopped",
+      reason: "expired",
+    });
+    expect(now - start).toBe(45_000);
+    expect(await runCodexHook(records, callback, options)).toEqual({ kind: "skipped" });
+    const expired = viewConversation(dir).state;
+    expect(await dispatch(["connection", "resume-listen", id, "--json"], deps)).toMatchObject({
+      verdict: "requested",
+    });
+    expect(
+      await runCodexHook(records, { ...callback, hook_event_name: "Interrupt" }, options),
+    ).toEqual({ kind: "skipped" });
+    expect(await runCodexHook(records, callback, options)).toEqual({ kind: "skipped" });
+    expect(viewConversation(dir).state.seq).toBe(expired.seq);
+    expect(now - start).toBe(45_000);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("Stop and Interrupt use the selected record even when an unrelated history is unreadable", async () => {
+  const { deps, dir, id, owner, root } = await nativeFixture();
+  try {
+    expect(await dispatch(["connection", "resume-listen", id, "--json"], deps)).toMatchObject({
+      verdict: "requested",
+    });
+    const other = createConversationRecord(root, "unrelated", { workingDirectory: root });
+    writeFileSync(join(other.paths.dir, "log.ndjson"), "invalid synthetic log\n");
+    const records = conversations(root);
+    const callback = { cwd: root, hook_event_name: "Stop", session_id: "native-author" };
+    let now = Date.now();
+    const native = { owner: async () => owner, role: undefined };
+    const signal = new AbortController().signal;
+    const result = await runCodexHook(records, callback, {
+      native,
+      signal,
+      listener: {
+        now: () => now,
+        wait: async (ms: number) => {
+          now += ms;
+          expect(
+            await runCodexHook(
+              records,
+              { ...callback, hook_event_name: "Interrupt" },
+              { native, signal },
+            ),
+          ).toEqual({ kind: "stopped", reason: "interrupted" });
+        },
+      },
+    });
+    expect(result).toEqual({ kind: "stopped", reason: "interrupted" });
+    expect(viewConversation(dir).state.connection?.disabledReason).toBe("interrupted");
+    expect(presenceHeld(dir)).toBe(false);
+    expect(await runCodexHook(records, callback, { native, signal })).toEqual({ kind: "skipped" });
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
