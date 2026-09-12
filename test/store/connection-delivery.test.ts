@@ -6,7 +6,7 @@ import { dispatch } from "../../src/cli/dispatch.js";
 import { conversations } from "../../src/cli/record-addressing.js";
 import { listenNativeFeedback } from "../../src/modes/native-listener.js";
 import { prepareNativeFeedback } from "../../src/modes/native-preparation.js";
-import { readProcessOwner } from "../../src/process-owner.js";
+import { ownerPresence, readProcessOwner } from "../../src/process-owner.js";
 import { encodeAnnotationBatch } from "../../src/protocol/annotations.js";
 import type { ConnectionFact, NativeBinding } from "../../src/protocol/connection.js";
 import { parseConnectionFact, reduceConnection } from "../../src/protocol/connection.js";
@@ -3727,5 +3727,305 @@ test("a new host cleans native copies after a response was saved but post-append
     expect(existsSync(path)).toBe(false);
   } finally {
     close();
+  }
+});
+
+test("reconnect persists an uncancellable intent before invoking the same session once", () => {
+  const f = boundFixture();
+  try {
+    f.controls.probe = () => false;
+    expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("accepted");
+    const requestId = f.host.state().connection?.reconnectId;
+    if (!requestId) throw new Error("Missing reconnect request");
+    expect(presenceHeld(f.paths.dir)).toBe(false);
+    const admitted = f.host.acquireExecutor({ kind: "reconnect", requestId }, () =>
+      acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 }),
+    );
+    if (admitted.verdict !== "accepted") throw new Error(admitted.issue);
+    f.controls.lease = admitted.lease;
+    expect(f.host.prepareReconnect(requestId).verdict).toBe("accepted");
+    const intended = f.host.state();
+    const pending = intended.connection?.reconnects[requestId];
+    if (pending?.kind !== "intended") throw new Error("Missing reconnect intent");
+    expect(viewConversation(f.paths.dir).state).toEqual(intended);
+    expect(f.host.prepareReconnect(requestId).verdict).toBe("accepted");
+    expect(f.host.state()).toEqual(intended);
+    expect(f.host.controlReconnect({ kind: "cancel", requestId }).verdict).toBe("refused");
+    let calls = 0;
+    const invoke = (): undefined => {
+      calls++;
+      expect(presenceHeld(f.paths.dir)).toBe(true);
+      expect(viewConversation(f.paths.dir).state.connection?.reconnects[requestId]).toEqual(
+        pending,
+      );
+    };
+    expect(f.host.dispatchReconnect(pending.launchId, invoke).verdict).toBe("accepted");
+    expect(f.host.dispatchReconnect(pending.launchId, invoke).verdict).toBe("refused");
+    expect(calls).toBe(1);
+    f.controls.lease.release();
+    expect(f.status().state).toBe("launch-uncertain");
+    expect(f.host.state().connection?.reconnectId).toBe(requestId);
+  } finally {
+    f.close();
+  }
+});
+
+test("raw reconnect intent cannot bypass registration ordering after admission", () => {
+  const f = boundFixture();
+  try {
+    f.controls.probe = () => false;
+    expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("accepted");
+    const requestId = f.host.state().connection?.reconnectId;
+    if (!requestId) throw new Error("Missing reconnect request");
+    const admitted = f.host.acquireExecutor({ kind: "reconnect", requestId }, () =>
+      acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 }),
+    );
+    if (admitted.verdict !== "accepted") throw new Error(admitted.issue);
+    f.controls.lease = admitted.lease;
+    const before = f.host.state();
+    const result = withNativeSessionAdmission(
+      f.controls.registration.workingDirectory,
+      f.controls.registration,
+      () => false,
+      () =>
+        f.host.writeConnection({
+          actionId: crypto.randomUUID(),
+          kind: "reconnect-intended",
+          requestId,
+          launchId: crypto.randomUUID(),
+        }),
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      value: { verdict: "refused", issue: "connection-unverified" },
+    });
+    expect(f.host.state()).toEqual(before);
+  } finally {
+    f.close();
+  }
+});
+
+test.each(["cancelled", "replaced", "owner-returned", "owner-unknown"] as const)(
+  "reconnect acquisition rechecks %s before granting authority",
+  (change) => {
+    const f = boundFixture();
+    let lease: PresenceHandle | undefined;
+    try {
+      f.controls.probe = () => false;
+      expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("accepted");
+      const requestId = f.host.state().connection?.reconnectId;
+      if (!requestId) throw new Error("Missing reconnect request");
+      const result = f.host.acquireExecutor({ kind: "reconnect", requestId }, () => {
+        lease = acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 });
+        if (change === "cancelled" || change === "replaced") {
+          expect(f.host.controlReconnect({ kind: "cancel", requestId }).verdict).toBe("accepted");
+          if (change === "replaced")
+            expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("accepted");
+        } else f.controls.probe = () => (change === "owner-returned" ? true : undefined);
+        return lease;
+      });
+      expect(result.verdict).toBe("refused");
+      expect(lease?.held()).toBe(false);
+      expect(presenceHeld(f.paths.dir)).toBe(false);
+      expect(f.host.prepareReconnect(requestId).verdict).toBe("refused");
+      expect(f.host.state().connection?.reconnects[requestId]?.kind).toBe(
+        change === "cancelled" || change === "replaced" ? "withdrawn" : "requested",
+      );
+    } finally {
+      lease?.release();
+      f.close();
+    }
+  },
+);
+
+test.each(["lease-lost", "owner-returned", "owner-unknown", "invocation-threw"] as const)(
+  "reconnect dispatch retains its intent when %s",
+  (change) => {
+    const f = boundFixture();
+    try {
+      f.controls.probe = () => false;
+      expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("accepted");
+      const requestId = f.host.state().connection?.reconnectId;
+      if (!requestId) throw new Error("Missing reconnect request");
+      const admitted = f.host.acquireExecutor({ kind: "reconnect", requestId }, () =>
+        acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 }),
+      );
+      if (admitted.verdict !== "accepted") throw new Error(admitted.issue);
+      f.controls.lease = admitted.lease;
+      expect(f.host.prepareReconnect(requestId).verdict).toBe("accepted");
+      const pending = f.host.state().connection?.reconnects[requestId];
+      if (pending?.kind !== "intended") throw new Error("Missing intent");
+      if (change === "lease-lost") admitted.lease.release();
+      if (change === "owner-returned") f.controls.probe = () => true;
+      if (change === "owner-unknown") f.controls.probe = () => undefined;
+      let calls = 0;
+      const invoke = (): undefined => {
+        calls++;
+        throw new Error("Child may exist");
+      };
+      if (change === "invocation-threw")
+        expect(() => f.host.dispatchReconnect(pending.launchId, invoke)).toThrow("Child may exist");
+      expect(f.host.dispatchReconnect(pending.launchId, invoke)).toEqual({
+        verdict: "refused",
+        issue:
+          change === "owner-returned"
+            ? "connection-conflict"
+            : change === "owner-unknown"
+              ? "connection-unverified"
+              : "connection-not-admitted",
+      });
+      expect(calls).toBe(change === "invocation-threw" ? 1 : 0);
+      expect(f.host.controlReconnect({ kind: "cancel", requestId }).verdict).toBe("refused");
+      expect(viewConversation(f.paths.dir).state.connection?.reconnects[requestId]).toEqual(
+        pending,
+      );
+    } finally {
+      f.close();
+    }
+  },
+);
+
+test("requester exit withdraws only a reconnect that never recorded launch intent", () => {
+  const f = boundFixture();
+  try {
+    f.controls.probe = () => false;
+    expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("accepted");
+    const requestId = f.host.state().connection?.reconnectId;
+    if (!requestId) throw new Error("Missing reconnect request");
+    const reserved = f.host.state();
+    f.controls.probe = () => true;
+    expect(f.host.reconcileReconnect(requestId).verdict).toBe("refused");
+    f.controls.probe = () => undefined;
+    expect(f.host.reconcileReconnect(requestId).verdict).toBe("refused");
+    expect(f.host.state()).toEqual(reserved);
+    f.controls.probe = () => false;
+    expect(f.host.reconcileReconnect(requestId).verdict).toBe("accepted");
+    const withdrawn = f.host.state();
+    expect(withdrawn.connection?.reconnectId).toBeNull();
+    expect(withdrawn.connection?.reconnects[requestId]).toMatchObject({
+      kind: "withdrawn",
+      reason: "requester-exited",
+    });
+    f.controls.probe = () => {
+      throw new Error("Historical readback cannot probe ownership");
+    };
+    expect(f.host.reconcileReconnect(requestId).verdict).toBe("accepted");
+    expect(f.host.controlReconnect({ kind: "cancel", requestId }).verdict).toBe("accepted");
+    expect(viewConversation(f.paths.dir).state).toEqual(withdrawn);
+    expect(presenceHeld(f.paths.dir)).toBe(false);
+    f.controls.probe = () => false;
+    expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("accepted");
+    const nextId = f.host.state().connection?.reconnectId;
+    if (!nextId) throw new Error("Missing second request");
+    const admitted = f.host.acquireExecutor({ kind: "reconnect", requestId: nextId }, () =>
+      acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 }),
+    );
+    if (admitted.verdict !== "accepted") throw new Error(admitted.issue);
+    f.controls.lease = admitted.lease;
+    expect(f.host.prepareReconnect(nextId).verdict).toBe("accepted");
+    admitted.lease.release();
+    const intended = f.host.state();
+    expect(f.host.reconcileReconnect(nextId).verdict).toBe("refused");
+    expect(f.host.state()).toEqual(intended);
+  } finally {
+    f.close();
+  }
+});
+
+test.each(["requested", "intended"] as const)(
+  "real requester death in %s phase cannot erase possible native creation",
+  async (phase) => {
+    const f = boundFixture();
+    const hostModule = new URL("../../src/store/conversation-host.ts", import.meta.url).href;
+    const presenceModule = new URL("../../src/store/presence.ts", import.meta.url).href;
+    // This child is a disposable Lucid requester, not a harness or a native session.
+    const program = `
+    import { createConversationHost } from ${JSON.stringify(hostModule)};
+    import { acquirePresence } from ${JSON.stringify(presenceModule)};
+    const dir = ${JSON.stringify(f.paths.dir)};
+    let lease;
+    const host = createConversationHost(dir, {
+      executorLease: () => lease?.held() ?? false,
+      nativeSessionRoot: ${JSON.stringify(f.controls.registration.workingDirectory)},
+      now: () => 1000, onEffect() {}, onRecord() {},
+      ownerPresence: () => false, presence: () => undefined,
+    });
+    if (host.controlReconnect({kind: 'request'}).verdict !== 'accepted') throw new Error('Request refused');
+    const requestId = host.state().connection.reconnectId;
+    if (${JSON.stringify(phase)} === 'intended') {
+      const admitted = host.acquireExecutor({kind: 'reconnect', requestId}, () => acquirePresence(dir, 'feedback', {timeoutMs: 0}));
+      if (admitted.verdict !== 'accepted') throw new Error(admitted.issue);
+      lease = admitted.lease;
+      if (host.prepareReconnect(requestId).verdict !== 'accepted') throw new Error('Intent refused');
+    }
+    console.log('READY');
+    await Bun.stdin.stream().getReader().read();
+  `;
+    const child = Bun.spawn([process.execPath, "-e", program], {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    try {
+      const reader = child.stdout.getReader();
+      const decoder = new TextDecoder();
+      let readiness = "";
+      while (!readiness.includes("\n")) {
+        const chunk = await reader.read();
+        if (chunk.done) throw new Error("Requester exited before readiness");
+        readiness += decoder.decode(chunk.value, { stream: true });
+        if (readiness.length > 128) throw new Error("Invalid requester readiness");
+      }
+      reader.releaseLock();
+      expect(readiness.trim()).toBe("READY");
+      const state = viewConversation(f.paths.dir).state;
+      const requestId = state.connection?.reconnectId;
+      if (!requestId) throw new Error("Missing child request");
+      const request = state.connection?.reconnects[requestId];
+      if (!request) throw new Error("Missing request history");
+      expect(request.request.requester.pid).toBe(child.pid);
+      expect(presenceHeld(f.paths.dir)).toBe(phase === "intended");
+      f.controls.probe = ownerPresence;
+      expect(f.host.reconcileReconnect(requestId).verdict).toBe("refused");
+      child.kill("SIGKILL");
+      await child.exited;
+      expect(ownerPresence(request.request.requester)).toBe(false);
+      expect(presenceHeld(f.paths.dir)).toBe(false);
+      expect(f.host.reconcileReconnect(requestId).verdict).toBe(
+        phase === "requested" ? "accepted" : "refused",
+      );
+      expect(f.host.state().connection?.reconnectId).toBe(phase === "requested" ? null : requestId);
+      expect(await new Response(child.stderr).text()).toBe("");
+    } finally {
+      child.kill("SIGKILL");
+      await child.exited;
+      f.close();
+    }
+  },
+);
+
+test("a host with an admitted reconnect lease refuses another acquisition before the lock callback", () => {
+  const f = boundFixture();
+  try {
+    f.controls.probe = () => false;
+    expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("accepted");
+    const requestId = f.host.state().connection?.reconnectId;
+    if (!requestId) throw new Error("Missing request");
+    const admitted = f.host.acquireExecutor({ kind: "reconnect", requestId }, () =>
+      acquirePresence(f.paths.dir, "feedback", { timeoutMs: 0 }),
+    );
+    if (admitted.verdict !== "accepted") throw new Error(admitted.issue);
+    f.controls.lease = admitted.lease;
+    let calls = 0;
+    const repeated = f.host.acquireExecutor({ kind: "reconnect", requestId }, () => {
+      calls++;
+      throw new Error("Must preserve the already admitted lease");
+    });
+    expect(repeated).toEqual({ verdict: "refused", issue: "connection-not-admitted" });
+    expect(calls).toBe(0);
+    expect(admitted.lease.held()).toBe(true);
+    expect(f.host.prepareReconnect(requestId).verdict).toBe("accepted");
+  } finally {
+    f.close();
   }
 });

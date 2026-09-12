@@ -106,6 +106,13 @@ export function observeConnection(
           reason: "launch-unsettled",
           state: "launch-uncertain",
         };
+  if (currentReconnect(state.connection)?.kind === "intended")
+    return {
+      message:
+        "Interactive reconnect was admitted, but native process creation is not verified. Saved feedback is held.",
+      reason: "reconnect-launch-unverified",
+      state: "launch-uncertain",
+    };
   const pending = Object.values(state.connection?.offers ?? {}).find(
     (offer) => offer.kind !== "finished",
   );

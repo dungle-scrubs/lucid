@@ -31,3 +31,17 @@ One durable request now holds new native work without taking an executor lease. 
 Tests cover record reopen/replay, actual presence locks, request arrival during raw lease acquisition, a request after preparation with zero HCN creation, and a pending approval that receives one saved decision and finishes response plus cleanup while reconnect remains reserved. The idle status reads Waiting to reconnect. Four Muse review axes and scoped fixes pass 1,621 tests and build. Evidence and review dispositions are under ignored native-reconnect-* artifacts.
 
 HCN interactive consumption, reconnect launch and matching-child admission, requester-loss reconciliation, public controls, multiprocess full handoff and native acceptance remain pending. Runtime stays fenced. The launch phase must leave requested state before invocation and reject cancellation after that transition.
+
+## Launch admission slice
+
+Machine-made seams under the accepted RFC: reconnect uses the host's shared executor acquisition, then persists intent, then revalidates under registration and record ordering through synchronous invocation. The acquired lease is private authority for that one request. Intent consumes the cancellable wait before HCN can run. The next tests attach at the host with actual record replay and presence handles: persist intent before the callback, reject a cancelled/replaced request at acquisition, reject lease loss or a returning native owner at dispatch, and consume a throwing invocation once. Started child provenance and matching-listener transfer follow this admission slice before exposing the command.
+
+Requester-loss reconciliation uses the same append transaction to corroborate the exact requester's exit and prove that the request remains in its pre-intent phase. Its durable withdrawal reason stays distinct from explicit cancellation. Unknown or live requesters hold the reservation; any persisted intent blocks this reconciliation even after parent death. Tests cover those cases and historical readback without repeating an owner probe. This is the existing RFC requester-loss requirement, with no expiry or new user action.
+
+## Launch admission checkpoint
+
+The shared host now admits only the matching requester, records a stable launch intent before invocation, and keeps registration plus append ordering through its one synchronous dispatch. Intent blocks cancellation. Lease loss, changed owners, and a throwing invocation retain that intent without another spawn. A host with a live admitted lease refuses another acquisition before the lock callback. The caller owns release after cleanup or the specified started-provenance handoff; closing the host does not release a process owner's lease.
+
+Requester-loss reconciliation records requester-exited separately from explicit cancellation. It needs a fresh exact-process exit result and requested phase under append ordering. Historical readback repeats neither probing nor withdrawal. Actual disposable process tests confirm that kernel lock release after requester death does not erase persisted intent. The initial process-test cached read was corrected to the existing fresh durable view; production behavior and assertions were retained.
+
+Four Muse review axes and scoped fixes pass 1,658 tests and build. Review/evidence is under ignored reconnect-launch-admission-* and reconnect-launch-review-* artifacts. Started/refused/closed consumption, matching-listener transfer, public controls and native acceptance remain pending. This checkpoint does not enable the bound runtime.

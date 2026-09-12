@@ -49,6 +49,7 @@ import type {
   ConnectionControl,
   ConnectionFact,
   NativeBinding,
+  NativeReconnectState,
   ReconnectControl,
 } from "../protocol/connection.js";
 import {
@@ -56,6 +57,7 @@ import {
   connectionParticipation,
   connectionRegistration,
   currentReconnect,
+  hasUnsettledNativeExecution,
   hasUnsettledNativeWork,
   nativeOwners,
   parseConnectionFact,
@@ -247,7 +249,31 @@ export const readRecordFiles = (
   return { secret, conversationId, paths };
 };
 
+function reconnectWithdrawalFact(
+  pending: NativeReconnectState,
+  kind: "reconnect-withdrawn" | "reconnect-abandoned",
+): Extract<ConnectionFact, { kind: "reconnect-withdrawn" | "reconnect-abandoned" }> {
+  return {
+    actionId: pending.kind === "withdrawn" ? pending.withdrawnActionId : crypto.randomUUID(),
+    kind:
+      pending.kind === "withdrawn"
+        ? pending.reason === "cancelled"
+          ? "reconnect-withdrawn"
+          : "reconnect-abandoned"
+        : kind,
+    requestId: pending.request.id,
+  };
+}
+
 export interface ConversationHost {
+  reconcileReconnect(requestId: string): ReduceResult;
+  prepareReconnect(requestId: string): ReduceResult;
+  dispatchReconnect(
+    launchId: string,
+    invoke: () => undefined,
+  ):
+    | { readonly verdict: "accepted" }
+    | { readonly verdict: "refused"; readonly issue: ProtocolIssue };
   decideApproval(decision: unknown, available?: () => boolean): ReduceResult;
   writeApproval(fact: unknown, applicable?: () => boolean): ReduceResult;
   /** Records native identity, or cleanup reported by the source after draining its owned process. */
@@ -263,10 +289,12 @@ export interface ConversationHost {
     | { readonly verdict: "accepted" }
     | { readonly verdict: "refused"; readonly issue: ProtocolIssue };
   /** Checks before locking and again under the append lock. Native listener callers hold the
-   * registration lock throughout; the raw kernel handle grants no authority. */
+   * registration lock throughout; the raw kernel handle grants no authority.
+   * The caller owns the returned lease through process cleanup; the host borrows it for checks. */
   acquireExecutor(
     request:
       | { readonly kind: "headless" }
+      | { readonly kind: "reconnect"; readonly requestId: string }
       | {
           readonly binding: NativeBinding;
           readonly inputId: string;
@@ -388,6 +416,14 @@ export interface ConversationHost {
 
 export const createConversationHost = (dir: string, deps: HostDeps): ConversationHost => {
   const { secret, conversationId, paths } = readRecordFiles(dir);
+  let reconnectExecutor:
+    | {
+        readonly requestId: string;
+        readonly lease: PresenceHandle;
+        readonly launchId: string | null;
+        readonly invoked: boolean;
+      }
+    | undefined;
   let nativeExecutor:
     | {
         readonly binding: NativeBinding;
@@ -653,6 +689,21 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     );
   };
 
+  const reconnectIssue = (state: ChannelState, requestId: string): ProtocolIssue | undefined => {
+    const pending = currentReconnect(state.connection);
+    if (
+      !connectionId(requestId) ||
+      !state.connection ||
+      pending?.request.id !== requestId ||
+      (pending.kind !== "requested" && pending.kind !== "intended")
+    )
+      return "connection-not-admitted";
+    if (!sameProcessOwner(readProcessOwner(process.pid) ?? undefined, pending.request.requester))
+      return "connection-unverified";
+    if (hasUnsettledNativeExecution(state) || state.attachment !== null) return "execution-blocked";
+    return nativeFolderIssue(dir, state.connection.binding) ?? terminalDepartureIssue(state);
+  };
+
   const evaluateConnection = (
     state: ChannelState,
     raw: unknown,
@@ -661,10 +712,46 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     cleanupTurnId?: string,
   ): { readonly fact: ConnectionFact | null; readonly result: ReduceResult } => {
     const fact = parseConnectionFact(raw);
+    if (fact?.kind === "reconnect-intended") {
+      const executor = reconnectExecutor;
+      const pending = currentReconnect(state.connection);
+      const issue =
+        !executor?.lease.held() || executor.requestId !== fact.requestId || executor.invoked
+          ? "connection-not-admitted"
+          : (launchOwnerIssue(pending?.request.requester) ?? reconnectIssue(state, fact.requestId));
+      return {
+        fact,
+        result: issue ? refuseConnection(state, at, issue) : reduceConnection(state, fact, at),
+      };
+    }
     // Cancellation changes only a pre-launch wait. The reducer pins its request
     // and phase under append ordering; no native process is admitted or stopped.
     if (fact?.kind === "reconnect-withdrawn")
       return { fact, result: reduceConnection(state, fact, at) };
+    if (fact?.kind === "reconnect-abandoned") {
+      if (state.connection?.actions[fact.actionId] === JSON.stringify(fact))
+        return { fact, result: reduceConnection(state, fact, at) };
+      const pending = currentReconnect(state.connection);
+      let present: boolean | undefined;
+      if (pending?.kind === "requested" && pending.request.id === fact.requestId) {
+        try {
+          present = (deps.ownerPresence ?? ownerPresence)(pending.request.requester);
+        } catch {
+          /* A failed probe cannot retire the reservation. */
+        }
+      }
+      return {
+        fact,
+        result:
+          present === false
+            ? reduceConnection(state, fact, at)
+            : refuseConnection(
+                state,
+                at,
+                present ? "connection-conflict" : "connection-unverified",
+              ),
+      };
+    }
     if (fact?.kind === "reconnect-requested") {
       const repeated = state.connection?.actions[fact.actionId] === JSON.stringify(fact);
       const issue = repeated
@@ -938,8 +1025,9 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
 
   const writeAdmittedConnection = (fact: unknown): ReduceResult => {
     const parsed = parseConnectionFact(fact);
-    if (parsed?.kind === "reconnect-requested") {
-      const recorded = readReconnectRequest(parsed);
+    if (parsed?.kind === "reconnect-requested" || parsed?.kind === "reconnect-intended") {
+      const recorded =
+        parsed.kind === "reconnect-requested" ? readReconnectRequest(parsed) : undefined;
       if (recorded) return recorded;
       const binding = log.state().connection?.binding;
       return binding
@@ -961,20 +1049,80 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
 
   return {
     writeConnection: writeAdmittedConnection,
+    reconcileReconnect: (requestId) =>
+      writeConnection((state) => {
+        if (!connectionId(requestId)) return { issue: "invalid-connection" };
+        const pending = state.connection?.reconnects[requestId];
+        if (!pending) return { issue: "connection-not-admitted" };
+        return { fact: reconnectWithdrawalFact(pending, "reconnect-abandoned") };
+      }),
+    prepareReconnect: (requestId) => {
+      const binding = log.state().connection?.binding;
+      if (!binding) return refuseNativeAdmission("connection-not-admitted");
+      return withNativeAdmission(
+        binding,
+        () => {
+          const result = writeConnection((state) => {
+            const pending = currentReconnect(state.connection);
+            if (pending?.request.id !== requestId) return { issue: "connection-not-admitted" };
+            return {
+              fact: {
+                actionId:
+                  pending.kind === "intended" ? pending.intendedActionId : crypto.randomUUID(),
+                kind: "reconnect-intended",
+                requestId,
+                launchId: pending.kind === "intended" ? pending.launchId : crypto.randomUUID(),
+              },
+            };
+          });
+          if (result.verdict === "accepted") {
+            const pending = currentReconnect(result.state.connection);
+            if (reconnectExecutor && pending?.kind === "intended")
+              reconnectExecutor = { ...reconnectExecutor, launchId: pending.launchId };
+          }
+          return result;
+        },
+        refuseNativeAdmission,
+      );
+    },
+    dispatchReconnect: (launchId, invoke) => {
+      const executor = reconnectExecutor;
+      const binding = log.state().connection?.binding;
+      const refuse = (issue: ProtocolIssue) => ({ verdict: "refused" as const, issue });
+      if (!executor || !binding || executor.launchId !== launchId || executor.invoked)
+        return refuse("connection-not-admitted");
+      return withNativeAdmission<ReturnType<ConversationHost["dispatchReconnect"]>>(
+        binding,
+        () =>
+          log.inspect(({ state }) => {
+            const pending = currentReconnect(state.connection);
+            if (
+              reconnectExecutor !== executor ||
+              !executor.lease.held() ||
+              pending?.kind !== "intended" ||
+              pending.launchId !== launchId ||
+              pending.request.id !== executor.requestId
+            )
+              return refuse("connection-not-admitted");
+            const issue =
+              launchOwnerIssue(pending.request.requester) ??
+              reconnectIssue(state, executor.requestId);
+            if (issue) return refuse(issue);
+            // A throwing callback may already have created a child. Never invoke it twice.
+            reconnectExecutor = { ...executor, invoked: true };
+            invoke();
+            return { verdict: "accepted" };
+          }),
+        refuse,
+      );
+    },
     controlReconnect: (control) => {
       if (control.kind === "cancel")
         return writeConnection((state) => {
           if (!connectionId(control.requestId)) return { issue: "invalid-connection" };
           const pending = state.connection?.reconnects[control.requestId];
           if (!pending) return { issue: "connection-conflict" };
-          return {
-            fact: {
-              actionId:
-                pending.kind === "withdrawn" ? pending.withdrawnActionId : crypto.randomUUID(),
-              kind: "reconnect-withdrawn",
-              requestId: control.requestId,
-            },
-          };
+          return { fact: reconnectWithdrawalFact(pending, "reconnect-withdrawn") };
         });
       const recorded = readReconnectRequest();
       if (recorded) return recorded;
@@ -1068,6 +1216,8 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
         };
       }),
     acquireExecutor: (request, acquire) => {
+      if (nativeExecutor?.lease.held() || reconnectExecutor?.lease.held())
+        return { verdict: "refused", issue: "connection-not-admitted" };
       const inspect = (): ProtocolIssue | undefined =>
         log.inspect(({ state }) => {
           if (request.kind === "listener") {
@@ -1080,6 +1230,11 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
             const { result } = evaluateConnection(state, request.fact, deps.now(), false);
             return result.verdict === "refused" ? result.issue : undefined;
           }
+          if (request.kind === "reconnect") {
+            if (currentReconnect(state.connection)?.kind !== "requested")
+              return "connection-not-admitted";
+            return reconnectIssue(state, request.requestId);
+          }
           if (request.kind === "native-headless") {
             const issue = nativeHeadlessIssue(state, request.binding, request.inputId);
             if (issue) return issue;
@@ -1087,6 +1242,12 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
           return terminalDepartureIssue(state);
         });
       const check = (): ProtocolIssue | undefined => {
+        if (request.kind === "reconnect") {
+          const binding = log.state().connection?.binding;
+          return binding
+            ? withNativeAdmission(binding, inspect, (issue) => issue)
+            : "connection-not-admitted";
+        }
         if (request.kind !== "native-headless") return inspect();
         return withNativeAdmission(request.binding, inspect, (issue) => issue);
       };
@@ -1106,6 +1267,10 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
                 lease,
                 stage: { kind: "admitted", inputId: request.inputId },
               }
+            : undefined;
+        reconnectExecutor =
+          request.kind === "reconnect"
+            ? { requestId: request.requestId, lease, launchId: null, invoked: false }
             : undefined;
         return { verdict: "accepted", lease };
       } catch (cause) {
