@@ -28,4 +28,6 @@ The HCN channel, private managed approval handler, passive settings projection a
 
 Four Muse review axes and their scoped fixes pass the full check (1,600 tests) and build. Review and test evidence is under ignored artifacts/evidence/interactive-artifact-wayfinder/lucid-native-transport-review-01*. The worker-process fixture uses the existing idle-duration injection to remove its production batching delay; production timing and ownership assertions are unchanged.
 
-The runtime remains fenced. Explicit bound executor admission and attachment, final dispatch revalidation, launch settlement, reconnect, pin/recording integration and live native acceptance remain required. The prepared-channel tests do not claim a completed bound runtime response or desktop support.
+Explicit bound executor admission and one lease-bound source attachment are now implemented and reviewed, with 1,608 tests passing. They preserve current native identity and recheck ownership, registration and eligible input under the existing lock ordering.
+
+The runtime remains fenced. Final dispatch revalidation, launch settlement, reconnect, pin/recording integration and live native acceptance remain required. The prepared-channel tests do not claim a completed bound runtime response or desktop support.

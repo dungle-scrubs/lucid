@@ -3,6 +3,12 @@
 Status: claimed
 Blocked by: 01, 02
 
+## Explicit executor admission checkpoint
+
+An explicit native-headless request now checks the bound target and first eligible input before and after acquiring the existing presence lock. Registration, related-record and selected-record checks share one host-owned wrapper. One managed headless-turn attachment is tied to that exact lease, binding and input, and repeats current checks before its append. Cancellation, returning/unknown owners, a returning registration, released/replaced leases, another harness and repeat attachment remain fenced. Admission and attachment start no native process and emit no launch notice.
+
+Four Muse review axes completed. The selected fixes consolidate admission checks, retain fresh ownership probes, reuse DiscoveryIndex metadata fingerprints and add missing negative tests. Full check passes 1,608 tests. Evidence and dispositions are under ignored native-executor-admission-* artifacts. Runtime activation, final dispatch validation, launch lifecycle, reconnect and native acceptance remain pending.
+
 ## What to build
 
 New saved feedback automatically resumes the bound native conversation only after every interactive owner is confirmed gone.
