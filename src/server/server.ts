@@ -83,8 +83,7 @@ import { preferenceState, replaceLocation } from "../store/settings.js";
 // would be a defect with no owner, so there is one derivation and both read
 // it. Only `lines` is used here; the rest of `TuiView` is terminal chrome.
 import { buildView } from "../tui/view.js";
-import hub from "./client/hub.html";
-import index from "./client/index.html";
+import { browserPages } from "./browser-pages.js";
 import { SERVER_PORT, TOKEN_HEADER } from "./constants.js";
 import { createConversationListing } from "./conversation-list.js";
 import { createFolderPicker } from "./folder-picker.js";
@@ -272,10 +271,11 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
     // version are linkable at all; before them the page picked the artifact
     // with the most recent version entry and nothing else was reachable.
     routes: {
-      "/": hub,
-      "/c/:id": index,
-      "/c/:id/:artifactId": index,
-      "/c/:id/:artifactId/:version": index,
+      ...browserPages.assets,
+      "/": browserPages.hub,
+      "/c/:id": browserPages.index,
+      "/c/:id/:artifactId": browserPages.index,
+      "/c/:id/:artifactId/:version": browserPages.index,
     },
     fetch: async (req: Request): Promise<Response> => {
       try {
