@@ -235,6 +235,7 @@ export function createManagedExecution(
         result.verdict === "accepted" &&
         frame.kind === "event" &&
         frame.event.kind === EventKind.identity &&
+        frame.event.authority === "harness-minted" &&
         host.state().connection
       ) {
         const started = host.recordNativeExecution({ kind: "started", turnId: frame.turnId });

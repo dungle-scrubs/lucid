@@ -35,3 +35,7 @@ Final dispatch now holds fresh native admission ordering through HCN creation an
 Native launch start and cleanup now have separate durable facts. Start requires the expected harness-minted identity and this host's consumed invocation. Cleanup requires the matching ended attempt and an owned-source cleanup report; a terminal response alone retains the reservation. Proven pre-start refusal is recorded automatically. Cleanup never clears uncertain execution or authorizes replay. Four Muse review axes report no findings; 1,617 tests and build pass. Evidence is under ignored native-launch-lifecycle-* artifacts.
 
 The runtime remains fenced. Reconnect, pin/recording integration and live native acceptance remain required.
+
+## Identity confirmation correction
+
+The native source confirmation found that a caller-assigned identity triggered the host's native-start operation and its authority refusal stopped the turn. Managed execution now stores the preliminary event while waiting for harness-confirmed identity before recording start. The existing real-host/source/fake-HCN approval test includes both identities and proves the intermediate intended state, one approval answer, response and cleanup. Full check passes 1,692 tests; all four Muse review axes report no findings. Native testing also found that HCN's verified app-server resume response was mislabeled caller-assigned; its upstream correction and native rerun remain separate work. Incomplete native test attempts retain uncertainty and are not replayed. Runtime activation remains fenced.

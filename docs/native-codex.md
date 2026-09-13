@@ -103,3 +103,8 @@ through that command.
 Cancelled inputs stay visible in the saved transcript. Their content is
 excluded from later dispatch context, and they cannot become a pending
 request again.
+
+Headless start confirmation requires HCN's `harness-minted` identity for the exact
+saved session and owned invocation. A preliminary `caller-assigned` identity stays
+in the record but grants no start confirmation. Missing confirmation keeps the
+launch held; it does not authorize replay.

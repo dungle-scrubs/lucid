@@ -372,11 +372,20 @@ test("an admitted native source records one approval answer and completes the sa
   const proc = new FakeHcnProcess();
   const spawner = fakeSpawner([proc]);
   const spawned = Promise.withResolvers<void>();
+  const announced = Promise.withResolvers<void>();
   const requested = Promise.withResolvers<void>();
   const terminal = Promise.withResolvers<void>();
   const completed = Promise.withResolvers<void>();
   const requestId = randomUUID();
   f.observe(() => {
+    if (
+      f.host
+        .transcript()
+        .events.some(
+          ({ event }) => event.kind === "identity" && event.authority === "caller-assigned",
+        )
+    )
+      announced.resolve();
     if (f.host.state().approvals[requestId]) requested.resolve();
     if (f.host.state().completedTurns["source-turn-1"] !== undefined) terminal.resolve();
     if (f.host.state().executions.feedback?.kind === "attempt-ended") completed.resolve();
@@ -409,6 +418,17 @@ test("an admitted native source records one approval answer and completes the sa
     );
     await spawned.promise;
     // Synthetic normalized HCN events, not a captured native recording.
+    // HCN first announces the caller's requested ID, before native confirmation.
+    proc.emit({
+      kind: "identity",
+      sessionId: f.binding.nativeSessionId,
+      authority: "caller-assigned",
+    });
+    await announced.promise;
+    expect(Object.values(f.host.state().connection?.launches ?? {})).toEqual([
+      expect.objectContaining({ kind: "intended" }),
+    ]);
+    expect(f.host.state().executions.feedback?.kind).toBe("attempt-started");
     proc.emit({
       kind: "identity",
       sessionId: f.binding.nativeSessionId,
