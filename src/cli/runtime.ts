@@ -448,7 +448,8 @@ export const openDrivenConversation = async (
         400,
         ["Choose a working folder"],
       );
-    cwd = location.workingDirectory;
+    // Admission verified the folder identity. Native resume retains its saved spelling.
+    cwd = nativeBinding?.workingDirectory ?? location.workingDirectory;
     runner = opts.runner ?? createHcnRunner(nodeHarnessDeps());
     if (nativeBinding) {
       const settings = await runner.inspectNativeContinuation?.({

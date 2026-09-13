@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runManagedWorker } from "../../src/cli/managed-worker.js";
@@ -20,16 +20,19 @@ function nativeFixture(
     harness: "codex",
     interface: "codex-cli",
   },
+  alias = false,
 ) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "lucid-native-runtime-")));
   const record = createConversationRecord(root, "native", { workingDirectory: root });
+  const nativeFolder = alias ? `${root}-alias` : root;
+  if (alias) symlinkSync(root, nativeFolder);
   const binding: NativeBinding = {
     generation: randomUUID(),
     ...target,
     nativeSessionId: "native-author",
     owner: { executable: "/synthetic/codex", pid: 123, startedAt: "123:456" },
     registrationId: randomUUID(),
-    workingDirectory: root,
+    workingDirectory: nativeFolder,
   };
   const browser = {
     effort: "low",
@@ -60,99 +63,109 @@ function nativeFixture(
   return {
     binding,
     browser,
-    close: () => rmSync(root, { force: true, recursive: true }),
+    close: () => {
+      if (alias) rmSync(nativeFolder);
+      rmSync(root, { force: true, recursive: true });
+    },
     record,
     root,
   };
 }
 
-test("the automatic worker resumes a departed Codex author with native settings and one notice", async () => {
-  const f = nativeFixture();
-  const { binding, browser, record, root } = f;
-  const proc = new FakeHcnProcess();
-  const spawner = fakeSpawner([proc]);
-  const wire = createHcnRunner({
-    bin: "/fake/hcn",
-    spawn: (argv, options) => {
-      const child = spawner.spawn(argv, options);
-      // Synthetic HCN events exercise runtime ownership, not native acceptance.
-      queueMicrotask(() => {
-        proc.emit({
-          authority: "harness-minted",
-          kind: "identity",
-          sessionId: binding.nativeSessionId,
+test.each([false, true])(
+  "the automatic worker preserves native settings and folder spelling (alias %s)",
+  async (alias) => {
+    const f = nativeFixture(undefined, alias);
+    const { binding, browser, record, root } = f;
+    const proc = new FakeHcnProcess();
+    const spawner = fakeSpawner([proc]);
+    const wire = createHcnRunner({
+      bin: "/fake/hcn",
+      spawn: (argv, options) => {
+        const child = spawner.spawn(argv, options);
+        // Synthetic HCN events exercise runtime ownership, not native acceptance.
+        queueMicrotask(() => {
+          proc.emit({
+            authority: "harness-minted",
+            kind: "identity",
+            sessionId: binding.nativeSessionId,
+          });
+          proc.emit({ kind: "message", role: "assistant", text: "Same conversation resumed." });
+          proc.emit({ cause: "clean", exitCode: 0, kind: "done" });
+          proc.exit(0);
         });
-        proc.emit({ kind: "message", role: "assistant", text: "Same conversation resumed." });
-        proc.emit({ cause: "clean", exitCode: 0, kind: "done" });
-        proc.exit(0);
-      });
-      return child;
-    },
-  });
-  const runner: HarnessRunner = {
-    ...wire,
-    inspect: async (harness) => {
-      expect(harness).toBe("codex");
-      return { name: "codex", nativeContextManagement: true, session: false };
-    },
-    inspectNativeContinuation: async (target) => {
-      expect(target).toMatchObject({
-        cwd: root,
-        harness: "codex",
-        resume: binding.nativeSessionId,
-      });
-      return {
-        effort: "high",
-        fingerprint: "a".repeat(64),
-        model: "native-model",
-        provider: "native-provider",
-        status: "available",
-      };
-    },
-  };
-  try {
-    await runManagedWorker(root, "native", "feedback", {
-      idleMs: 0,
-      ownerPresence: (owner) => (owner.pid === binding.owner.pid ? false : ownerPresence(owner)),
-      runner,
-      tickMs: 1,
-    });
-    expect(spawner.calls).toHaveLength(1);
-    const argv = spawner.calls[0]?.argv ?? [];
-    expect(argv).toContain("--native-approvals");
-    expect(argv[argv.indexOf("--resume") + 1]).toBe(binding.nativeSessionId);
-    expect(argv).not.toContain("browser-model");
-    const snapshot = viewConversation(record.paths.dir);
-    expect(snapshot.state.executions.feedback).toMatchObject({
-      kind: "attempt-ended",
-      outcome: { kind: "completed" },
-      start: {
-        driver: {
-          effort: "high",
-          harness: "codex",
-          model: "native-model",
-          provider: "native-provider",
-        },
+        return child;
       },
     });
-    expect(Object.values(snapshot.state.connection?.launches ?? {})).toEqual([
-      expect.objectContaining({ kind: "settled" }),
-    ]);
-    expect(
-      snapshot.transcript.events.filter(
-        ({ event }) =>
-          event.kind === "message" &&
-          event.text ===
-            "No interactive session detected. Resuming headlessly with session native-author.",
-      ),
-    ).toHaveLength(1);
-    expect(preferenceState(record.paths.dir).preference).toMatchObject(browser);
-    expect(presenceHeld(record.paths.dir)).toBe(false);
-  } finally {
-    proc.exit(0);
-    f.close();
-  }
-});
+    const runner: HarnessRunner = {
+      ...wire,
+      inspect: async (harness) => {
+        expect(harness).toBe("codex");
+        return { name: "codex", nativeContextManagement: true, session: false };
+      },
+      inspectNativeContinuation: async (target) => {
+        expect(target).toMatchObject({
+          cwd: binding.workingDirectory,
+          harness: "codex",
+          resume: binding.nativeSessionId,
+        });
+        return {
+          effort: "high",
+          fingerprint: "a".repeat(64),
+          model: "native-model",
+          provider: "native-provider",
+          status: "available",
+        };
+      },
+    };
+    try {
+      await runManagedWorker(root, "native", "feedback", {
+        idleMs: 0,
+        ownerPresence: (owner) => (owner.pid === binding.owner.pid ? false : ownerPresence(owner)),
+        runner,
+        tickMs: 1,
+      });
+      expect(
+        spawner.calls,
+        JSON.stringify(viewConversation(record.paths.dir).state.executions),
+      ).toHaveLength(1);
+      const argv = spawner.calls[0]?.argv ?? [];
+      expect(argv).toContain("--native-approvals");
+      expect(argv[argv.indexOf("--resume") + 1]).toBe(binding.nativeSessionId);
+      expect(argv[argv.indexOf("--cwd") + 1]).toBe(binding.workingDirectory);
+      expect(argv).not.toContain("browser-model");
+      const snapshot = viewConversation(record.paths.dir);
+      expect(snapshot.state.executions.feedback).toMatchObject({
+        kind: "attempt-ended",
+        outcome: { kind: "completed" },
+        start: {
+          driver: {
+            effort: "high",
+            harness: "codex",
+            model: "native-model",
+            provider: "native-provider",
+          },
+        },
+      });
+      expect(Object.values(snapshot.state.connection?.launches ?? {})).toEqual([
+        expect.objectContaining({ kind: "settled" }),
+      ]);
+      expect(
+        snapshot.transcript.events.filter(
+          ({ event }) =>
+            event.kind === "message" &&
+            event.text ===
+              "No interactive session detected. Resuming headlessly with session native-author.",
+        ),
+      ).toHaveLength(1);
+      expect(preferenceState(record.paths.dir).preference).toMatchObject(browser);
+      expect(presenceHeld(record.paths.dir)).toBe(false);
+    } finally {
+      proc.exit(0);
+      f.close();
+    }
+  },
+);
 
 test.each([true, undefined] as const)(
   "automatic continuation preserves saved feedback when native owner presence is %s",

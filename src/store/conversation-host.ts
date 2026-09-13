@@ -221,7 +221,7 @@ const ctxOf = (presence: boolean | undefined): { presence?: Presence } =>
 
 const HEX_SECRET = /^[0-9a-f]{16,}$/;
 
-function nativeFolderIssue(
+export function nativeFolderIssue(
   dir: string,
   registration: NativeBinding | undefined,
 ): ProtocolIssue | undefined {

@@ -20,6 +20,7 @@ import {
   renderConversationContext,
 } from "../store/conversation-context.js";
 import type { ConversationHost } from "../store/conversation-host.js";
+import { nativeFolderIssue } from "../store/conversation-host.js";
 import { preferenceState } from "../store/driver-preference.js";
 import {
   managedCandidates,
@@ -61,6 +62,14 @@ export interface ManagedPreparation {
 export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedPreparation {
   const { cwd, host, runner } = deps;
   const prepareContext = createContextPreparer(runner);
+  const workingFolderAvailable = (): boolean => {
+    const location = locationProjection(readRecordMetadata(host.dir));
+    if (location.status !== "available") return false;
+    const binding = host.state().connection?.binding;
+    return binding
+      ? binding.workingDirectory === cwd && nativeFolderIssue(host.dir, binding) === undefined
+      : location.workingDirectory === cwd;
+  };
   const offers = new Map<string, Pick<OfferedContext, "path" | "close">>();
   const preparing = new Map<string, AbortController>();
   let closed = false;
@@ -213,8 +222,7 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
         return { kind: "held" };
       const authorization = execution.kind === "held" ? execution.authorization : execution.kind;
       const native = nativeFor(state);
-      const location = locationProjection(readRecordMetadata(host.dir));
-      if (location.status !== "available" || location.workingDirectory !== cwd)
+      if (!workingFolderAvailable())
         throw new HubError("Choose an available working folder before continuing.", "E-HUB-04");
       const resume = native.kind === "resume" ? native.sessionId : undefined;
       let facts: HarnessFacts;
@@ -357,8 +365,7 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
               route: { ...driver, cwd, resume, signal: input.signal },
             });
       if (closed || input.signal.aborted) return { kind: "held" };
-      const currentLocation = locationProjection(readRecordMetadata(host.dir));
-      if (currentLocation.status !== "available" || currentLocation.workingDirectory !== cwd)
+      if (!workingFolderAvailable())
         throw new HubError("Choose an available working folder before continuing.", "E-HUB-04");
       const started = host.writePreparedExecution(
         {
