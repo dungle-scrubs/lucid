@@ -1,11 +1,86 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HarnessRunner } from "../../src/harness/runner.js";
 import { createHubSettings } from "../../src/server/hub-settings.js";
+import { startServer } from "../../src/server/server.js";
+import { openWriter } from "../../src/store/conversation-host.js";
 import { replaceLocation, replaceSettings } from "../../src/store/settings.js";
 import { createConversationRecord } from "../../src/store/store.js";
+
+test("native publication polls do not diagnose inactive browser selections", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-native-selection-"));
+  const choice = {
+    effort: "high",
+    harness: "codex" as const,
+    model: "native-custom-model",
+    profile: "interactive" as const,
+  };
+  const native = createConversationRecord(root, "native", { workingDirectory: root });
+  const ordinary = createConversationRecord(root, "ordinary", { workingDirectory: root });
+  for (const [id, record] of [
+    ["native", native],
+    ["ordinary", ordinary],
+  ] as const)
+    replaceSettings(record.paths.dir, id, 0, choice);
+  const host = openWriter(native.paths.dir);
+  expect(host.recordNativePublication().verdict).toBe("accepted");
+  host.close();
+  const log = readFileSync(native.paths.logPath);
+  const saved = readFileSync(join(native.paths.dir, "driver.json"));
+  const unused = (): never => {
+    throw new Error("A settings projection cannot launch a task");
+  };
+  const runner: HarnessRunner = {
+    capabilities: unused,
+    countContext: unused,
+    inspect: async (harness) => ({
+      name: harness,
+      session: false,
+      verifiedAgainst: "synthetic",
+      vocabulary: { efforts: ["high"], extensible: false, models: ["catalog-model"] },
+    }),
+    openSession: unused,
+    streamTurn: unused,
+  };
+  const server = await startServer({ port: 0, rootDir: root, runner });
+  const read = async (id: string) => {
+    const response = await fetch(`${server.url}/api/conversations/${id}`, {
+      headers: { "x-lucid-token": server.token },
+    });
+    expect(response.status).toBe(200);
+    return response.json();
+  };
+  try {
+    expect((await read("ordinary")).compatibility).toMatchObject([
+      { code: "selection-unsupported", scope: "selection" },
+    ]);
+    const result = await read("native");
+    expect(result.activity.nativeConnectionRequired).toBe(true);
+    expect(result.compatibility).toEqual([]);
+    expect(result.conversationSettings.error).toBeNull();
+    expect(result.driverPreference).toMatchObject(choice);
+    expect(readFileSync(native.paths.logPath)).toEqual(log);
+    expect(readFileSync(join(native.paths.dir, "driver.json"))).toEqual(saved);
+    const legacy = JSON.stringify({ ...choice, model: "catalog-model", v: 1 });
+    writeFileSync(join(native.paths.dir, "driver.json"), legacy);
+    const sent = await fetch(`${server.url}/api/conversations/native/input`, {
+      body: JSON.stringify({ id: "feedback", text: "Keep this native feedback saved." }),
+      headers: { "content-type": "application/json", "x-lucid-token": server.token },
+      method: "POST",
+    });
+    expect(sent.status).toBe(200);
+    expect(readFileSync(join(native.paths.dir, "driver.json"), "utf8")).toBe(legacy);
+    writeFileSync(join(native.paths.dir, "driver.json"), "{");
+    const malformed = await read("native");
+    expect(malformed.compatibility).toEqual([]);
+    expect(malformed.conversationSettings.error).toContain("Saved settings cannot be read");
+  } finally {
+    await server.close();
+    rmSync(root, { force: true, recursive: true });
+  }
+});
 
 test("saved selections do not trigger version previews or warnings", async () => {
   const root = mkdtempSync(join(tmpdir(), "lucid-selection-"));

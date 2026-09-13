@@ -2,7 +2,7 @@ import { appliedRecovery } from "../protocol/execution.js";
 import { HubError } from "../protocol/hub-errors.js";
 import { viewConversation } from "../store/conversation-host.js";
 import { LockError } from "../store/flock.js";
-import { managedCandidates } from "../store/managed-readiness.js";
+import { workerCandidates } from "../store/managed-readiness.js";
 import { requestBackgroundWorker } from "./background-worker.js";
 import { conversations } from "./record-addressing.js";
 import type { RuntimeDeps } from "./runtime.js";
@@ -27,7 +27,7 @@ export async function runManagedWorker(
 ): Promise<void> {
   const dir = conversations(root).dirFor(conversationId);
   const initial = viewConversation(dir);
-  if (!managedCandidates(dir, initial.state, initial.artifactHeads).includes(inputId)) return;
+  if (!workerCandidates(dir, initial.state, initial.artifactHeads).includes(inputId)) return;
   let running: Awaited<ReturnType<typeof openDrivenConversation>>;
   try {
     running = await openDrivenConversation({
@@ -63,7 +63,7 @@ export async function runManagedWorker(
       const busy = running.source.busy?.() === true;
       if (
         !busy &&
-        managedCandidates(dir, state, running.host.artifactHeads()).some((id) => {
+        workerCandidates(dir, state, running.host.artifactHeads()).some((id) => {
           const entry = state.executions[id];
           return entry?.kind === "held" || appliedRecovery(state, id);
         })

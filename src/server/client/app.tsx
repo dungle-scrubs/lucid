@@ -18,6 +18,7 @@
  * old token gets 401 and stops; it does not retry against a server that
  * will never accept it.
  */
+
 import {
   AssistantRuntimeProvider,
   ComposerPrimitive,
@@ -48,6 +49,7 @@ import { ATTACHMENT_BYTES_MAX } from "../../protocol/attachment.js";
 import { comparisonMetadata } from "../../protocol/comparison-note.js";
 import type { CompatibilityDiagnostic } from "../../protocol/compatibility.js";
 import type { ExecutionView } from "../../protocol/execution-view.js";
+import type { ApprovalState } from "../../protocol/native-approvals.js";
 import { type Activity as ActivitySnapshot, describeActivity, type Report } from "./activity.js";
 import {
   type Confidence,
@@ -57,6 +59,7 @@ import {
   selectorsForQuote,
   sha256Hex,
 } from "./anchor.js";
+import { ARTIFACT_SANDBOX } from "./artifact-links.js";
 import { useArtifactWidth } from "./artifact-width-control.js";
 import type { ComparisonDraft } from "./comparison-draft.js";
 import { comparisonDraftText, restoreComparisonDraft } from "./comparison-draft.js";
@@ -78,6 +81,7 @@ import {
   ImageDuotone,
   LockDuotone,
   PaperclipDuotone,
+  PaperPlaneTiltDuotone,
   ProhibitDuotone,
   TableDuotone,
   XDuotone,
@@ -101,8 +105,18 @@ import {
   writeConversationWidth,
 } from "./layout.js";
 import { LocationControl, type LocationState } from "./location-control.js";
+import { NativeApproval } from "./native-approval.js";
+import { NativeConnection } from "./native-connection.js";
+import { NativeInputControlsProvider } from "./native-input-controls.js";
+import { NativeInputDelivery } from "./native-input-delivery.js";
 import { NoteAnchorHelp } from "./note-anchor-help.js";
 import { NotePopover } from "./note-popover.js";
+import {
+  readingPlaceKey,
+  readReadingPlace,
+  validReadingPlace,
+  writeReadingPlace,
+} from "./reading-place.js";
 import { formatRoute, parseRoute, type Route, sameRoute } from "./route.js";
 import { seamsForLost } from "./seams.js";
 import { SettingsForm } from "./settings-form.js";
@@ -128,6 +142,8 @@ const POLL_MS = 500;
 const TOKEN_HEADER = "x-lucid-token";
 
 interface Line {
+  readonly delivery?: Msg["delivery"];
+  readonly nativeRefusal?: boolean;
   readonly kind: "agent" | "human";
   readonly seq?: number;
   readonly text: string;
@@ -266,6 +282,8 @@ const linesToMessages = (lines: readonly Line[]): Msg[] =>
           ? { refusal: true, harnessFailed: true }
           : {}),
       ...(l.batch === undefined ? {} : { sentBatch: l.batch }),
+      ...(l.delivery === undefined ? {} : { delivery: l.delivery }),
+      ...(l.nativeRefusal ? { nativeRefusal: true } : {}),
     }));
 
 /** Who said it has to survive into the DOM: a transcript where the person
@@ -428,8 +446,10 @@ const Message = (): React.ReactElement => {
         <MessagePrimitive.Root>
           <div className="batch comparison-transcript-note" id={`comparison-note-${b.inputId}`}>
             <div className="note-card-head">
-              Your note on saved v{b.version} · {b.status === "applied" ? "delivered" : "queued"}
+              Your note on saved v{b.version}
+              {one.delivery ? null : ` · ${b.status === "applied" ? "delivered" : "queued"}`}
             </div>
+            <NativeInputDelivery delivery={one.delivery} />
             {b.notes.map((note) => (
               <div key={note.note}>
                 <blockquote>{note.spots.map((spot) => spot.snippet).join("\n")}</blockquote>
@@ -464,6 +484,7 @@ const Message = (): React.ReactElement => {
     return (
       <MessagePrimitive.Root>
         <div className="batch">
+          <NativeInputDelivery delivery={one.delivery} />
           {b.notes.map((n) => {
             const spot = n.spots[0];
             const status = resolutionFor(n.note, spot?.snippet ?? "");
@@ -487,7 +508,7 @@ const Message = (): React.ReactElement => {
             const lost = status?.lost === true;
             const state =
               status === undefined
-                ? `sent · v${b.version}`
+                ? `${one.delivery ? "saved" : "sent"} · v${b.version}`
                 : lost
                   ? "lost · nothing left to point at"
                   : status.later === true
@@ -605,7 +626,11 @@ const Message = (): React.ReactElement => {
     // the upstream refusing service, and the reader needs to know it was
     // not lucid and not the agent.
     const said = one.text.replace(/^([✗!])\s+/, "");
-    const who = one.harnessFailed === true ? "the turn failed" : "lucid refused";
+    const who = one.nativeRefusal
+      ? "the session refused"
+      : one.harnessFailed === true
+        ? "the turn failed"
+        : "lucid refused";
     return (
       <MessagePrimitive.Root>
         <div className="msg refusal">
@@ -638,6 +663,7 @@ const Message = (): React.ReactElement => {
           <div className="body">
             <MessagePrimitive.Parts />
           </div>
+          <NativeInputDelivery delivery={one?.delivery} />
         </div>
       </MessagePrimitive.If>
       {/* No label: the side says whose it is. Yours is the bubble on the
@@ -1253,16 +1279,16 @@ const CATALOG_POLL_MS = 2000;
 
 /** The document, in a frame the page cannot reach into.
  *
- * `srcdoc` hands the frame its bytes; the frame fetches nothing, so a
- * document that names an external image or script gets neither.
+ * `srcdoc` supplies the document bytes. Authored resources can still make
+ * network requests; this is an origin boundary, not a network firewall.
  *
  * The sandbox has no `allow-same-origin`, which is the whole point. With
  * it the parent could read into the frame — and the frame could read back
  * out, into a page holding a token with read and write on every record.
  * The document is written by an agent, so that reach is not one to grant.
  * Without it the frame is an opaque origin: nothing crosses in either
- * direction. `allow-scripts` alone is safe precisely because the origin is
- * opaque; the two together would not be.
+ * direction except through validated messages. Popup grants let web links
+ * open working tabs; normalized links have no opener or referrer.
  *
  * `key` is the version, so a new version replaces the frame rather than
  * mutating it. There is no in-place update path to get wrong. */
@@ -1290,6 +1316,7 @@ const readRect = (raw: unknown): SelectionRect | null => {
 };
 
 const DocumentFrame = ({
+  conversationId,
   doc,
   onSelection,
   capture,
@@ -1315,6 +1342,7 @@ const DocumentFrame = ({
   mode,
   readOnly,
 }: {
+  conversationId: string;
   doc: Doc;
   onSelection: (ids: readonly string[], rect: SelectionRect | null) => void;
   /** Handed the frame's answer to a capture request. */
@@ -1449,10 +1477,20 @@ const DocumentFrame = ({
       // A fresh frame, holding the version that has just been taken up. If a
       // place was followed into it, this is the moment it can be given.
       if (m.kind === "ready") {
-        const want = pendingRestore.current;
+        const want =
+          pendingRestore.current ??
+          readReadingPlace(
+            () => window.sessionStorage,
+            readingPlaceKey(conversationId, doc.artifactId, doc.version),
+          );
         if (want !== null) {
           pendingRestore.current = null;
           restorePlace.current?.(want.index, want.top);
+        } else {
+          frame.contentWindow?.postMessage(
+            { source: FRAME_MESSAGE_SOURCE, kind: "report-place" },
+            "*",
+          );
         }
         // After the restore, never before it. What counts as already in view
         // is what the reader will be looking at, and until the place is put
@@ -1504,8 +1542,13 @@ const DocumentFrame = ({
       }
 
       if (m.kind === "place") {
-        if (typeof m.index !== "number" || typeof m.top !== "number") return;
+        if (!validReadingPlace(m)) return;
         place.current = { version: doc.version, index: m.index, top: m.top };
+        writeReadingPlace(
+          () => window.sessionStorage,
+          readingPlaceKey(conversationId, doc.artifactId, doc.version),
+          place.current,
+        );
         return;
       }
       if (m.kind === "dirty") {
@@ -1568,6 +1611,7 @@ const DocumentFrame = ({
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, [
+    conversationId,
     doc.artifactId,
     doc.version,
     onSelection,
@@ -1681,7 +1725,7 @@ const DocumentFrame = ({
       className="doc-frame"
       style={{ colorScheme }}
       title={`${doc.artifactId} v${doc.version}`}
-      sandbox="allow-scripts"
+      sandbox={ARTIFACT_SANDBOX}
       srcDoc={frameSource}
     />
   );
@@ -1810,6 +1854,7 @@ const App = (): React.ReactElement => {
     waiting: 0,
   });
   const [executions, setExecutions] = React.useState<readonly ExecutionView[]>([]);
+  const [approvals, setApprovals] = React.useState<readonly ApprovalState[]>([]);
   /** When the transcript last changed. A conversation that is waiting and a
    * conversation that has stopped look identical without it — which is how
    * a wedged harness sat silent for ninety minutes with eight inputs
@@ -2347,12 +2392,16 @@ const App = (): React.ReactElement => {
     let alive = true;
     let requested = 0;
     let applied = 0;
+    let approvalRevision = "";
     const tick = async (): Promise<void> => {
       const sequence = ++requested;
       try {
-        const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}`, {
-          headers: { [TOKEN_HEADER]: token },
-        });
+        const res = await fetch(
+          `/api/conversations/${encodeURIComponent(conversationId)}?approvalRevision=${encodeURIComponent(approvalRevision)}`,
+          {
+            headers: { [TOKEN_HEADER]: token },
+          },
+        );
         if (!alive) return;
         if (res.status === 401) {
           setDead(true);
@@ -2385,6 +2434,8 @@ const App = (): React.ReactElement => {
           driverChoices?: DriverChoices | null;
           activity?: Activity;
           executions?: readonly ExecutionView[];
+          approvals?: readonly ApprovalState[];
+          approvalRevision?: string;
         };
         if (!alive) return;
         if (sequence < applied) return;
@@ -2423,6 +2474,10 @@ const App = (): React.ReactElement => {
             ? previous
             : (data.executions ?? []),
         );
+        if (data.approvals !== undefined) {
+          approvalRevision = data.approvalRevision ?? "";
+          setApprovals(data.approvals);
+        }
         setDamaged(data.damaged === true);
         if (data.damaged !== true) setProblem(null);
       } catch (e: unknown) {
@@ -3506,17 +3561,21 @@ const App = (): React.ReactElement => {
           : "Hold ⌥⌘ and click to add more spots to this note.",
         tone: "ready",
       };
-    if (notes.length > 0)
-      return {
-        text: `${notes.length} note${notes.length === 1 ? "" : "s"} ready. ⌘⏎ sends them, or select more.`,
-        tone: "ready",
-      };
     // The mode how-to is gone (Kevin, 2026-08-29): the sheet's tab carries
     // the mode, and a hint that repeats it forever stops being read. What
     // renders down here now is only what is news - a warning, an outcome,
     // a count. Nothing to say, nothing drawn.
     return { text: "", tone: "idle" };
   })();
+
+  const cancelNativeInput = React.useCallback(
+    (inputId: string) =>
+      fetch(
+        `/api/conversations/${encodeURIComponent(conversationId)}/inputs/${encodeURIComponent(inputId)}/cancel`,
+        { method: "POST", headers: { [TOKEN_HEADER]: token ?? "" } },
+      ),
+    [conversationId, token],
+  );
 
   /** Handed to every note card. Refuses while an older version is pinned:
    * the note's target was resolved against what is on screen, and jumping
@@ -3592,7 +3651,12 @@ const App = (): React.ReactElement => {
 
   /** Activity at the end of the transcript, counted and clocked (3c, 6e Wait).
    * No activity produces no status message. */
-  const busy = activity.turn || activity.inFlight > 0 || activity.waiting > 0;
+  const pendingApprovals = React.useMemo(
+    () => approvals.filter((entry) => entry.status === "pending").length,
+    [approvals],
+  );
+  const busy =
+    pendingApprovals === 0 && (activity.turn || activity.inFlight > 0 || activity.waiting > 0);
   // When this stretch of work began. Held across renders because nothing in
   // the record says it: a turn writes no line between its input and its
   // terminal event, so the only witness to the start is the page that saw
@@ -3611,6 +3675,7 @@ const App = (): React.ReactElement => {
     activity,
     (now - since) / 1000,
     status !== "agent-gone" && status !== "no record",
+    pendingApprovals,
   );
   /** The header over the document column, in its three states (README \u00a71):
    * reading on the ground, ink while changes are unsaved, and the one
@@ -4051,6 +4116,7 @@ const App = (): React.ReactElement => {
                               </div>
                             )}
                             <DocumentFrame
+                              conversationId={conversationId}
                               doc={doc}
                               onSelection={onSelected}
                               capture={capture}
@@ -4276,102 +4342,178 @@ const App = (): React.ReactElement => {
                 >
                   <div className="pane conversation" {...conversationPanel.panelProps}>
                     <div className="conversation-header-space" aria-hidden="true" />
-                    <Thread
-                      pending={notes}
-                      onSendNotes={() => void sendNotes()}
-                      onDiscardNotes={() => setNotes([])}
-                      sending={sending}
-                      report={report}
-                      version={doc?.version ?? null}
-                      dead={dead}
-                      invite={doc === null && !dead}
-                      collision={
-                        edited && waiting !== null && waiting > (doc?.version ?? 0)
-                          ? { arrived: waiting, next: nextVersion }
-                          : null
-                      }
-                      onSave={() => void save()}
-                      onShowWaiting={(arrived) => setConfirmDiscard(arrived)}
-                      attachments={attached}
-                      uploading={uploading}
-                      refusals={refusals}
-                      onAttach={(files) => void attachFiles(files)}
-                      onRemoveAttachment={removeAttachment}
-                      onDismissRefusal={(id) =>
-                        setRefusals((prev) => prev.filter((r) => r.id !== id))
-                      }
-                      driver={driver}
-                      driverPreference={driverPreference}
-                      driverChoices={driverChoices}
-                      onDriverChoice={chooseDriver}
-                      location={location}
-                      settingsIssue={
-                        settingsIssue && settingsErrorInCompatibility ? null : settingsIssue
-                      }
-                      onLocation={chooseLocation}
-                      comparisonBlocked={recoveryLocked}
-                      comparisonRecovery={
-                        <InputRecoveryPanel
-                          recovery={recovery}
-                          onReload={() => window.location.reload()}
-                          onRestore={restoreComparisonRequest}
-                        />
-                      }
-                      executionRecovery={executions.map((entry) => (
-                        <ExecutionRecovery
-                          key={`${entry.inputId}:${entry.attempt}`}
-                          entry={entry}
-                          disabled={dead || token === null}
-                          send={async (inputId, body) => {
-                            if (token === null || dead)
-                              return "Reload to reconnect before recovery.";
-                            const response = await fetch(
-                              `/api/conversations/${encodeURIComponent(conversationId)}/inputs/${encodeURIComponent(inputId)}/recovery`,
-                              {
-                                method: "POST",
-                                headers: {
-                                  [TOKEN_HEADER]: token,
-                                  "content-type": "application/json",
-                                },
-                                body,
-                              },
-                            );
-                            if (response.status === 401) {
-                              setDead(true);
-                              return "Lucid restarted. Reload to reconnect.";
-                            }
-                            if (response.ok) return null;
-                            const failure = (await response.json()) as { reason?: string };
-                            return (
-                              failure.reason ??
-                              "Recovery could not be confirmed. Refresh the artifact."
-                            );
-                          }}
-                        />
-                      ))}
-                      recovery={{
-                        state: submission.current(),
-                        busy: submissionBusy,
-                        dead: dead || token === null,
-                        reason:
-                          token === null
-                            ? "Connecting before this send can be checked…"
-                            : submissionReason,
-                        onRetry: () => {
-                          if (!dead && token !== null) void performSubmission();
-                        },
-                        onDiscard: () => {
-                          if (!submission.discardInvalid())
-                            setSubmissionReason(
-                              "Cannot remove local recovery data. Browser storage is still unavailable.",
-                            );
-                          refreshSubmission();
-                        },
-                      }}
-                    />
+                    <NativeInputControlsProvider
+                      key={conversationId}
+                      conversationId={conversationId}
+                      enabled={!dead && !damaged && token !== null && conversationPanel.open}
+                      cancel={cancelNativeInput}
+                    >
+                      <NativeConnection
+                        key={conversationId}
+                        conversationId={conversationId}
+                        enabled={conversationPanel.open && !dead && token !== null}
+                        request={(signal) =>
+                          fetch(
+                            `/api/conversations/${encodeURIComponent(conversationId)}/connection`,
+                            { headers: { [TOKEN_HEADER]: token ?? "" }, signal },
+                          )
+                        }
+                      />
+                      <Thread
+                        pending={notes}
+                        onSendNotes={() => void sendNotes()}
+                        onDiscardNotes={() => setNotes([])}
+                        sending={sending}
+                        report={report}
+                        version={doc?.version ?? null}
+                        dead={dead}
+                        invite={doc === null && !dead}
+                        collision={
+                          edited && waiting !== null && waiting > (doc?.version ?? 0)
+                            ? { arrived: waiting, next: nextVersion }
+                            : null
+                        }
+                        onSave={() => void save()}
+                        onShowWaiting={(arrived) => setConfirmDiscard(arrived)}
+                        attachments={attached}
+                        uploading={uploading}
+                        refusals={refusals}
+                        onAttach={(files) => void attachFiles(files)}
+                        onRemoveAttachment={removeAttachment}
+                        onDismissRefusal={(id) =>
+                          setRefusals((prev) => prev.filter((r) => r.id !== id))
+                        }
+                        driver={driver}
+                        driverPreference={driverPreference}
+                        driverChoices={driverChoices}
+                        onDriverChoice={chooseDriver}
+                        location={location}
+                        settingsIssue={
+                          settingsIssue && settingsErrorInCompatibility ? null : settingsIssue
+                        }
+                        onLocation={chooseLocation}
+                        comparisonBlocked={recoveryLocked}
+                        comparisonRecovery={
+                          <InputRecoveryPanel
+                            recovery={recovery}
+                            onReload={() => window.location.reload()}
+                            onRestore={restoreComparisonRequest}
+                          />
+                        }
+                        executionRecovery={
+                          <>
+                            {approvals.map((entry) => (
+                              <NativeApproval
+                                key={entry.request.requestId}
+                                entry={entry}
+                                disabled={dead || token === null}
+                                send={async (decision) => {
+                                  if (token === null || dead)
+                                    return "Reload to reconnect before choosing.";
+                                  const response = await fetch(
+                                    `/api/conversations/${encodeURIComponent(conversationId)}/approvals/decision`,
+                                    {
+                                      method: "POST",
+                                      headers: {
+                                        [TOKEN_HEADER]: token,
+                                        "content-type": "application/json",
+                                      },
+                                      body: JSON.stringify(decision),
+                                    },
+                                  );
+                                  if (response.status === 401) {
+                                    setDead(true);
+                                    return "Lucid restarted. Reload to reconnect.";
+                                  }
+                                  if (response.ok) return null;
+                                  return "Your choice could not be saved. Refresh to check whether this request is still waiting.";
+                                }}
+                              />
+                            ))}
+                            {executions.map((entry) => (
+                              <ExecutionRecovery
+                                key={`${entry.inputId}:${entry.attempt}`}
+                                entry={entry}
+                                disabled={dead || token === null}
+                                send={async (inputId, body) => {
+                                  if (token === null || dead)
+                                    return "Reload to reconnect before recovery.";
+                                  const response = await fetch(
+                                    `/api/conversations/${encodeURIComponent(conversationId)}/inputs/${encodeURIComponent(inputId)}/recovery`,
+                                    {
+                                      method: "POST",
+                                      headers: {
+                                        [TOKEN_HEADER]: token,
+                                        "content-type": "application/json",
+                                      },
+                                      body,
+                                    },
+                                  );
+                                  if (response.status === 401) {
+                                    setDead(true);
+                                    return "Lucid restarted. Reload to reconnect.";
+                                  }
+                                  if (response.ok) return null;
+                                  const failure = (await response.json()) as { reason?: string };
+                                  return (
+                                    failure.reason ??
+                                    "Recovery could not be confirmed. Refresh the artifact."
+                                  );
+                                }}
+                              />
+                            ))}
+                          </>
+                        }
+                        recovery={{
+                          state: submission.current(),
+                          busy: submissionBusy,
+                          dead: dead || token === null,
+                          reason:
+                            token === null
+                              ? "Connecting before this send can be checked…"
+                              : submissionReason,
+                          onRetry: () => {
+                            if (!dead && token !== null) void performSubmission();
+                          },
+                          onDiscard: () => {
+                            if (!submission.discardInvalid())
+                              setSubmissionReason(
+                                "Cannot remove local recovery data. Browser storage is still unavailable.",
+                              );
+                            refreshSubmission();
+                          },
+                        }}
+                      />
+                    </NativeInputControlsProvider>
                   </div>
                 </div>
               </div>
+
+              {conversationPanel.open || notes.length === 0 ? null : (
+                <button
+                  type="button"
+                  className="floating-note-send"
+                  onClick={() => void sendNotes()}
+                  disabled={
+                    sending ||
+                    dead ||
+                    damaged ||
+                    token === null ||
+                    recoveryLocked ||
+                    submissionBusy ||
+                    submission.current().status !== "idle"
+                  }
+                  aria-busy={sending}
+                  title="Send the queued notes without opening chat (⌘⏎)"
+                >
+                  <PaperPlaneTiltDuotone size={20} />
+                  <span>
+                    {sending
+                      ? "Sending…"
+                      : `Send ${notes.length} note${notes.length === 1 ? "" : "s"}`}
+                  </span>
+                </button>
+              )}
 
               {/* 6c: discard confirms, and the G5 restore confirm in the same
               shell. The only dialogs, because discard is the only control

@@ -32,7 +32,8 @@ columns retain their own layout.
 Keep the neutral ground cool, without process-yellow or sepia warming. The
 surrounding surface is darker than the patterned document ground, which is
 darker than the page. The document ground mixes the surrounding ground and
-paper equally. Topography lines use 6.5% ink opacity. Edit mode uses graph
+paper equally. Topography lines use 6.5% theme ink opacity in both light and
+dark appearances. Edit mode uses graph
 paper. No shadows: the surface colors and borders provide separation.
 
 Source Serif 4 is the interface typeface. Agent-authored documents retain
@@ -200,3 +201,11 @@ resets visibility. Comparison columns may reflow with the available space.
 The panel, composer, and document remain mounted. Toggling preserves draft
 text, attachments, annotation drafts, queued notes, and unsaved document edits.
 It does not reset transcript scrolling or stop the conversation's subscriptions.
+
+With chat closed and notes queued for the displayed version, a filled
+"Send 1 note" or "Send N notes" button stays fixed at the bottom right,
+above the reading controls. It sends the batch without opening chat and
+uses the existing send guards. Sending shows "Sending…" and prevents another
+click. Opening chat or emptying the queue removes the floating button;
+the queue's send action remains in chat. The old note-count guidance beneath
+the document is removed. Other document guidance and refusals remain.

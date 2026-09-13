@@ -6,7 +6,7 @@ import { createConversationHost } from "../../src/store/conversation-host.js";
 import { replaceLocation, replaceSettings } from "../../src/store/settings.js";
 import { createConversationRecord } from "../../src/store/store.js";
 
-test("a newer artifact invalidates prepared dispatch even when the conversation sequence is unchanged", () => {
+test("a newer artifact invalidates prepared dispatch even when the conversation sequence is unchanged", async () => {
   const root = mkdtempSync(join(tmpdir(), "lucid-dispatch-context-"));
   const { paths, secret } = createConversationRecord(root, "dispatch");
   const host = createConversationHost(paths.dir, {
@@ -33,7 +33,7 @@ test("a newer artifact invalidates prepared dispatch even when the conversation 
         attachmentOrigin: "automatic",
       }),
     );
-    host.writeArtifact({
+    await host.writeArtifact({
       artifactId: "doc",
       version: 1,
       author: "user",
@@ -42,7 +42,7 @@ test("a newer artifact invalidates prepared dispatch even when the conversation 
     });
     const captured = host.captureDispatch("request", 0);
     const seq = host.state().seq;
-    host.writeArtifact({
+    await host.writeArtifact({
       artifactId: "doc",
       version: 2,
       author: "user",

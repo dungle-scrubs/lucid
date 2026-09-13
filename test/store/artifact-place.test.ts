@@ -33,8 +33,8 @@ const rig = () => {
   return {
     dir,
     host,
-    write: (version: number, author: string) =>
-      host.writeArtifact({
+    write: async (version: number, author: string) =>
+      await host.writeArtifact({
         artifactId: ART,
         version,
         author,
@@ -52,14 +52,14 @@ const rig = () => {
 };
 
 describe("a version knows where it belongs", () => {
-  test("the catalog reports a place for every version", () => {
+  test("the catalog reports a place for every version", async () => {
     const r = rig();
     try {
-      r.write(1, "agent");
+      await r.write(1, "agent");
       r.say("first");
-      r.write(2, "human");
+      await r.write(2, "human");
       r.say("second");
-      r.write(3, "agent");
+      await r.write(3, "agent");
 
       const [entry] = viewArtifactCatalog(r.dir);
       expect(entry?.afterSeq?.[1]).toBeDefined();
@@ -70,16 +70,16 @@ describe("a version knows where it belongs", () => {
     }
   });
 
-  test("a version written later has a later place", () => {
+  test("a version written later has a later place", async () => {
     // The property a reader needs: ordering by place matches ordering in the
     // file, so a save from before a message renders before it.
     const r = rig();
     try {
-      r.write(1, "agent");
+      await r.write(1, "agent");
       r.say("one");
-      r.write(2, "human");
+      await r.write(2, "human");
       r.say("two");
-      r.write(3, "human");
+      await r.write(3, "human");
 
       const [entry] = viewArtifactCatalog(r.dir);
       const at = entry?.afterSeq ?? {};
@@ -90,12 +90,12 @@ describe("a version knows where it belongs", () => {
     }
   });
 
-  test("a version's place is the last line before it, not after it", () => {
+  test("a version's place is the last line before it, not after it", async () => {
     const r = rig();
     try {
       r.say("before");
       const seqBefore = r.seqNow();
-      r.write(1, "human");
+      await r.write(1, "human");
       r.say("after");
 
       const [entry] = viewArtifactCatalog(r.dir);
@@ -107,10 +107,10 @@ describe("a version knows where it belongs", () => {
     }
   });
 
-  test("a version written before anything was said sits at the start", () => {
+  test("a version written before anything was said sits at the start", async () => {
     const r = rig();
     try {
-      r.write(1, "human");
+      await r.write(1, "human");
       r.say("afterwards");
       const [entry] = viewArtifactCatalog(r.dir);
       expect(entry?.afterSeq?.[1]).toBe(0);
@@ -119,14 +119,14 @@ describe("a version knows where it belongs", () => {
     }
   });
 
-  test("the place survives reopening the record", () => {
+  test("the place survives reopening the record", async () => {
     // It is derived by folding, not stored, so a second fold has to agree
     // with the first or the marker moves between page loads.
     const r = rig();
     try {
-      r.write(1, "agent");
+      await r.write(1, "agent");
       r.say("one");
-      r.write(2, "human");
+      await r.write(2, "human");
       const first = viewArtifactCatalog(r.dir)[0]?.afterSeq;
       const second = viewArtifactCatalog(r.dir)[0]?.afterSeq;
       expect(second).toEqual(first);

@@ -45,6 +45,45 @@ and agent emissions share append ordering. The artifact size policy is
 artifact strings by string length; attachment storage uses byte lengths.
 Do not silently change this wire compatibility by conflating the measures.
 
+## Link navigation and validation
+
+Local `#section` links stay inside the artifact and use native browser scrolling.
+They cannot navigate the frame to the surrounding Lucid page. Web links open a
+new tab with no opener or referrer. Reader and saved-version inspection share
+this behavior, including for historical versions and dynamically inserted links.
+Runtime link attributes are removed from human-save snapshots so authored bytes
+retain standalone navigation. Text selection and annotation gestures still work.
+
+Every new agent version passes link admission before it is stored. The durable
+writer checks the final HTML, including patch results and standalone writes.
+Callers must await `writeArtifact`. Local fragments must resolve to exactly one
+ID or named anchor; empty fragments and the browser's top fallback are accepted.
+Web destinations must be credential-free absolute HTTP(S) URLs. Mail and phone
+links are allowed without an HTTP check. Relative and other schemes are refused.
+Only static `a[href]` and `area[href]` elements outside inert templates are
+validated. Script-generated links, asset URLs, and remote fragment targets are
+outside admission. Dynamic web links still receive the new-tab behavior.
+
+Admission sends unauthenticated GET requests to public network destinations,
+follows at most five redirects, and accepts only a final 2xx response. Each hop
+resolves and checks its addresses, then connects directly to a checked address
+with the original TLS hostname. Private and special networks, credentials,
+proxy routing, and invalid TLS are excluded. Response bodies are not downloaded;
+headers are bounded at 16 KiB. This requests each unique page even if several
+links refer to different sections on it.
+
+The limits are 100 distinct pages, four concurrent probes, ten seconds per page,
+and thirty seconds total. Missing sections and 404/410 responses are refused;
+blocked sites, offline checks, timeouts, and other uncertain outcomes are also
+refused with a correction message. No new version is stored. Results are selected
+in document order, independent of request completion order. Validation is
+mandatory and deterministic as policy; network availability can change later.
+
+Checks hold no append lock. A human save during validation wins the existing
+version conflict check, and the next agent turn receives the current bytes.
+Stopping the headless source or closing its writer cancels pending admission.
+Human saves, restores, and historical reads do not trigger network admission.
+
 ## Patch revisions
 
 A patch uses `form: "patch"` and a JSON body containing an `edits` array.
@@ -80,6 +119,12 @@ An older version is read-only. Viewing it does not move pending notes to a
 new target or discard queued work. A new version cannot replace a document
 with unsaved edits or pending annotations. Following can resume once that
 work is resolved.
+
+Reloading restores the artifact's reading position in the same browser tab.
+The browser stores a block and its viewport offset per conversation, artifact,
+and version. Restoration waits for the document's images and fonts to load.
+Positions from other versions are not applied on reload. If browser storage
+is unavailable, reading remains usable without reload restoration.
 
 A save records the document and control values, the human author, and the
 version it was based on. A save from version 4 arriving after version 5 is
@@ -181,8 +226,8 @@ Links with an `href` navigate in both document modes. They show a pointer cursor
 and no annotation hover outline, including over child labels and icons. A direct
 click does not select the link for a note. Text selection across a link remains
 available; ending that drag does not also follow the link. Other controls retain
-their existing mode behavior. This does not change the artifact's sandbox or
-grant navigation capabilities that the browser would otherwise refuse.
+their existing mode behavior. The sandbox permits new tabs while keeping the
+artifact outside Lucid's origin; see [the authority boundary](adr/0008-browser-and-agent-content-have-separate-authority.md).
 
 A note carries one or more spots, the text the person saw, and authorship.
 A spot may be a whole element or only the words selected. Capture the current
@@ -369,6 +414,13 @@ now follows the system; it previously inherited the light application scheme.
 That can change an older document's inspection appearance on a dark system.
 Hardcoded colors remain authored. Fixed-theme documents pair their declaration
 with matching standard browser metadata and complete foreground/background pairs.
+
+The embedding iframe supplies a `Canvas` background for unstyled documents.
+Instrumentation leaves the document root background untouched so the browser can
+propagate an authored body background across the canvas, including outside a
+width-limited body. If the frame and document use different color schemes, the
+browser supplies an opaque canvas in the document's scheme. Reader and saved-version
+inspection use the same backing; no background is added to saved artifact bytes.
 
 The browser carries the embedding scheme across the existing sandbox into
 `prefers-color-scheme`. No new theme messages, parent storage access, or

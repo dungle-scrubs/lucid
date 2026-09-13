@@ -13,12 +13,16 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { publishArtifact } from "../../src/cli/artifact-publish.js";
+import { dispatch } from "../../src/cli/dispatch.js";
 import { sendInput } from "../../src/cli/send.js";
 import { startServe } from "../../src/cli/serve.js";
+import { readProcessOwner } from "../../src/process-owner.js";
+import { encodeAnnotationBatch } from "../../src/protocol/annotations.js";
 import { ARTIFACT_TITLE_MAX } from "../../src/protocol/artifact-title.js";
-import { createConversationHost } from "../../src/store/conversation-host.js";
+import { createConversationHost, openWriter } from "../../src/store/conversation-host.js";
 import { acquirePresence } from "../../src/store/presence.js";
-import { createConversationRecord } from "../../src/store/store.js";
+import { createConversationRecord, viewConversation } from "../../src/store/store.js";
 
 const CONV = "srv-1";
 
@@ -47,6 +51,236 @@ afterEach(async () => {
 });
 
 describe("the way in", () => {
+  test("native cancellation preserves feedback, repeats safely and refuses a stale offered input", async () => {
+    const id = crypto.randomUUID();
+    const { paths } = createConversationRecord(root, id, { workingDirectory: root });
+    const owner = readProcessOwner(process.pid);
+    if (!owner) throw new Error("Missing test owner");
+    const binding = {
+      generation: crypto.randomUUID(),
+      harness: "codex" as const,
+      interface: "codex-cli" as const,
+      nativeSessionId: "cancel-native",
+      owner,
+      registrationId: crypto.randomUUID(),
+      workingDirectory: root,
+    };
+    let lease: ReturnType<typeof acquirePresence> | undefined;
+    const host = createConversationHost(paths.dir, {
+      connectionAuthority: () => binding,
+      executorLease: () => lease?.held() ?? false,
+      now: Date.now,
+      onEffect: () => {},
+      onRecord: () => {},
+      ownerPresence: () => true,
+      presence: () => undefined,
+    });
+    try {
+      expect(
+        host.writeConnection({ actionId: crypto.randomUUID(), binding, kind: "bound" }).verdict,
+      ).toBe("accepted");
+      for (const inputId of ["cancel", "race"])
+        expect(
+          host.acceptInput({ id: inputId, mode: "queue", text: `Keep ${inputId}` }).verdict,
+        ).toBe("accepted");
+      const cancelPath = `/api/conversations/${id}/inputs/cancel/cancel`;
+      const before = readFileSync(paths.logPath);
+      expect((await fetch(url(cancelPath), { method: "POST" })).status).toBe(401);
+      expect(readFileSync(paths.logPath)).toEqual(before);
+      const response = await api(cancelPath, { method: "POST" });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ inputId: "cancel", status: "cancelled" });
+      const cancelled = readFileSync(paths.logPath);
+      expect((await api(cancelPath, { method: "POST" })).status).toBe(200);
+      expect(readFileSync(paths.logPath)).toEqual(cancelled);
+      expect(viewConversation(paths.dir).transcript.inputs[0]).toMatchObject({
+        id: "cancel",
+        status: "cancelled",
+        text: "Keep cancel",
+      });
+      lease = acquirePresence(paths.dir, id);
+      const participation = {
+        epoch: host.state().epoch + 1,
+        executorOwner: owner,
+        expiresAt: Date.now() + 45000,
+        id: crypto.randomUUID(),
+        registration: binding,
+      };
+      expect(
+        host.writeConnection({
+          actionId: crypto.randomUUID(),
+          kind: "listener-enabled",
+          source: "explicit",
+          participation,
+        }).verdict,
+      ).toBe("accepted");
+      const snapshot = host.captureDispatch("race", 0);
+      const offer = {
+        attempt: 1,
+        context: snapshot.context,
+        epoch: snapshot.epoch,
+        id: crypto.randomUUID(),
+        inputId: "race",
+        participationId: participation.id,
+        turnId: crypto.randomUUID(),
+      };
+      expect(
+        host.writeConnection({
+          actionId: crypto.randomUUID(),
+          kind: "offer-started",
+          offer,
+          stamp: snapshot.stamp,
+        }).verdict,
+      ).toBe("accepted");
+      const offered = readFileSync(paths.logPath);
+      const raced = await api(`/api/conversations/${id}/inputs/race/cancel`, { method: "POST" });
+      expect(raced.status).toBe(409);
+      expect(await raced.json()).toMatchObject({ error: "input-already-dispatched" });
+      expect(readFileSync(paths.logPath)).toEqual(offered);
+      expect(lease.held()).toBe(true);
+      expect(
+        (await api(`/api/conversations/${id}/inputs/%00/cancel`, { method: "POST" })).status,
+      ).toBe(400);
+    } finally {
+      host.close();
+      lease?.release();
+    }
+  });
+  test("poll joins native delivery to plain feedback and annotation batches without ordinary recovery", async () => {
+    const { paths } = createConversationRecord(root, "delivery-http");
+    const host = openWriter(paths.dir);
+    try {
+      expect(host.recordNativePublication().verdict).toBe("accepted");
+      const note = encodeAnnotationBatch({
+        artifactId: "flow",
+        version: 1,
+        notes: [{ note: "Clarify this", spots: [] }],
+      });
+      for (const [id, text] of [
+        ["plain", "Review this"],
+        ["annotation", note],
+      ] as const)
+        expect(host.acceptInput({ id, mode: "queue", text }, { managed: true }).verdict).toBe(
+          "accepted",
+        );
+      const before = readFileSync(paths.logPath);
+      const response = await api("/api/conversations/delivery-http");
+      expect(response.status).toBe(200);
+      const result = await response.json();
+      expect(result.lines.filter((line: { kind: string }) => line.kind === "human")).toMatchObject([
+        { delivery: { inputId: "plain", state: "saved" } },
+        { batch: { inputId: "annotation" }, delivery: { inputId: "annotation", state: "saved" } },
+      ]);
+      expect(result.executions).toEqual([]);
+      expect(result.activity.nativeConnectionRequired).toBe(true);
+      expect(readFileSync(paths.logPath)).toEqual(before);
+    } finally {
+      host.close();
+    }
+  });
+  test("a reopened native publication shows its retained failure and generic exact-record guidance", async () => {
+    const published = await publishArtifact(
+      {
+        artifact: {
+          artifactId: "flow",
+          bytes: "<h1>Review me</h1>",
+          contentType: "text/html",
+          version: 1,
+        },
+        creationId: "unbound-http",
+        serverUrl: server.url,
+        settings: { harness: "codex", model: "test", effort: "high", profile: "headless-turn" },
+        workingDirectory: root,
+      },
+      root,
+      { callerOwns: () => false, ownerPresence: () => false },
+    );
+    const response = await api(`/api/conversations/${published.conversationId}/connection`);
+    expect(response.status).toBe(200);
+    const connection = await response.json();
+    expect(connection).toMatchObject({
+      nativeConnectionRequired: true,
+      nativeSessionId: null,
+      interface: null,
+      state: "setup-required",
+      reason: "registration-missing",
+      actions: ["setup-instructions"],
+    });
+    expect(connection.instructions).toHaveLength(1);
+    expect(connection.instructions[0].text).toContain(published.conversationId);
+    expect(connection.instructions[0].text).not.toContain("Codex");
+    expect(connection.instructions[0].command).toContain("'artifact' 'publish' '--help'");
+    expect(connection.instructions[0].command).toContain(`LUCID_ROOT=${root}`);
+  });
+  test("native connection instructions name the served record and root without starting a session", async () => {
+    const id = crypto.randomUUID();
+    const { paths } = createConversationRecord(root, id, { workingDirectory: root });
+    const owner = readProcessOwner(process.pid);
+    if (!owner) throw new Error("Expected the test process identity");
+    const binding = {
+      generation: crypto.randomUUID(),
+      harness: "codex" as const,
+      interface: "codex-cli" as const,
+      nativeSessionId: "native-instructions",
+      owner,
+      registrationId: crypto.randomUUID(),
+      workingDirectory: root,
+    };
+    const host = openWriter(paths.dir, {
+      connectionAuthority: () => binding,
+      ownerPresence: () => true,
+    });
+    try {
+      expect(
+        host.writeConnection({ actionId: crypto.randomUUID(), binding, kind: "bound" }).verdict,
+      ).toBe("accepted");
+    } finally {
+      host.close();
+    }
+    const before = readFileSync(paths.logPath);
+    const response = await api(`/api/conversations/${id}/connection`);
+    expect(response.status).toBe(200);
+    const connection = await response.json();
+    expect(connection).toMatchObject({
+      actions: ["resume-listening-instructions"],
+      conversationId: id,
+      nativeSessionId: "native-instructions",
+      state: "not-listening",
+    });
+    expect(connection.instructions).toHaveLength(1);
+    expect(connection.instructions[0].command).toContain(`'LUCID_ROOT=${root}'`);
+    expect(connection.instructions[0].command).toContain(
+      `'connection' 'resume-listen' '${id}' '--json'`,
+    );
+    expect(connection.instructions[0].text).toContain("already-open native session");
+    expect(readFileSync(paths.logPath)).toEqual(before);
+    expect((await api("/api/conversations/missing-native/connection")).status).toBe(404);
+    expect((await api("/api/conversations/..%2Fescape/connection")).status).toBe(400);
+  });
+  test("browser and CLI report the same connection state without exposing record authority", async () => {
+    const response = await api(`/api/conversations/${CONV}/connection`);
+    expect(response.status).toBe(200);
+    const browser = await response.json();
+    const output: string[] = [];
+    await dispatch(["connection", "status", CONV, "--json"], {
+      rootDir: root,
+      onOutput: (line) => output.push(line),
+    });
+    const cli = JSON.parse(output[0] ?? "null");
+    expect(cli).toMatchObject({
+      conversationId: CONV,
+      message: browser.message,
+      state: "setup-required",
+    });
+    expect(browser).toMatchObject({
+      interface: null,
+      nativeSessionId: null,
+      reason: "registration-missing",
+      state: "setup-required",
+    });
+    expect(browser).not.toHaveProperty("secret");
+    expect(browser).not.toHaveProperty("owner");
+  });
   test("binds loopback, and the port is the one the kernel gave back", () => {
     expect(server.port).toBeGreaterThan(0);
     expect(server.url).toBe(`http://127.0.0.1:${server.port}`);
@@ -323,6 +557,31 @@ describe("whether the agent is working", () => {
     }
   };
 
+  test("a recorded native refusal retains its class beside the transcript text", async () => {
+    emit(
+      "refused",
+      { kind: "failure", class: "refusal", message: "The session refused this request." },
+      1,
+    );
+    const host = openWriter(join(root, CONV));
+    try {
+      expect(host.recordNativePublication().verdict).toBe("accepted");
+    } finally {
+      host.close();
+    }
+    const body = await (await api(`/api/conversations/${CONV}`)).json();
+    expect(body.lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "agent",
+          event: "failure",
+          nativeRefusal: true,
+          text: "✗ The session refused this request.",
+        }),
+      ]),
+    );
+  });
+
   test("a turn with no terminal event is running", async () => {
     emit("turn-1", { kind: "message", role: "assistant", text: "thinking out loud" }, 1);
     const body = (await (await api(`/api/conversations/${CONV}`)).json()) as {
@@ -394,7 +653,7 @@ describe("whether the agent is working", () => {
  * though the fold tolerates both. */
 describe("naming an artifact", () => {
   /** A record holding one artifact, so a rename has something to name. */
-  const withArtifact = (): void => {
+  const withArtifact = async (): Promise<void> => {
     const host = createConversationHost(join(root, CONV), {
       now: () => Date.now(),
       presence: () => undefined,
@@ -403,7 +662,7 @@ describe("naming an artifact", () => {
       onRecord: () => {},
     });
     try {
-      host.writeArtifact({
+      await host.writeArtifact({
         artifactId: "doc-1",
         version: 1,
         author: "agent",
@@ -423,7 +682,7 @@ describe("naming an artifact", () => {
     });
 
   test("a rename lands, and the catalog shows the new name", async () => {
-    withArtifact();
+    await withArtifact();
     expect((await rename("doc-1", "First day checklist")).status).toBe(200);
     const cat = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
       artifacts: { artifactId: string; title?: string }[];
@@ -435,7 +694,7 @@ describe("naming an artifact", () => {
   test("an artifact nobody renamed carries no title at all", async () => {
     // Absent, not empty. A reader that does not know about titles is
     // unaffected, and one that does falls back to the id.
-    withArtifact();
+    await withArtifact();
     const cat = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
       artifacts: Record<string, unknown>[];
     };
@@ -443,7 +702,7 @@ describe("naming an artifact", () => {
   });
 
   test("renaming creates no version", async () => {
-    withArtifact();
+    await withArtifact();
     await rename("doc-1", "Named");
     const cat = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
       artifacts: { versions: number[] }[];
@@ -452,12 +711,12 @@ describe("naming an artifact", () => {
   });
 
   test("naming an artifact the record does not hold is refused", async () => {
-    withArtifact();
+    await withArtifact();
     expect((await rename("no-such-doc", "Ghost")).status).toBe(404);
   });
 
   test("a title outside the bound is refused and nothing is appended", async () => {
-    withArtifact();
+    await withArtifact();
     const long = await rename("doc-1", "x".repeat(ARTIFACT_TITLE_MAX + 1));
     expect(long.status).toBe(400);
     expect((await long.json()).error).toBe("invalid-title");
@@ -471,12 +730,12 @@ describe("naming an artifact", () => {
   });
 
   test("a title at exactly the bound is accepted", async () => {
-    withArtifact();
+    await withArtifact();
     expect((await rename("doc-1", "x".repeat(ARTIFACT_TITLE_MAX))).status).toBe(200);
   });
 
   test("renaming twice keeps the second name", async () => {
-    withArtifact();
+    await withArtifact();
     await rename("doc-1", "First");
     await rename("doc-1", "Second");
     const cat = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
@@ -486,7 +745,7 @@ describe("naming an artifact", () => {
   });
 
   test("a rename needs the token like everything else", async () => {
-    withArtifact();
+    await withArtifact();
     const res = await fetch(url(`/api/conversations/${CONV}/artifacts/doc-1/meta`), {
       method: "POST",
       headers: { "content-type": "application/json" },

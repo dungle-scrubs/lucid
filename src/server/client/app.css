@@ -2,6 +2,7 @@
 @import "./conversation-panel.css";
 @import "./content-comparison.css";
 @import "./compatibility-notice.css";
+@import "./native-connection.css";
 
 .input-recovery-text {
   max-block-size: 8rem;
@@ -766,8 +767,17 @@ body {
   margin: 0 -14px -14px;
   padding: 16px 16px 0;
   background-color: var(--document-ground);
-  background-image: url("data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2288%22 height=%2288%22 viewBox=%220 0 88 88%22><g fill=%22none%22 stroke=%22%23201e1d%22 stroke-opacity=%22.065%22 stroke-width=%221%22><circle cx=%2222%22 cy=%2222%22 r=%227%22/><circle cx=%2222%22 cy=%2222%22 r=%2215%22/><circle cx=%2222%22 cy=%2222%22 r=%2223%22/><circle cx=%2222%22 cy=%2222%22 r=%2231%22/><circle cx=%2266%22 cy=%2266%22 r=%229%22/><circle cx=%2266%22 cy=%2266%22 r=%2218%22/><circle cx=%2266%22 cy=%2266%22 r=%2227%22/><circle cx=%2274%22 cy=%2214%22 r=%225%22/><circle cx=%2214%22 cy=%2274%22 r=%224%22/></g></svg>");
-  background-size: 88px 88px;
+}
+
+/* Mask the linework so its ink follows the theme, like the edit grid. */
+.doc-ground:not(.edit):not(.compare)::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-color: var(--color-text);
+  mask-image: url("data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2288%22 height=%2288%22 viewBox=%220 0 88 88%22><g fill=%22none%22 stroke=%22%23201e1d%22 stroke-opacity=%22.065%22 stroke-width=%221%22><circle cx=%2222%22 cy=%2222%22 r=%227%22/><circle cx=%2222%22 cy=%2222%22 r=%2215%22/><circle cx=%2222%22 cy=%2222%22 r=%2223%22/><circle cx=%2222%22 cy=%2222%22 r=%2231%22/><circle cx=%2266%22 cy=%2266%22 r=%229%22/><circle cx=%2266%22 cy=%2266%22 r=%2218%22/><circle cx=%2266%22 cy=%2266%22 r=%2227%22/><circle cx=%2274%22 cy=%2214%22 r=%225%22/><circle cx=%2214%22 cy=%2274%22 r=%224%22/></g></svg>");
+  mask-size: 88px 88px;
 }
 
 /* Edit reads on Graph Paper: 80px majors, 16px minors, in ink. */
@@ -858,10 +868,10 @@ body {
   min-height: 0;
   width: 100%;
   border: 0;
-  /* Transparent, not paper. The document paints its own background, and a
-     colour set here shows through wherever the document does not reach,
-     which on macOS is every rubber-band overscroll. */
-  background: transparent;
+  /* Back unstyled documents without blocking body-to-canvas propagation.
+     If the document uses a different scheme, the browser supplies its own
+     opaque canvas. Authored backgrounds paint over this backing. */
+  background: Canvas;
 }
 
 .width-control {
@@ -2308,6 +2318,47 @@ button.note-card-target,
 .held-body {
   font-size: 13.5px;
   line-height: 1.55;
+}
+
+/* Closed-chat send stays outside the clipped panes, above the reading controls. */
+.floating-note-send {
+  position: fixed;
+  inset-inline-end: max(20px, env(safe-area-inset-right));
+  inset-block-end: max(20px, env(safe-area-inset-bottom));
+  z-index: 101;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-block-size: 48px;
+  max-inline-size: calc(100% - 40px);
+  padding: 12px 20px;
+  border: 2px solid var(--color-accent-700);
+  border-radius: 8px;
+  background: var(--color-accent-700);
+  color: var(--on-accent);
+  font: 600 16px / 1.25 var(--font-heading);
+  text-wrap: balance;
+  cursor: pointer;
+}
+
+.floating-note-send svg {
+  flex: 0 0 auto;
+}
+
+.floating-note-send:hover:not(:disabled) {
+  background: var(--color-accent-800);
+  border-color: var(--color-accent-800);
+}
+
+.floating-note-send:focus-visible {
+  outline: 3px solid var(--color-text);
+  outline-offset: 3px;
+}
+
+.floating-note-send:disabled {
+  cursor: default;
+  opacity: 0.65;
 }
 
 /* The queue's own action, where the queue is. */

@@ -33,7 +33,13 @@ import {
   truncateSync,
   writeSync,
 } from "node:fs";
+import {
+  awaitingNativeBinding,
+  nativeOutcomeEvent,
+  reduceConnection,
+} from "../protocol/connection.js";
 import { reduceContextCoverage } from "../protocol/context-coverage.js";
+import { EventKind } from "../protocol/events.js";
 import { reduceExecution } from "../protocol/execution.js";
 import { ARTIFACT_BYTES_MAX } from "../protocol/frames.js";
 import type { ChannelState, InputMode, ProtocolIssue } from "../protocol/index.js";
@@ -47,6 +53,7 @@ import {
   type ReduceResult,
   reduce,
 } from "../protocol/index.js";
+import { reduceApproval } from "../protocol/native-approvals.js";
 import { enqueueManagedInput } from "../protocol/reducer.js";
 import { putBlob } from "./blobs.js";
 import { type RecordPaths, StoreError } from "./errors.js";
@@ -61,6 +68,20 @@ import { withRecordLock } from "./record-identity.js";
 /** One durable log entry: the verbatim input to `foldLog`. */
 export type LogEntry =
   | CursorEntry
+  | {
+      readonly v: 1;
+      readonly at: number;
+      readonly src: "execution";
+      readonly payloadVersion: 3;
+      readonly approval: import("../protocol/native-approvals.js").ApprovalFact;
+    }
+  | {
+      readonly v: 1;
+      readonly at: number;
+      readonly src: "execution";
+      readonly payloadVersion: 2;
+      readonly connection: import("../protocol/connection.js").ConnectionFact;
+    }
   | {
       readonly v: 1;
       readonly at: number;
@@ -438,7 +459,7 @@ export interface TranscriptInput {
   readonly id: string;
   readonly text: string;
   readonly mode: InputMode;
-  readonly status: "outstanding" | "queued" | "applied" | "rejected";
+  readonly status: "outstanding" | "queued" | "applied" | "rejected" | "cancelled";
 }
 
 /** Repeat-safe acceptance is separate from source-protocol duplicate refusal. */
@@ -488,6 +509,7 @@ export interface CollectedBatch {
 
 interface TranscriptAcc {
   readonly events: TranscriptEvent[];
+  readonly inputIndices: Map<string, number>;
   readonly inputs: TranscriptInput[];
   readonly aborted: string[];
 }
@@ -565,8 +587,15 @@ const applyEntry = (
 ): { result: ReduceResult; frame: import("../protocol/index.js").Frame | null } => {
   switch (entry.src) {
     case "execution":
+      if (entry.payloadVersion === 3)
+        return { result: reduceApproval(state, entry.approval, entry.at, "replay"), frame: null };
+      if (entry.payloadVersion === 2)
+        return { result: reduceConnection(state, entry.connection, entry.at), frame: null };
       if (entry.payloadVersion !== 1)
-        throw new StoreError("corrupt-log", "Unsupported execution payload");
+        throw new StoreError(
+          "unsupported-connection-payload",
+          "Unsupported connection control payload. Use a reader that supports this record.",
+        );
       return { result: reduceExecution(state, entry.fact, entry.at, true), frame: null };
     case "context":
       if (entry.payloadVersion !== 1)
@@ -620,7 +649,9 @@ const collectTranscript = (
         event: frameOrNull.event,
       }),
     );
-  if ((entry.src === "input" || entry.src === "managed-input") && result.record.seq !== undefined)
+  if ((entry.src === "input" || entry.src === "managed-input") && result.record.seq !== undefined) {
+    if (!acc.inputIndices.has(entry.input.id))
+      acc.inputIndices.set(entry.input.id, acc.inputs.length);
     acc.inputs.push({
       seq: result.record.seq,
       id: entry.input.id,
@@ -628,12 +659,91 @@ const collectTranscript = (
       mode: entry.input.mode,
       status: "outstanding",
     });
+  }
+  const setInputStatus = (inputId: string | undefined, status: TranscriptInput["status"]): void => {
+    const index = inputId === undefined ? undefined : acc.inputIndices.get(inputId);
+    const input = index === undefined ? undefined : acc.inputs[index];
+    if (input && index !== undefined) acc.inputs[index] = { ...input, status };
+  };
+  const pushLaunchEvent = (
+    launch: import("../protocol/connection.js").NativeLaunch,
+    event: TranscriptEvent["event"],
+  ): void => {
+    if (result.record.seq === undefined) return;
+    acc.events.push(
+      deepFreeze({
+        epoch: launch.epoch,
+        event,
+        harness: launch.registration.harness,
+        seq: result.record.seq,
+        turnId: launch.id,
+      }),
+    );
+  };
+  if (
+    entry.src === "execution" &&
+    entry.payloadVersion === 2 &&
+    entry.connection.kind === "launch-intended" &&
+    result.record.seq !== undefined
+  ) {
+    const launch = entry.connection.launch;
+    pushLaunchEvent(launch, {
+      kind: EventKind.message,
+      role: "system",
+      text: `No interactive session detected. Resuming headlessly with session ${launch.registration.nativeSessionId}.`,
+    });
+  }
   if (frameOrNull?.kind === "disposition") {
-    const at = acc.inputs.findIndex((i) => i.id === frameOrNull.inputId);
-    if (at !== -1) {
-      const prev = acc.inputs[at];
-      if (prev !== undefined) acc.inputs[at] = { ...prev, status: frameOrNull.outcome };
-    }
+    setInputStatus(frameOrNull.inputId, frameOrNull.outcome);
+  }
+  if (
+    entry.src === "execution" &&
+    entry.payloadVersion === 2 &&
+    entry.connection.kind === "launch-refused" &&
+    result.record.seq !== undefined
+  ) {
+    const refused = result.state.connection?.launches[entry.connection.launchId];
+    if (refused?.kind === "refused")
+      pushLaunchEvent(refused.launch, {
+        class: "refusal",
+        code: refused.failure.code,
+        kind: EventKind.failure,
+        message: refused.failure.reason,
+      });
+  }
+  if (
+    entry.src === "execution" &&
+    entry.payloadVersion === 2 &&
+    entry.connection.kind === "receipt-confirmed"
+  ) {
+    const offer = result.state.connection?.offers[entry.connection.offerId]?.offer;
+    setInputStatus(offer?.inputId, "applied");
+  }
+  if (
+    entry.src === "execution" &&
+    entry.payloadVersion === 2 &&
+    entry.connection.kind === "input-cancelled"
+  ) {
+    setInputStatus(entry.connection.inputId, "cancelled");
+  }
+  if (
+    entry.src === "execution" &&
+    entry.payloadVersion === 2 &&
+    entry.connection.kind === "offer-outcome" &&
+    result.record.seq !== undefined
+  ) {
+    const connection = result.state.connection;
+    const offer = connection?.offers[entry.connection.offerId]?.offer;
+    if (offer && connection)
+      acc.events.push(
+        deepFreeze({
+          seq: result.record.seq,
+          epoch: offer.epoch,
+          turnId: offer.turnId,
+          harness: connection.binding.harness,
+          event: nativeOutcomeEvent(entry.connection.outcome),
+        }),
+      );
   }
   for (const effect of result.effects)
     if (effect.type === "abort-turn") acc.aborted.push(effect.turnId);
@@ -675,7 +785,12 @@ const walk = (
   let cursor = 0;
   const collected: CollectedEntry[] = [];
   let entries = 0;
-  const transcript: TranscriptAcc = { events: [], inputs: [], aborted: [] };
+  const transcript: TranscriptAcc = {
+    events: [],
+    inputIndices: new Map(),
+    inputs: [],
+    aborted: [],
+  };
   let namingEligible = false;
   const refusedInputs: FoldRefusal[] = [];
   const artifactIndex = new Map<string, number>();
@@ -981,6 +1096,8 @@ export interface LockedRecordSnapshot {
 }
 
 export interface ConversationLog {
+  /** Fresh state-only admission; no artifact or transcript materialization. */
+  inspectState<TValue>(read: (state: ChannelState) => TValue): TValue;
   /** Catch up and read one coherent record under the append lock. */
   inspect<TValue>(read: (snapshot: LockedRecordSnapshot) => TValue): TValue;
   readonly paths: RecordPaths;
@@ -1107,7 +1224,7 @@ export const createLog = (
   let curState = initial.folded.state;
   let curGoodBytes = initial.folded.goodBytes;
   let curCursor = initial.folded.cursor;
-  let acc: TranscriptAcc = { events: [], inputs: [], aborted: [] };
+  let acc: TranscriptAcc = { events: [], inputIndices: new Map(), inputs: [], aborted: [] };
   let curArtifactIndex = new Map<string, number>();
   let curArtifactVersions = new Map<string, Map<number, VersionHeader>>();
   let curArtifactHeads = new Map<string, number>();
@@ -1129,8 +1246,13 @@ export const createLog = (
     curState = folded.state;
     curGoodBytes = folded.goodBytes;
     curCursor = folded.cursor;
+    const inputIndices = new Map<string, number>();
+    folded.transcript.inputs.forEach((input, index) => {
+      if (!inputIndices.has(input.id)) inputIndices.set(input.id, index);
+    });
     acc = {
       events: [...folded.transcript.events],
+      inputIndices,
       inputs: [...folded.transcript.inputs],
       aborted: [...folded.transcript.aborted],
     };
@@ -1221,6 +1343,8 @@ export const createLog = (
     }
     return { artifacts, state: curState, transcript: transcript() };
   };
+  const inspectState = <TValue>(read: (state: ChannelState) => TValue): TValue =>
+    transaction(() => ({ line: null, result: read(curState) }));
   const inspect = <TValue>(read: (snapshot: LockedRecordSnapshot) => TValue): TValue =>
     transaction((_folded, raw) => ({ line: null, result: read(lockedSnapshot(raw)) }));
   const comparisonAdmission = (
@@ -1373,6 +1497,7 @@ export const createLog = (
         `cursor offset must be a non-negative safe integer, got ${offset}`,
       );
     transaction((folded) => {
+      if (awaitingNativeBinding(folded.state)) return { line: null, result: undefined };
       if (offset > folded.goodBytes)
         throw new StoreError(
           "corrupt-log",
@@ -1453,6 +1578,7 @@ export const createLog = (
 
   return {
     inspect,
+    inspectState,
     paths,
     conversationId,
     state: () => curState,

@@ -1,4 +1,5 @@
 import { type ConfigLocation, readUserConfig, resolveRecordRoot } from "../config/user-config.js";
+import { HubError } from "../protocol/hub-errors.js";
 import { readRecordFiles } from "../store/conversation-host.js";
 import { readRecordIdentity } from "../store/record-identity.js";
 /**
@@ -168,6 +169,17 @@ export interface Conversations {
   /** Ensure the record exists, creating it if needed. Returns the
    *  secret (minted or existing) and the dir. */
   ensure(conversationId: string, options?: CreateRecordOptions): { secret: string; dir: string };
+}
+
+/** Public command addressing preserves missing, ambiguous and unavailable record failures. */
+export function commandRecordDir(records: Conversations, conversationId: string): string {
+  try {
+    return records.dirFor(conversationId);
+  } catch (cause) {
+    if (!(cause instanceof RecordLookupError)) throw cause;
+    const status = cause.reason === "not-found" ? 404 : cause.reason === "ambiguous" ? 409 : 503;
+    throw new HubError(cause.message, "E-HUB-03", status, []);
+  }
 }
 
 /** Records live under `~/.lucid/records` by default, overridden by

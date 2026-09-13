@@ -384,6 +384,34 @@ attempt and do not prevent cleanup of the other copies.
 
 ## Managed hub workers
 
+### Native permission records
+
+Native permission requests have a separate durable lifecycle. HCN supplies the
+complete request text and offered choices; Lucid does not interpret native
+permission schemas. Only the executor for the current managed attempt can
+record requests and claim a write intent. Generic agent events cannot create
+answerable requests. Unknown request fields are refused, not discarded.
+
+The authenticated browser decision endpoint accepts only a decision ID, request
+ID and offered choice ID. It saves the choice under the append lock. Identical
+retries return the saved result. A new choice requires a live executor. Saving
+a choice does not establish that it reached the agent. Write intent is claimed
+once, and a missing acknowledgement never authorizes replay.
+
+The browser distinguishes saved, sending, sent, cleared and unavailable requests.
+It displays the complete request as plain text and offers no default choice.
+Process loss and executor replacement retain decision history. Approval details
+stay out of model context. Reads and browser reloads never dispatch a decision.
+Read responses carry an opaque `approvalRevision`; a client returning that
+revision receives approval history only if its contents or executor availability
+changed. Omitting the revision returns the full view.
+
+These facts use execution log payload version 3. Older readers refuse this
+payload instead of ignoring its authority. Native process delivery and activation
+remain governed by the active RFC 27 integration work.
+
+### Execution lifecycle
+
 Managed execution uses the existing driven-conversation runtime with saved
 settings and the exact recorded working folder. The launch request names
 an existing conversation and accepted input. Inherited harness pins do not

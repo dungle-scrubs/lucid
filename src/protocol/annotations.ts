@@ -212,11 +212,19 @@ const isNote = (v: unknown): v is Annotation => {
 };
 
 /** The files on a note that can be used, which may be none. */
-export const filesOf = (n: Annotation): readonly AttachedFile[] => {
+export const filesOf = (n: Annotation): readonly AttachedFile[] => inspectAnnotationFiles(n).files;
+
+/** Complete delivery must distinguish absent references from references the tolerant view drops. */
+export function inspectAnnotationFiles(n: Annotation): {
+  readonly complete: boolean;
+  readonly files: readonly AttachedFile[];
+} {
   const raw = (n as { files?: unknown }).files;
-  if (!Array.isArray(raw)) return [];
-  return raw.filter(isAttachedFile);
-};
+  if (!Object.hasOwn(n, "files")) return { complete: true, files: [] };
+  if (!Array.isArray(raw)) return { complete: false, files: [] };
+  const files = raw.filter(isAttachedFile);
+  return { complete: files.length === raw.length, files };
+}
 
 const isBatch = (v: unknown): v is AnnotationBatch => {
   if (v === null || typeof v !== "object") return false;

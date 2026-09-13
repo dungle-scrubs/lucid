@@ -65,7 +65,7 @@ test("hub names follow the document when it arrives and when either view renames
   expect(await row()).toMatchObject({ title: "you there" });
   const host = openWriter(created.paths.dir);
   try {
-    host.writeArtifact({
+    await host.writeArtifact({
       artifactId: "personal-agent-plan",
       author: "agent",
       bytes: "<h1>Your personal agent</h1>",

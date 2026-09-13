@@ -188,7 +188,7 @@ describe("the range fold that hands back effects (RFC-04 step 5)", () => {
 });
 
 describe("collecting effects does not cost the artifact index", () => {
-  test("the index survives a collect, so a revision can find the version it replaces", () => {
+  test("the index survives a collect, so a revision can find the version it replaces", async () => {
     const root = mkdtempSync(join(tmpdir(), "lucid-collect-art-"));
     createConversationRecord(root, "c");
     const dir = join(root, "c");
@@ -201,7 +201,7 @@ describe("collecting effects does not cost the artifact index", () => {
     };
 
     const writer = openConversation(dir, deps);
-    writer.writeArtifact({
+    await writer.writeArtifact({
       artifactId: "doc-1",
       version: 1,
       author: "agent",

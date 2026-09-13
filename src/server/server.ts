@@ -1,13 +1,17 @@
 import { ConfigurationError } from "../config/user-config.js";
 import { comparisonMetadata } from "../protocol/comparison-note.js";
+import { requiresNativeConnection } from "../protocol/connection.js";
 import {
   fallbackConversationTitle,
   storedConversationTitle,
   titleState,
 } from "../protocol/conversation-title.js";
 import { HubError } from "../protocol/hub-errors.js";
+import { observeConnection, readConnection } from "../store/connection-view.js";
 import { renameConversation } from "../store/conversation-naming.js";
+import { nativeInputViews } from "../store/native-input-view.js";
 import { readRecordMetadata } from "../store/record-identity.js";
+import { connectionControls } from "./connection-controls.js";
 
 /**
  * The loopback server — one command, every record, a record chosen by URL.
@@ -51,6 +55,8 @@ import { isTextBytes, sniffImageType, withinAttachmentBound } from "../protocol/
 import { EventKind } from "../protocol/events.js";
 import { executionViews } from "../protocol/execution-view.js";
 import { isWireId, TEXT_MAX } from "../protocol/frames.js";
+import { parseApprovalDecision } from "../protocol/native-approval-codec.js";
+import { approvalView, approvalViews } from "../protocol/native-approval-view.js";
 import { getBlob } from "../store/blobs.js";
 import {
   type ConversationHost,
@@ -77,8 +83,7 @@ import { preferenceState, replaceLocation } from "../store/settings.js";
 // would be a defect with no owner, so there is one derivation and both read
 // it. Only `lines` is used here; the rest of `TuiView` is terminal chrome.
 import { buildView } from "../tui/view.js";
-import hub from "./client/hub.html";
-import index from "./client/index.html";
+import { browserPages } from "./browser-pages.js";
 import { SERVER_PORT, TOKEN_HEADER } from "./constants.js";
 import { createConversationListing } from "./conversation-list.js";
 import { createFolderPicker } from "./folder-picker.js";
@@ -266,10 +271,11 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
     // version are linkable at all; before them the page picked the artifact
     // with the most recent version entry and nothing else was reachable.
     routes: {
-      "/": hub,
-      "/c/:id": index,
-      "/c/:id/:artifactId": index,
-      "/c/:id/:artifactId/:version": index,
+      ...browserPages.assets,
+      "/": browserPages.hub,
+      "/c/:id": browserPages.index,
+      "/c/:id/:artifactId": browserPages.index,
+      "/c/:id/:artifactId/:version": browserPages.index,
     },
     fetch: async (req: Request): Promise<Response> => {
       try {
@@ -420,6 +426,70 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           }
         }
 
+        const approvalDecision = path.match(/^\/api\/conversations\/([^/]+)\/approvals\/decision$/);
+        if (approvalDecision && req.method === "POST") {
+          const id = decodeURIComponent(approvalDecision[1] ?? "");
+          if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+          let raw: unknown;
+          try {
+            raw = await req.json();
+          } catch {
+            return json({ error: "invalid-json" }, 400);
+          }
+          const decision = parseApprovalDecision(raw);
+          if (!decision)
+            return json(
+              {
+                error: "invalid-approval",
+                reason: "Use the offered request and choice with a decision ID.",
+              },
+              400,
+            );
+          return withWriter(dirForRequest(id), id, (host) => {
+            const result = host.decideApproval(decision, () => presenceHeld(host.dir) === true);
+            if (result.verdict === "refused")
+              return json(
+                {
+                  error: result.issue,
+                  reason:
+                    "This request cannot accept that answer. Refresh to check its current state.",
+                },
+                409,
+              );
+            const entry = result.state.approvals[decision.requestId];
+            return json({ approval: entry ? approvalView(entry, presenceHeld(host.dir)) : null });
+          });
+        }
+
+        const cancelInput = path.match(/^\/api\/conversations\/([^/]+)\/inputs\/([^/]+)\/cancel$/);
+        if (cancelInput && req.method === "POST") {
+          const id = decodeURIComponent(cancelInput[1] ?? "");
+          const inputId = decodeURIComponent(cancelInput[2] ?? "");
+          if (!validConversationId(id) || !isWireId(inputId))
+            return json(
+              {
+                error: "invalid-input-identity",
+                reason: "Invalid conversation or input identity.",
+              },
+              400,
+            );
+          return withWriter(dirForRequest(id), id, (host) => {
+            const result = host.controlConnection({ kind: "cancel-input", inputId });
+            if (result.verdict === "refused")
+              return json(
+                {
+                  error: result.issue,
+                  reason:
+                    result.issue === "input-already-dispatched"
+                      ? "This message has started dispatching. Cancellation is unavailable."
+                      : "This message cannot be cancelled. Check its delivery status.",
+                },
+                409,
+              );
+            return json({ inputId, status: "cancelled" });
+          });
+        }
+
         const recovery = path.match(/^\/api\/conversations\/([^/]+)\/inputs\/([^/]+)\/recovery$/);
         if (recovery && req.method === "POST") {
           const id = decodeURIComponent(recovery[1] ?? "");
@@ -493,18 +563,26 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           });
         }
 
+        const connection = path.match(/^\/api\/conversations\/([^/]+)\/connection$/);
+        if (connection && req.method === "GET") {
+          const id = decodeURIComponent(connection[1] ?? "");
+          if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+          return json(connectionControls(readConnection(dirForRequest(id)), records.rootDir));
+        }
+
         const read = path.match(/^\/api\/conversations\/([^/]+)\/?$/);
         if (read && req.method === "GET") {
           const id = decodeURIComponent(read[1] ?? "");
           if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
           const dir = dirForRequest(id);
           let snapshot: ReturnType<typeof viewSnapshot>;
+          const executorPresent = presenceHeld(dir);
           try {
             // Whether anything is driving comes from the presence lock, not
             // from the lease: an idle driver lets its lease lapse while
             // sitting perfectly healthy, and reading the lease alone made
             // the page say "agent-gone" while an agent was answering.
-            snapshot = viewSnapshot(dir, { presence: () => presenceHeld(dir) });
+            snapshot = viewSnapshot(dir, { presence: () => executorPresent });
           } catch (cause) {
             // The fold throws on an unparseable line rather than skipping it,
             // and `goodBytes` only ever covers a torn trailing write. Reporting
@@ -573,19 +651,59 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
               });
             }
           }
-          const lines = view.lines.map((l) =>
-            l.seq !== undefined && batchBySeq.has(l.seq)
-              ? { ...l, batch: batchBySeq.get(l.seq) }
-              : l,
+          const nativeRequired = requiresNativeConnection(snapshot.state);
+          const deliveries = new Map(
+            (nativeRequired
+              ? nativeInputViews(
+                  snapshot.state,
+                  snapshot.transcript,
+                  observeConnection(snapshot.state, {
+                    executorPresent,
+                    now: Date.now(),
+                    ownerPresence,
+                  }),
+                )
+              : []
+            ).map((entry) => [entry.inputId, entry]),
           );
+          const deliveryBySeq = new Map(
+            nativeRequired
+              ? snapshot.transcript.inputs.map(
+                  (input) => [input.seq, deliveries.get(input.id)] as const,
+                )
+              : [],
+          );
+          const nativeRefusals = new Set(
+            nativeRequired
+              ? snapshot.transcript.events
+                  .filter(
+                    ({ event }) => event.kind === EventKind.failure && event.class === "refusal",
+                  )
+                  .map(({ seq }) => seq)
+              : [],
+          );
+          const lines = view.lines.map((line) => ({
+            ...line,
+            ...(line.seq !== undefined && nativeRefusals.has(line.seq)
+              ? { nativeRefusal: true }
+              : {}),
+            ...(line.seq !== undefined && batchBySeq.has(line.seq)
+              ? { batch: batchBySeq.get(line.seq) }
+              : {}),
+            ...(line.kind === "human" && line.seq !== undefined && deliveryBySeq.get(line.seq)
+              ? { delivery: deliveryBySeq.get(line.seq) }
+              : {}),
+          }));
 
-          let executions = executionViews(
-            snapshot.state,
-            driving,
-            terminalPresence(snapshot.state.terminalParticipations, (owner) =>
-              owner ? ownerPresence(owner) : undefined,
-            ) ?? null,
-          ).filter((entry) => entry.status !== "completed");
+          let executions = nativeRequired
+            ? []
+            : executionViews(
+                snapshot.state,
+                driving,
+                terminalPresence(snapshot.state.terminalParticipations, (owner) =>
+                  owner ? ownerPresence(owner) : undefined,
+                ) ?? null,
+              ).filter((entry) => entry.status !== "completed");
           if (executions.some((entry) => entry.actions.length > 0)) {
             const available = await settings.recovery(dir, snapshot.state);
             executions = executions.map((entry) => ({
@@ -597,6 +715,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
                   : entry.reason,
             }));
           }
+          const approvalRevision = `${snapshot.state.approvalRevision}:${executorPresent ?? "unknown"}`;
           return json({
             conversationId: id,
             lines,
@@ -605,7 +724,12 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             // and working look identical otherwise, and the question "is
             // something happening?" had no answer on the surface.
             executions,
+            approvalRevision,
+            ...(url.searchParams.get("approvalRevision") === approvalRevision
+              ? {}
+              : { approvals: approvalViews(snapshot.state, executorPresent) }),
             activity: {
+              ...(nativeRequired ? { nativeConnectionRequired: true } : {}),
               // Whether the NEWEST turn has produced a terminal event.
               //
               // Not `state.turn`: that names the most recent turn so an abort
@@ -647,11 +771,15 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             // are never one field: after a refused re-spawn they differ, and
             // the difference is the story the page has to tell. Null is the
             // state of every record no choice has been made in.
-            ...(await settings.project(dir, {
-              ...(attached?.harness ? { harness: attached.harness } : {}),
-              ...(attached?.profile ? { profile: attached.profile } : {}),
-              ...(typeof observed.model === "string" ? { model: observed.model } : {}),
-            })),
+            ...(await settings.project(
+              dir,
+              {
+                ...(attached?.harness ? { harness: attached.harness } : {}),
+                ...(attached?.profile ? { profile: attached.profile } : {}),
+                ...(typeof observed.model === "string" ? { model: observed.model } : {}),
+              },
+              nativeRequired,
+            )),
             // The lists the choice is made from (RFC-12): the four harnesses,
             // each harness's models and efforts. Read once per process through
             // the harness seam, so a poll costs no spawn.
@@ -771,14 +899,14 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           const dir = dirForRequest(id);
           if (!existsSync(join(dir, "log.ndjson"))) return json({ error: "no-such-record" }, 404);
           const { html, basedOn } = b;
-          return withWriter(dir, id, (host) => {
+          return withWriter(dir, id, async (host) => {
             // The next version in the single ordered list. There is no
             // branching: a save based on a version the agent has since
             // replaced still appends at the end, recording what it was
             // working from. The agent reconciles; lucid does not merge.
             const current = host.artifactHeads().get(artifactId) ?? 0;
             if (current === 0) return json({ error: "no-such-artifact" }, 404);
-            const result = host.writeArtifact({
+            const result = await host.writeArtifact({
               artifactId,
               version: current + 1,
               author: "human",
@@ -878,7 +1006,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           const dir = dirForRequest(id);
           if (!existsSync(join(dir, "log.ndjson"))) return json({ error: "no-such-record" }, 404);
           const { version } = b;
-          return withWriter(dir, id, (host) => {
+          return withWriter(dir, id, async (host) => {
             const current = host.artifactHeads().get(artifactId) ?? 0;
             if (current === 0) return json({ error: "unknown-artifact" }, 404);
             // Restoring what is already current would append a copy that
@@ -886,7 +1014,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             if (version === current) return json({ error: "restore-of-current" }, 409);
             const from = host.readArtifact(artifactId, version);
             if (from === null) return json({ error: "version-unreadable" }, 404);
-            const result = host.writeArtifact({
+            const result = await host.writeArtifact({
               artifactId,
               version: current + 1,
               author: "human",
@@ -1093,7 +1221,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
               return json({ error: "text-required", inputId, verdict: "refused" }, 400);
             const saved = preferenceState(dir);
             const completed =
-              !saved.error && !saved.revision
+              !requiresNativeConnection(host.state()) && !saved.error && !saved.revision
                 ? (await settings.project(dir)).conversationSettings.selected
                 : null;
             return reply(

@@ -228,6 +228,50 @@ shipped capability.
 
 ## Refusals are the signal
 
+Connection control writes report `invalid-connection` for malformed facts,
+`connection-unverified` when the current native registration or owner cannot
+be corroborated, and `connection-conflict` when an action or binding conflicts
+with its durable identity. These are internal control operations, not source
+frames. Keep the published artifact and saved feedback; correct registration
+or ownership before retrying. A connection refusal never authorizes a fresh
+native session.
+
+`connection-folder-mismatch` keeps the artifact published when its working
+folder differs from the native registration. `connection-not-admitted` means
+the bound conversation has no same-session continuation admission; saved
+feedback must remain pending. `connection-folder-unverified`
+means the record has no associated folder or path evidence is unavailable.
+Connect from the intended native session and verify the folder before retrying.
+
+`receipt-stale` means the acknowledgement does not match the recorded offer,
+participation or current epoch. It cannot mark feedback received. An exact
+repeat of a recorded receipt returns that receipt without another append.
+`receipt-required` refuses a response outcome until that offer has a confirmed
+receipt. It does not infer delivery from the response text.
+`input-already-dispatched` refuses cancellation after dispatch began. It
+preserves the offer and never stops the human-owned native session.
+
+`lucid connection receipt CONVERSATION --offer OFFER [--json]` records a
+receipt. `lucid connection respond CONVERSATION --offer OFFER --request FILE
+[--json]` records one outcome from a JSON object with `kind` (answer,
+question, refusal, failure) and plain-text `text`. Both commands derive the
+current native registration from process ancestry. They take no native-ID
+override and no executor lease. The host chooses action identity under the
+append lock, so repeated commands return the recorded result.
+
+`lucid connection cancel-input CONVERSATION --input INPUT [--json]` cancels
+unsent feedback in a bound conversation. Local record access authorizes
+cancellation; it needs no native registration. Each control command reports
+accepted or refused, and a refusal exits nonzero. Native lifecycle adapters
+and listener transports require their separate interface acceptance lanes.
+
+Listener readiness requires a verified native owner, the admitted listener
+process, an unexpired participation, and the existing executor lock. The
+host verifies the listener process against its own process identity. A
+temporary lock contender cannot stand in for a departed listener. Listener
+shutdown revokes readiness without recording native departure; only an
+explicit resume re-enables a disabled participation.
+
 Internal execution writes also report typed issues: `invalid-execution`
 for a malformed fact, `executor-required` without the executor lease,
 `execution-stale` for an outdated attempt or conflicting action identity,
@@ -235,6 +279,12 @@ for a malformed fact, `executor-required` without the executor lease,
 `execution-ineligible` when the requested transition cannot apply. Re-read
 the current attempt before selecting a recovery action. These facts are
 internal record entries, not source event frames.
+
+Protected native approval writes report `invalid-approval` for malformed
+facts, `approval-unavailable` when the current managed attempt cannot answer,
+and `approval-conflict` when a request identity names different content.
+Only the current executor can publish these requests. A source event with
+the same event kind carries no approval authority.
 
 Every refusal names its `issue` from a closed set and **never
 half-applies** the frame. The right response depends on the class - "fix

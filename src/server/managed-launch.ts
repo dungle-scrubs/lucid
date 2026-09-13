@@ -1,9 +1,10 @@
 import { statSync } from "node:fs";
 import { ownerPresence, terminalPresence } from "../process-owner.js";
+import { nativeOwners } from "../protocol/connection.js";
 import { viewConversation } from "../store/conversation-host.js";
 import type { Discovery } from "../store/discovery.js";
 import { pathsForDir } from "../store/errors.js";
-import { managedCandidates } from "../store/managed-readiness.js";
+import { workerCandidates } from "../store/managed-readiness.js";
 import { presenceHeld } from "../store/presence.js";
 
 export interface ManagedLaunch {
@@ -36,14 +37,13 @@ export function createManagedLaunchReconciler(
           cached?.fingerprint === fingerprint ? cached.snapshot : viewConversation(record.dir);
         states.set(record.dir, { fingerprint, snapshot });
         const state = snapshot.state;
+        const owners = nativeOwners(state);
         if (
-          state.lastTerminalParticipation &&
-          terminalPresence(state.terminalParticipations, (owner) =>
-            owner ? ownerPresence(owner) : undefined,
-          ) !== false
+          owners.length > 0 &&
+          terminalPresence(owners, (owner) => (owner ? ownerPresence(owner) : undefined)) !== false
         )
           continue;
-        const inputId = managedCandidates(record.dir, state, snapshot.artifactHeads)[0];
+        const inputId = workerCandidates(record.dir, state, snapshot.artifactHeads)[0];
         if (inputId !== undefined) launch.request(root, record.conversationId, inputId);
       } catch {
         states.delete(record.dir);

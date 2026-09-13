@@ -1,6 +1,11 @@
+import { refuseExecution } from "./execution-result.js";
+
+export { refuseExecution } from "./execution-result.js";
+
 import { type CompatibilityDiagnostic, parseCompatibilityDiagnostic } from "./compatibility.js";
 import type { HarnessName, ProtocolIssue } from "./frames.js";
 import { HARNESS_NAMES, isWireId } from "./frames.js";
+import { settleApprovals } from "./native-approvals.js";
 import type { ChannelState, ReduceResult } from "./reducer.js";
 
 export interface ExecutionDriver {
@@ -106,6 +111,14 @@ export type ExecutionState = ExecutionBase &
       }
   );
 
+export function hasUnsettledExecution(state: ChannelState): boolean {
+  return Object.values(state.executions).some(
+    (entry) =>
+      entry.kind === "attempt-started" ||
+      (entry.kind === "attempt-ended" && entry.outcome.kind === "uncertain"),
+  );
+}
+
 export function recoveryPolicy(execution: ExecutionState): {
   readonly actions: readonly ("retry" | "continue-fresh")[];
   readonly acknowledgeEffects: boolean;
@@ -142,6 +155,19 @@ const id = (v: unknown): v is string => typeof v === "string" && isWireId(v);
 const nat = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
 const text = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= 4096;
 
+export function parseContextBoundary(value: unknown): ContextBoundary | null {
+  if (
+    !object(value) ||
+    !nat(value.from) ||
+    !nat(value.through) ||
+    value.from > value.through ||
+    typeof value.digest !== "string" ||
+    !/^[a-f0-9]{64}$/.test(value.digest)
+  )
+    return null;
+  return { digest: value.digest, from: value.from, through: value.through };
+}
+
 /** Both API writes and log replay validate the internal payload here. */
 export function parseExecutionFact(value: unknown): ExecutionFact | null {
   if (!object(value) || !id(value.inputId) || !nat(value.attempt)) return null;
@@ -151,15 +177,11 @@ export function parseExecutionFact(value: unknown): ExecutionFact | null {
       return value.attempt === 0 ? { ...base, attempt: 0, kind: value.kind } : null;
     case "attempt-started": {
       const { context: c, driver: d, native: n, turnId, epoch } = value;
+      const context = parseContextBoundary(c);
       if (
         !id(turnId) ||
         !nat(epoch) ||
-        !object(c) ||
-        !nat(c.from) ||
-        !nat(c.through) ||
-        c.from > c.through ||
-        typeof c.digest !== "string" ||
-        !/^[a-f0-9]{64}$/.test(c.digest) ||
+        !context ||
         !object(d) ||
         !HARNESS_NAMES.includes(d.harness as HarnessName) ||
         !id(d.model) ||
@@ -175,7 +197,7 @@ export function parseExecutionFact(value: unknown): ExecutionFact | null {
         kind: value.kind,
         epoch,
         turnId,
-        context: { digest: c.digest, from: c.from, through: c.through },
+        context,
         driver: {
           effort: d.effort,
           harness: d.harness as HarnessName,
@@ -285,27 +307,6 @@ export function parseExecutionFact(value: unknown): ExecutionFact | null {
   }
 }
 
-export function refuseExecution(
-  state: ChannelState,
-  now: number,
-  issue: ProtocolIssue,
-): ReduceResult {
-  return {
-    verdict: "refused",
-    issue,
-    state,
-    effects: [],
-    record: {
-      verdict: "refused",
-      kind: "input",
-      conversationId: state.conversationId,
-      epoch: state.epoch,
-      issue,
-      now,
-    },
-  };
-}
-
 export function reduceExecution(
   state: ChannelState,
   raw: unknown,
@@ -361,7 +362,22 @@ export function reduceExecution(
     effects: [],
     state: duplicate
       ? state
-      : { ...state, seq: state.seq + 1, executions: { ...state.executions, [fact.inputId]: next } },
+      : {
+          ...state,
+          seq: state.seq + 1,
+          executions: { ...state.executions, [fact.inputId]: next },
+          ...(next.kind === "attempt-ended"
+            ? settleApprovals(
+                state,
+                (request) =>
+                  request.inputId === fact.inputId &&
+                  request.attempt === next.attempt &&
+                  request.turnId === next.start.turnId &&
+                  request.epoch === next.start.epoch,
+                next.outcome.kind === "completed" ? "turn-ended" : "process-ended",
+              )
+            : {}),
+        },
     record: {
       verdict: "accepted",
       kind: "input",
@@ -417,14 +433,7 @@ export function reduceExecution(
     )
       return reject();
     // A conversation with an unresolved external attempt cannot run later work.
-    if (
-      Object.values(state.executions).some(
-        (e) =>
-          e.kind === "attempt-started" ||
-          (e.kind === "attempt-ended" && e.outcome.kind === "uncertain"),
-      )
-    )
-      return reject("execution-blocked");
+    if (hasUnsettledExecution(state)) return reject("execution-blocked");
     const authorization = current.kind === "held" ? current.authorization : current.kind;
     if (authorization === "fresh-authorized" && fact.native.kind !== "fresh") return reject();
     return accept({ ...fact, actions: current.actions, ...(previous ? { previous } : {}) });

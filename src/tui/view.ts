@@ -41,6 +41,7 @@ import type { Transcript, TranscriptInput } from "../store/store.js";
  * durable last-outcome the transcript records (which, unlike live state,
  * keeps applied and distinguishes rejected). */
 const INPUT_MARK: Record<TranscriptInput["status"], string> = {
+  cancelled: "cancelled",
   outstanding: "…", // requested, no disposition yet
   queued: "»", // accepted, held for a boundary
   applied: "✓", // durably applied

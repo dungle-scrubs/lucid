@@ -87,8 +87,8 @@ const rig = () => {
       proc.emit({ kind: "message", role: "assistant", text });
       proc.emit({ kind: "done", exitCode: null, cause: "clean" });
     },
-    write: (version: number, author: string, values?: Record<string, string>) =>
-      host.writeArtifact({
+    write: async (version: number, author: string, values?: Record<string, string>) =>
+      await host.writeArtifact({
         artifactId: "doc",
         version,
         author,
@@ -108,13 +108,13 @@ describe("a save reaches the agent on the next thing it is told", () => {
   test("a version written after the first input is named on the second", async () => {
     const r = rig();
     try {
-      r.write(1, "agent");
+      await r.write(1, "agent");
       r.say("first");
       await settle();
 
       // What the browser does on Save: a new version, authored by the
       // person, based on the one they were looking at.
-      r.write(2, "human", { e5: "Kevin" });
+      await r.write(2, "human", { e5: "Kevin" });
       r.say("second");
       await settle();
 
@@ -134,10 +134,10 @@ describe("a save reaches the agent on the next thing it is told", () => {
   test("every later input carries the state too, not just the one after a save", async () => {
     const r = rig();
     try {
-      r.write(1, "agent");
+      await r.write(1, "agent");
       r.say("one");
       await settle();
-      r.write(2, "human", { e5: "Kevin" });
+      await r.write(2, "human", { e5: "Kevin" });
       r.say("two");
       await settle();
       r.say("three");
@@ -156,7 +156,7 @@ describe("a save reaches the agent on the next thing it is told", () => {
   test("the protocol instructions are said once, not every time", async () => {
     const r = rig();
     try {
-      r.write(1, "agent");
+      await r.write(1, "agent");
       r.say("one");
       await settle();
       r.say("two");
@@ -182,7 +182,7 @@ describe("a save reaches the agent on the next thing it is told", () => {
   test("a batch of notes sent later still says what a batch of notes is", async () => {
     const r = rig();
     try {
-      r.write(1, "agent");
+      await r.write(1, "agent");
       r.say("just talking");
       await settle();
 
@@ -243,7 +243,7 @@ describe("a patch that missed gets the document back", () => {
   test("its own current version rides on the next prompt, and not before", async () => {
     const r = rig();
     try {
-      r.write(1, "agent");
+      await r.write(1, "agent");
       r.say("first");
       await settle();
       // Before any miss, the agent is not sent what it already wrote.
@@ -267,7 +267,7 @@ describe("a patch that missed gets the document back", () => {
     // A debt that never clears would put it back on every turn.
     const r = rig();
     try {
-      r.write(1, "agent");
+      await r.write(1, "agent");
       r.say("first");
       await settle();
       r.emitAssistant(missingAnchor("doc", 1));
@@ -289,7 +289,7 @@ describe("a patch that missed gets the document back", () => {
     // context on a problem the reason already solved.
     const r = rig();
     try {
-      r.write(1, "agent");
+      await r.write(1, "agent");
       r.say("first");
       await settle();
       const malformed = `\`\`\`lucid-artifact\n${JSON.stringify({ id: "doc", replaces: 1, contentType: "text/html", form: "patch" })}\n{not json\n\`\`\``;
@@ -306,10 +306,10 @@ describe("a patch that missed gets the document back", () => {
   test("a person's save is still sent whether or not anything missed", async () => {
     const r = rig();
     try {
-      r.write(1, "agent");
+      await r.write(1, "agent");
       r.say("first");
       await settle();
-      r.write(2, "human");
+      await r.write(2, "human");
       r.say("second");
       await settle();
       expect(r.sent()[1]).toContain("<p>v2</p>");

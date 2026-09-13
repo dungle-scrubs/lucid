@@ -29,6 +29,7 @@ const doneClean = { kind: "done", exitCode: null, cause: "clean" };
 
 const rig = (
   opts: {
+    probeArtifactLink?: import("../../src/links/check-web-link.js").WebLinkProbe;
     adapter?: "fake" | "durable";
     mode?: "session" | "turn";
     pendingInput?: { id: string; text: string };
@@ -41,6 +42,7 @@ const rig = (
   const spawner = fakeSpawner([...procs]);
   let receive: (frame: import("../../src/protocol/frames.js").Frame) => void = () => {};
   const host = openConversation(join(root, "conv-1"), {
+    probeArtifactLink: opts.probeArtifactLink,
     now: () => 1_000,
     presence: () => undefined,
     executorLease: () => true,
@@ -559,7 +561,7 @@ describe.each(["fake", "durable"] as const)("a patch that revises a document (%s
     // cheaply by the per-replacement bound (E-PATCH-05).
     const r = await withV1("<p>seed</p>");
     const huge = `<p>seed</p>${"z".repeat(ARTIFACT_BYTES_MAX - 100)}`;
-    const wrote = r.artifactHost.writeArtifact({
+    const wrote = await r.artifactHost.writeArtifact({
       artifactId: "doc-1",
       version: 2,
       author: "agent",
@@ -872,14 +874,14 @@ describe.each(["fake", "durable"] as const)("a conversation holds one artifact (
     // R5. No such record can be created now, but one written by an older
     // build must stay a working conversation.
     const r = rig({ mode: "session" });
-    r.artifactHost.writeArtifact({
+    await r.artifactHost.writeArtifact({
       artifactId: "alpha",
       version: 1,
       author: "agent",
       contentType: "text/html",
       bytes: "<p>a</p>",
     });
-    r.artifactHost.writeArtifact({
+    await r.artifactHost.writeArtifact({
       artifactId: "beta",
       version: 1,
       author: "agent",
@@ -903,7 +905,7 @@ describe.each(["fake", "durable"] as const)("a conversation holds one artifact (
   test("a record holding two artifacts refuses a third, naming both", async () => {
     const r = rig({ mode: "session" });
     for (const id of ["alpha", "beta"]) {
-      r.artifactHost.writeArtifact({
+      await r.artifactHost.writeArtifact({
         artifactId: id,
         version: 1,
         author: "agent",
@@ -928,7 +930,7 @@ describe.each(["fake", "durable"] as const)("a conversation holds one artifact (
 
   test("an enormous id is quoted back within the refusal bound", async () => {
     const r = rig({ mode: "session" });
-    r.artifactHost.writeArtifact({
+    await r.artifactHost.writeArtifact({
       artifactId: "界".repeat(128),
       version: 1,
       author: "agent",
@@ -976,3 +978,71 @@ test.each(["fake", "durable"] as const)(
     }
   },
 );
+
+test("closing the headless source cancels pending link admission without a late version", async () => {
+  const started = Promise.withResolvers<void>();
+  const pending = Promise.withResolvers<{ status: "valid" }>();
+  const r = rig({
+    probeArtifactLink: () => {
+      started.resolve();
+      return pending.promise;
+    },
+  });
+  try {
+    r.host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
+    await flush();
+    r.accept("in-1", "turn-1");
+    await flush();
+    r.proc.emit(
+      assistant(
+        artifactFence("doc-1", null, "text/html", '<a href="https://example.com">Source</a>'),
+      ),
+    );
+    await started.promise;
+    r.source.close();
+    await r.source.settled;
+    pending.resolve({ status: "valid" });
+    await flush();
+    expect(r.host.readArtifact("doc-1", 1)).toBeNull();
+  } finally {
+    r.source.close();
+    r.host.close();
+  }
+});
+
+test("a broken external link is refused through the harness emission path", async () => {
+  const r = rig({ probeArtifactLink: async () => ({ status: "broken", reason: "HTTP 404" }) });
+  try {
+    r.host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
+    await flush();
+    r.accept("in-1", "turn-1");
+    await flush();
+    r.proc.emit(
+      assistant(
+        artifactFence(
+          "doc-1",
+          null,
+          "text/html",
+          '<a href="https://example.com/missing">Source</a>',
+        ),
+      ),
+    );
+    r.proc.emit(doneClean);
+    await flush();
+    await flush();
+    expect(r.host.readArtifact("doc-1", 1)).toBeNull();
+    expect(
+      r.host
+        .transcript()
+        .events.some(
+          ({ event }) =>
+            "message" in event &&
+            typeof event.message === "string" &&
+            event.message.includes("HTTP 404"),
+        ),
+    ).toBe(true);
+  } finally {
+    r.source.close();
+    r.host.close();
+  }
+});

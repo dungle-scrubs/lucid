@@ -149,6 +149,8 @@
   width: 100%;
   height: calc(100% - 60px);
   border: 0;
+  /* Same backing as the reader; leave the document's root transparent. */
+  background: Canvas;
 }
 @container content-comparison (min-width: 820px) {
   .comparison-row {

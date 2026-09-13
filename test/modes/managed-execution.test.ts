@@ -1,14 +1,16 @@
 import { expect, test } from "bun:test";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HarnessRunner } from "../../src/harness/runner.js";
 import { createManagedExecution } from "../../src/modes/managed-execution.js";
+import type { ApprovalDecision } from "../../src/protocol/native-approvals.js";
 import { createConversationHost } from "../../src/store/conversation-host.js";
 import { replaceSettings } from "../../src/store/settings.js";
 import { createConversationRecord } from "../../src/store/store.js";
 
-async function setup() {
+async function setup(resume?: string) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "lucid-managed-outcomes-")));
   const record = createConversationRecord(root, "outcomes", { workingDirectory: root });
   const driver = {
@@ -42,6 +44,18 @@ async function setup() {
       attachmentOrigin: "automatic",
     }),
   );
+  if (resume)
+    expect(
+      host.handleFrame(
+        JSON.stringify({
+          kind: "event",
+          epoch: 1,
+          n: 1,
+          turnId: "previous",
+          event: { kind: "identity", sessionId: resume, authority: "harness-minted" },
+        }),
+      ).verdict,
+    ).toBe("accepted");
   const runner: HarnessRunner = {
     inspect: async () => ({
       name: "claude",
@@ -76,13 +90,13 @@ async function setup() {
     text: "Update this workspace",
     turnId: "turn",
     profile: "headless-turn",
-    native: { kind: "fresh" },
+    native: resume ? { kind: "resume", sessionId: resume } : { kind: "fresh" },
     signal: new AbortController().signal,
   });
   expect(prepared.kind).toBe("ready");
   const path = execution.offeredPath("turn");
   if (!path) throw new Error("Missing context copy");
-  let n = 0;
+  let n = resume ? 1 : 0;
   return {
     host,
     execution,
@@ -129,14 +143,88 @@ test("a completed managed turn confirms coverage and settles once after its stre
   }
 });
 
-test.each(["rejected", "failed", "lost", "partial-rejected"] as const)(
+test("one managed attempt owns its approval channel until cleanup, with no replacement channel", async () => {
+  const f = await setup("native");
+  const requestId = randomUUID();
+  const decision = { id: randomUUID(), requestId, choiceId: "deny" };
+  const writes: ApprovalDecision[] = [];
+  let cancelled = false;
+  const channel = {
+    alive: () => !cancelled,
+    answer: (answer: ApprovalDecision) => {
+      writes.push(answer);
+    },
+    cancel: () => {
+      cancelled = true;
+    },
+  };
+  try {
+    const approvals = f.execution.connectApprovals("turn", channel);
+    approvals.event({
+      v: 1,
+      kind: "approval-request",
+      requestId,
+      sessionId: "native",
+      turnId: "native-turn",
+      category: "command",
+      details: "Synthetic command requiring a decision",
+      choices: [{ id: "deny", label: "Deny", scope: "deny" }],
+    });
+    expect(f.host.decideApproval(decision, () => true).verdict).toBe("accepted");
+    expect(writes).toEqual([]);
+    f.execution.recordChanged();
+    f.execution.recordChanged();
+    expect(writes).toEqual([decision]);
+    let replacementCancelled = false;
+    expect(() =>
+      f.execution.connectApprovals("turn", {
+        ...channel,
+        cancel: () => {
+          replacementCancelled = true;
+        },
+      }),
+    ).toThrow();
+    expect(replacementCancelled).toBe(true);
+    expect(cancelled).toBe(false);
+    cancelled = true;
+    approvals.closed();
+    f.execution.turnSettled("turn");
+    expect(f.host.state().approvals[requestId]?.status).toBe("unavailable");
+    f.execution.recordChanged();
+    expect(writes).toEqual([decision]);
+  } finally {
+    f.close();
+  }
+});
+
+test.each(["rejected", "failed", "lost", "partial-rejected", "approval-rejected"] as const)(
   "managed %s outcome keeps context unconfirmed and preserves the input",
   async (kind) => {
-    const f = await setup();
+    const f = await setup(kind === "approval-rejected" ? "native" : undefined);
     try {
       f.event({ kind: "identity", sessionId: "native", authority: "harness-minted" });
       if (kind === "partial-rejected") f.event({ kind: "tool", name: "write", phase: "end" });
-      if (kind === "rejected" || kind === "partial-rejected")
+      if (kind === "approval-rejected") {
+        const approvals = f.execution.connectApprovals("turn", {
+          alive: () => true,
+          answer: () => {
+            throw new Error("No decision was made");
+          },
+          cancel: () => {},
+        });
+        approvals.event({
+          v: 1,
+          kind: "approval-request",
+          requestId: randomUUID(),
+          sessionId: "native",
+          turnId: "native-turn",
+          category: "command",
+          details: "The running native turn asks for permission",
+          choices: [{ id: "deny", label: "Deny", scope: "deny" }],
+        });
+        approvals.closed();
+      }
+      if (kind === "rejected" || kind === "partial-rejected" || kind === "approval-rejected")
         f.event({ kind: "failure", class: "rejected", message: "Synthetic refusal" });
       if (kind !== "lost") f.event({ kind: "done", cause: "failed", exitCode: 2 });
       f.execution.close();

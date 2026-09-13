@@ -149,6 +149,7 @@ export const fakeArtifactHost = (overrides: Partial<ArtifactHost> = {}): Artifac
   let cursor = 0;
   const empty = foldCollect("fake", "fake-secret", Buffer.alloc(0));
   return {
+    dispatchOrdinary: (_epoch, invoke) => ({ verdict: "accepted", value: invoke() }),
     cursor: () => cursor,
     collectEffects: () => ({ ...empty, entries: empty.collected }),
     advanceCursor: (offset) => {
@@ -157,7 +158,7 @@ export const fakeArtifactHost = (overrides: Partial<ArtifactHost> = {}): Artifac
     artifactHeads: () =>
       new Map([...versions].map(([id, values]) => [id, Math.max(...values.keys())])),
     readArtifact: (id, version) => versions.get(id)?.get(version) ?? null,
-    writeArtifact: (params) => {
+    writeArtifact: async (params) => {
       if (params.bytes.length > ARTIFACT_BYTES_MAX)
         return { verdict: "refused", issue: "artifact-too-large" };
       const values = versions.get(params.artifactId) ?? new Map<number, ArtifactVersion>();

@@ -32,6 +32,7 @@ import { createComparisonDelivery } from "./comparison-delivery.js";
  */
 
 import type { HarnessEvent } from "../harness/events.js";
+import type { StreamTurnOptions } from "../harness/runner.js";
 import {
   type HarnessName,
   type HarnessRunner,
@@ -166,6 +167,7 @@ export type SourceEnd =
 export interface ArtifactHost
   extends Pick<
     ConversationHost,
+    | "dispatchOrdinary"
     | "cursor"
     | "collectEffects"
     | "advanceCursor"
@@ -178,6 +180,7 @@ export interface ArtifactHost
 }
 
 export const hostSeamFor = (host: ConversationHost): ArtifactHost => ({
+  dispatchOrdinary: (epoch, invoke) => host.dispatchOrdinary(epoch, invoke),
   comparisonSnapshot: (id) => host.comparisonSnapshot(id),
   inputStatus: (id) => host.state().inputs.find((input) => input.id === id)?.status,
   cursor: () => host.cursor(),
@@ -215,6 +218,7 @@ export interface HeadlessDeps {
         readonly kind: "ready";
         readonly prompt: string;
         readonly native: NativeIntent;
+        readonly nativeApprovals?: StreamTurnOptions["nativeApprovals"];
         readonly notice?: string;
       }
   >;
@@ -280,12 +284,12 @@ export { HeadlessError } from "./sequencer.js";
 // Artifact handling helper — owns version assignment and refusal recording.
 // Lucid assigns version, author, hash; agent chooses id and replaces.
 // See RFC-06 Emission.
-const handleArtifactMessage = (
+const handleArtifactMessage = async (
   text: string,
   turnId: string,
   deps: HeadlessDeps,
   ctx: HostContext,
-): void => {
+): Promise<void> => {
   const detections = detectArtifactBlocks(text);
   if (detections.length === 0) return;
   // Local map for versions assigned earlier in this same message, so two
@@ -367,19 +371,22 @@ const handleArtifactMessage = (
 
     if (current === 0) {
       // Unknown id — starts new artifact at v1, regardless of replaces.
-      const res = deps.host.writeArtifact({
+      const res = await deps.host.writeArtifact({
+        signal: ctx.artifactSignal,
         artifactId: header.id,
         version: 1,
         author: "agent",
         contentType: header.contentType,
         bytes,
       });
+      if (ctx.isStopped()) return;
       if (res.verdict === "accepted") {
         localVersions.set(header.id, 1);
       } else {
+        if (res.issue === "artifact-version-exists") ctx.owedBytes.add(header.id);
         ctx.sequencer.emit(turnId, {
           kind: EventKind.error,
-          message: `artifact ${header.id} not stored: ${res.issue}`,
+          message: `artifact ${header.id} not stored: ${res.issue}${"message" in res ? `: ${res.message}` : ""}`,
           terminal: false,
         });
       }
@@ -453,19 +460,22 @@ const handleArtifactMessage = (
       }
     }
     const next = current + 1;
-    const res = deps.host.writeArtifact({
+    const res = await deps.host.writeArtifact({
+      signal: ctx.artifactSignal,
       artifactId: header.id,
       version: next,
       author: "agent",
       contentType: header.contentType,
       bytes: document,
     });
+    if (ctx.isStopped()) return;
     if (res.verdict === "accepted") {
       localVersions.set(header.id, next);
     } else {
+      if (res.issue === "artifact-version-exists") ctx.owedBytes.add(header.id);
       ctx.sequencer.emit(turnId, {
         kind: EventKind.error,
-        message: `artifact ${header.id} v${next} not stored: ${res.issue}`,
+        message: `artifact ${header.id} v${next} not stored: ${res.issue}${"message" in res ? `: ${res.message}` : ""}`,
         terminal: false,
       });
     }
@@ -477,8 +487,10 @@ const handleArtifactMessage = (
 // ---------------------------------------------------------------------------
 
 interface HostContext {
+  readonly artifactSignal: AbortSignal;
   preparedNotice(message: string | undefined): void;
   handedOver(): void;
+  harnessSpoke(): void;
   isStopped(): boolean;
   stop(end: Extract<SourceEnd, { kind: "store-failed" }>): void;
   warning(event: HarnessEvent, operation: string, artifactId: string): void;
@@ -510,6 +522,20 @@ interface HostContext {
   delivering(): void;
 }
 
+/** The callback starts work synchronously; returned promises outlive the short append lock. */
+function ordinaryDispatch<TValue>(
+  deps: HeadlessDeps,
+  ctx: HostContext,
+  invoke: () => TValue,
+): TValue {
+  const admitted = deps.host.dispatchOrdinary(ctx.sequencer.epoch, invoke);
+  if (admitted.verdict === "refused") {
+    deps.onDispatchRejected?.(ctx.getTurnId(), "dispatch-not-called");
+    throw new ExecutionSettlementError(admitted.issue);
+  }
+  return admitted.value;
+}
+
 interface StrategyHandle {
   recordChanged(): void;
   /** Handle an input arrival — must disposition via sequencer and arrange
@@ -538,32 +564,39 @@ const sessionStrategy = (
   // hcn session carries --model, --provider and (since 0.6.0) --effort.
   const cancellation = new AbortController();
   const open = (resume: string | undefined) =>
-    deps.runner.openSession({
-      signal: cancellation.signal,
-      ...(deps.cwd === undefined ? {} : { cwd: deps.cwd }),
-      harness: deps.harness,
-      sessionId: deps.sessionId,
-      // Continue the session this harness last held in this record, if lucid
-      // found one. The id comes from attach-ok and nowhere else.
-      ...(resume === undefined ? {} : { resume }),
-      ...(deps.model === undefined ? {} : { model: deps.model }),
-      ...(deps.provider === undefined ? {} : { provider: deps.provider }),
-      ...(deps.effort === undefined ? {} : { effort: deps.effort }),
-    });
+    ordinaryDispatch(deps, ctx, () =>
+      deps.runner.openSession({
+        signal: cancellation.signal,
+        ...(deps.cwd === undefined ? {} : { cwd: deps.cwd }),
+        harness: deps.harness,
+        sessionId: deps.sessionId,
+        // Continue the session this harness last held in this record, if lucid
+        // found one. The id comes from attach-ok and nowhere else.
+        ...(resume === undefined ? {} : { resume }),
+        ...(deps.model === undefined ? {} : { model: deps.model }),
+        ...(deps.provider === undefined ? {} : { provider: deps.provider }),
+        ...(deps.effort === undefined ? {} : { effort: deps.effort }),
+      }),
+    );
   const deferred = Promise.withResolvers<SessionHandle>();
   const opening = deferred.promise;
   let openingStarted = false;
   const startOpening = (resume: string | undefined): Promise<SessionHandle> => {
     if (openingStarted) return opening;
     openingStarted = true;
-    deferred.resolve(
-      deps.beforeProcess
-        ? deps.beforeProcess(resume, cancellation.signal).then(() => {
-            if (cancellation.signal.aborted) throw new Error("Source closed before process start");
-            return open(resume);
-          })
-        : open(resume),
-    );
+    try {
+      deferred.resolve(
+        deps.beforeProcess
+          ? deps.beforeProcess(resume, cancellation.signal).then(() => {
+              if (cancellation.signal.aborted)
+                throw new Error("Source closed before process start");
+              return open(resume);
+            })
+          : open(resume),
+      );
+    } catch (cause) {
+      deferred.reject(cause);
+    }
     return opening;
   };
   if (!deps.prepareTurn) startOpening(ctx.resumeSessionId);
@@ -600,6 +633,8 @@ const sessionStrategy = (
     received.delete(id);
     ctx.sequencer.disposition(id, "rejected", reason);
   };
+  const rejectDelivery = (id: string, cause: unknown): void =>
+    reject(id, cause instanceof ExecutionSettlementError ? cause.message : "session closed");
   let artifactPreambleSent = false;
 
   const refusePrepared = (cause: unknown, fallbackCode: string): void => {
@@ -705,7 +740,7 @@ const sessionStrategy = (
       // (RFC-05 R7) — the same discipline as never mirroring the harness
       // normaliser's vocabulary anywhere else.
       void opening
-        .then((session) => session.answer(id, composed))
+        .then((session) => ordinaryDispatch(deps, ctx, () => session.answer(id, composed)))
         .then((ans) => {
           if (ans.disposition === "rejected" && ans.reason === "no-open-question") {
             // The harness disagrees that a question is open. lucid replaced
@@ -723,7 +758,11 @@ const sessionStrategy = (
               terminal: false,
             });
             return opening
-              .then((session) => session.send(id, `${LUCID_REQUEST_GUIDANCE}\n\n${text}`))
+              .then((session) =>
+                ordinaryDispatch(deps, ctx, () =>
+                  session.send(id, `${LUCID_REQUEST_GUIDANCE}\n\n${text}`),
+                ),
+              )
               .then((sent) => {
                 if (sent.disposition === "rejected") {
                   reject(id, sent.reason ?? "send rejected");
@@ -732,8 +771,8 @@ const sessionStrategy = (
                 ctx.expected.push({ inputId: id, applied: true });
                 ctx.sequencer.disposition(id, "applied");
               })
-              .catch(() => {
-                reject(id, "session closed");
+              .catch((cause: unknown) => {
+                rejectDelivery(id, cause);
               });
           }
           if (ans.disposition === "rejected") {
@@ -743,8 +782,8 @@ const sessionStrategy = (
           ctx.expected.push({ inputId: id, applied: true });
           ctx.sequencer.disposition(id, "applied");
         })
-        .catch(() => {
-          reject(id, "session closed");
+        .catch((cause: unknown) => {
+          rejectDelivery(id, cause);
         });
       return;
     }
@@ -793,7 +832,7 @@ const sessionStrategy = (
             ctx.owedBytes.clear();
             ctx.handedOver();
             sendCalled = true;
-            return session.send(id, prepared.prompt);
+            return ordinaryDispatch(deps, ctx, () => session.send(id, prepared.prompt));
           })()
         : opening.then((session) => {
             if (closed) return null;
@@ -804,7 +843,9 @@ const sessionStrategy = (
               return null;
             }
             if (prepared.kind === "ready") ctx.delivering();
-            return session.send(id, prepared.kind === "ready" ? prepared.prompt : composed);
+            return ordinaryDispatch(deps, ctx, () =>
+              session.send(id, prepared.kind === "ready" ? prepared.prompt : composed),
+            );
           });
     void delivery
       .then((sent) => {
@@ -830,7 +871,7 @@ const sessionStrategy = (
         if (prepare && mode === "queue") {
           if (!sendCalled) deps.onDispatchRejected?.(preparedTurnId, "dispatch-not-called");
           refusePrepared(cause, failureCode);
-        } else reject(id, "session closed");
+        } else rejectDelivery(id, cause);
       });
   };
 
@@ -1069,8 +1110,9 @@ const turnStrategy = (
             // preserves the input for explicit recovery, never a fresh retry.
             activeAbort = new AbortController();
             let composedPrompt: string;
+            let nativeApprovals: StreamTurnOptions["nativeApprovals"];
             if (deps.prepareTurn) {
-              const prepared = await deps
+              const managedTurn = await deps
                 .prepareTurn({
                   inputId: next.id,
                   signal: activeAbort.signal,
@@ -1090,14 +1132,30 @@ const turnStrategy = (
                     { cause },
                   );
                 });
-              if (prepared.kind === "held") {
+              if (managedTurn.kind === "held") {
                 const expected = ctx.expected.findIndex((input) => input.inputId === next.id);
                 if (expected !== -1) ctx.expected.splice(expected, 1);
                 continue;
               }
-              composedPrompt = prepared.prompt;
-              ctx.preparedNotice(prepared.notice);
-              resumeId = prepared.native.kind === "resume" ? prepared.native.sessionId : undefined;
+              composedPrompt = managedTurn.prompt;
+              const responder = managedTurn.nativeApprovals;
+              if (responder)
+                nativeApprovals = {
+                  ...responder,
+                  connect: (channel) => {
+                    const receiver = responder.connect(channel);
+                    return {
+                      closed: receiver.closed,
+                      event: (event) => {
+                        ctx.harnessSpoke();
+                        receiver.event(event);
+                      },
+                    };
+                  },
+                };
+              ctx.preparedNotice(managedTurn.notice);
+              resumeId =
+                managedTurn.native.kind === "resume" ? managedTurn.native.sessionId : undefined;
               ctx.owedBytes.clear();
             } else {
               composedPrompt =
@@ -1115,17 +1173,24 @@ const turnStrategy = (
             if (closed || ctx.isStopped())
               return { done: true, value: undefined as unknown as AsyncIterable<HarnessEvent> };
             if (deps.prepareTurn) ctx.handedOver();
-            let raw = deps.runner.streamTurn({
-              signal: activeAbort.signal,
-              ...(deps.cwd === undefined ? {} : { cwd: deps.cwd }),
-              harness: deps.harness,
-              prompt: composedPrompt,
-              turnId,
-              ...(deps.model === undefined ? {} : { model: deps.model }),
-              ...(deps.provider === undefined ? {} : { provider: deps.provider }),
-              ...(deps.effort === undefined ? {} : { effort: deps.effort }),
-              ...(attemptResume && resumeId !== undefined ? { resume: resumeId } : {}),
-            });
+            const signal = activeAbort.signal;
+            const invoke = () =>
+              deps.runner.streamTurn({
+                signal,
+                ...(deps.cwd === undefined ? {} : { cwd: deps.cwd }),
+                harness: deps.harness,
+                prompt: composedPrompt,
+                turnId,
+                ...(nativeApprovals
+                  ? { nativeApprovals }
+                  : {
+                      ...(deps.model === undefined ? {} : { model: deps.model }),
+                      ...(deps.provider === undefined ? {} : { provider: deps.provider }),
+                      ...(deps.effort === undefined ? {} : { effort: deps.effort }),
+                    }),
+                ...(attemptResume && resumeId !== undefined ? { resume: resumeId } : {}),
+              });
+            let raw = nativeApprovals ? invoke() : ordinaryDispatch(deps, ctx, invoke);
             if (attemptResume || (deps.probeFirstTurn === true && spawns === 0)) {
               spawns += 1;
               const probe = raw[Symbol.asyncIterator]();
@@ -1243,6 +1308,7 @@ export const createHeadlessHost = (
   profile: "headless-session" | "headless-turn",
 ): SourceChannel => {
   let stopped = false;
+  const artifactLifetime = new AbortController();
   let notified = false;
   let strategy: StrategyHandle | undefined;
   let watchdog: ReturnType<typeof setInterval> | undefined;
@@ -1256,6 +1322,7 @@ export const createHeadlessHost = (
   const stop = (end: Extract<SourceEnd, { kind: "store-failed" }>): void => {
     if (stopped) return;
     stopped = true;
+    artifactLifetime.abort();
     clearInterval(watchdog);
     try {
       void strategy?.close().catch(() => {});
@@ -1324,6 +1391,8 @@ export const createHeadlessHost = (
   };
 
   const ctx: HostContext = {
+    harnessSpoke: () => harnessSpoke(),
+    artifactSignal: artifactLifetime.signal,
     preparedNotice: (message) => {
       if (message)
         sequencer.emit(currentTurnId, {
@@ -1460,6 +1529,8 @@ export const createHeadlessHost = (
       }
       for await (const event of turn) {
         if (stopped) return;
+        // Clear the harness watchdog before awaiting network admission.
+        harnessSpoke();
         // RFC-06 Emission: parse artifact fences out of message events and
         // store versions. Malformed/oversize/stale are refused with reason
         // recorded, turn still completes.
@@ -1467,13 +1538,9 @@ export const createHeadlessHost = (
           event.kind === EventKind.message &&
           typeof (event as { text?: unknown }).text === "string"
         ) {
-          handleArtifactMessage((event as { text: string }).text, turnId, deps, ctx);
+          await handleArtifactMessage((event as { text: string }).text, turnId, deps, ctx);
         }
         if (stopped) return;
-        // The harness said something, so it is answering. Every event goes
-        // through here, which is why the watch is cleared here rather than
-        // at each of the places one can be produced.
-        harnessSpoke();
         sequencer.emit(turnId, event);
         if (event.kind === EventKind.done && !advanced) {
           // A persistent session keeps this iterator open until the next
@@ -1649,6 +1716,7 @@ export const createHeadlessHost = (
       } finally {
         if (!stopped) {
           stopped = true;
+          artifactLifetime.abort();
           try {
             void strategy?.close().catch(() => {});
           } catch {}

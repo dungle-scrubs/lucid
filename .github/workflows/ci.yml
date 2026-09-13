@@ -34,6 +34,7 @@ jobs:
       - run: bun run typecheck
       - run: bun test
       - run: bun run build
+      - run: bun run build:package
 
       # The deterministic suite drives a fake hcn, so CI never spawns a
       # harness and never needs credentials. The live lanes

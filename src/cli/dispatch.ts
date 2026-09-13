@@ -37,6 +37,7 @@
  * `watch`'s paint step stays in `main.ts` and is injected as `onView`.
  */
 
+import type { ConnectionControl } from "../protocol/connection.js";
 import { type ChatOpts, chatConversation } from "./chat.js";
 import { type AnnounceResult, announce } from "./hooks/announce.js";
 import { readStdin } from "./hooks/delivery.js";
@@ -44,7 +45,7 @@ import { readStdin } from "./hooks/delivery.js";
 import { type InjectResult, inject } from "./hooks/inject.js";
 
 import { type MappedCommand, mapSubcommand } from "./mapping.js";
-import { type Conversations, conversations } from "./record-addressing.js";
+import { type Conversations, commandRecordDir, conversations } from "./record-addressing.js";
 import type { RunOpts, RunResult } from "./run.js";
 import { runConversation } from "./run.js";
 import type { SendOpts } from "./send.js";
@@ -55,6 +56,8 @@ import { watchConversation } from "./watch.js";
 
 /** Injected seams — defaulted in production, faked in tests. */
 export interface DispatchDeps {
+  readonly reconnectDeps?: import("./reconnect.js").ReconnectDeps;
+  readonly nativeAuthority?: import("../store/native-registration.js").RegistrationAuthority;
   /** Record root override — defaults to `process.env.LUCID_ROOT`. One read, not three. */
   readonly rootDir?: string;
   /** Record addressing factory — injected so CliHost owns the single `effectiveRoot` → `Conversations` binding (2). */
@@ -68,6 +71,7 @@ export interface DispatchDeps {
   readonly wakeNamingFn?: (root: string) => void;
   readonly serveFn?: (opts: ServeOpts) => Promise<void>;
   readonly announceFn?: (stdin: string) => Promise<AnnounceResult>;
+  readonly codexHookFn?: typeof import("./hooks/codex.js").runCodexHook;
   readonly injectFn?: (stdin: string) => Promise<InjectResult>;
   readonly readStdinFn?: () => Promise<string>;
   /** Sink for help / confirmation lines — defaults to `console.log` in `runCli`. */
@@ -91,6 +95,17 @@ export interface DispatchDeps {
 }
 
 export type DispatchResult =
+  | {
+      readonly kind: "reconnect";
+      readonly verdict: "completed" | "held" | "cancelled" | "pending";
+      readonly exitCode: number;
+    }
+  | { readonly kind: "codex-hook" }
+  | { readonly kind: "connection-listen"; readonly verdict: "requested" | "held" }
+  | { readonly kind: "connection-setup"; readonly verdict: "installed" | "unchanged" | "refused" }
+  | { readonly kind: "connection-control"; readonly verdict: "accepted" | "refused" }
+  | { readonly kind: "connection-status" }
+  | { readonly kind: "artifact-publish" }
   | { readonly kind: "hcn-supervisor" }
   | { readonly kind: "context" }
   | { readonly kind: "name-titles" }
@@ -125,6 +140,117 @@ export const dispatch = async (
 
   // Help is terminal — no seams, no root, no flock.
   if (mapped.kind === "help") return { kind: "help", message: mapped.message };
+  if (mapped.kind === "reconnect") {
+    const { reconnectConversation } = await import("./reconnect.js");
+    const records = (deps.conversationsFactory ?? conversations)(deps.rootDir);
+    const result = await reconnectConversation(
+      records,
+      mapped.conversationId,
+      {
+        signal: deps.signal ?? new AbortController().signal,
+        onProgress: (message) =>
+          (deps.onStderr ?? ((line: string) => process.stderr.write(line)))(`${message}\n`),
+      },
+      deps.reconnectDeps,
+    );
+    const message =
+      result.kind !== "completed"
+        ? result.message
+        : "The native interactive process ended. Use connection status to check listening and saved feedback.";
+    (deps.onStderr ?? ((line: string) => process.stderr.write(line)))(`${message}\n`);
+    return {
+      kind: "reconnect",
+      verdict: result.kind,
+      exitCode:
+        result.kind === "completed" && result.result.kind === "closed"
+          ? (result.result.exitCode ?? 1)
+          : result.kind === "pending"
+            ? 0
+            : result.kind === "cancelled"
+              ? 130
+              : 1,
+    };
+  }
+  if (mapped.kind === "connection-setup") {
+    const { setupCodexHooks } = await import("./codex-setup.js");
+    const records = (deps.conversationsFactory ?? conversations)(deps.rootDir);
+    const result = setupCodexHooks(records.rootDir, mapped.hooksFile);
+    (deps.onOutput ?? console.log)(mapped.json ? JSON.stringify(result) : result.message);
+    return { kind: "connection-setup", verdict: result.status };
+  }
+  if (mapped.kind === "codex-hook") {
+    const { runCodexHook } = await import("./hooks/codex.js");
+    const records = (deps.conversationsFactory ?? conversations)(mapped.root ?? deps.rootDir);
+    let payload: unknown;
+    try {
+      payload = JSON.parse(await (deps.readStdinFn ?? readStdin)());
+    } catch {
+      payload = null;
+    }
+    const result = await (deps.codexHookFn ?? runCodexHook)(records, payload, {
+      signal: deps.signal ?? new AbortController().signal,
+    });
+    if (result.kind === "offered") (deps.onOutput ?? console.log)(result.payload);
+    if (result.kind === "held")
+      (deps.onStderr ?? ((line: string) => process.stderr.write(line)))(
+        `${result.reason}: ${result.message}\n`,
+      );
+    return { kind: "codex-hook" };
+  }
+  if (mapped.kind === "connection-listen") {
+    const { requestCodexListening } = await import("./codex-listener.js");
+    const records = (deps.conversationsFactory ?? conversations)(deps.rootDir);
+    const result = requestCodexListening(records, mapped.conversationId, deps.nativeAuthority);
+    (deps.onOutput ?? console.log)(mapped.json ? JSON.stringify(result) : result.message);
+    return { kind: "connection-listen", verdict: result.kind };
+  }
+  if (mapped.kind === "connection-control") {
+    const { readResponseRequest, runConnectionControl } = await import("./connection-control.js");
+    const records = (deps.conversationsFactory ?? conversations)(deps.rootDir);
+    let control: ConnectionControl;
+    switch (mapped.operation) {
+      case "cancel-input":
+        control = { inputId: mapped.inputId, kind: "cancel-input" };
+        break;
+      case "receipt":
+        control = { kind: "receipt", offerId: mapped.offerId };
+        break;
+      case "respond":
+        control = {
+          kind: "respond",
+          offerId: mapped.offerId,
+          outcome: await readResponseRequest(mapped.request),
+        };
+        break;
+    }
+    const result = runConnectionControl(
+      records,
+      mapped.conversationId,
+      control,
+      deps.nativeAuthority,
+    );
+    (deps.onOutput ?? console.log)(mapped.json ? JSON.stringify(result) : result.message);
+    return { kind: "connection-control", verdict: result.verdict };
+  }
+  if (mapped.kind === "connection-status") {
+    const { readConnection } = await import("../store/connection-view.js");
+    const records = (deps.conversationsFactory ?? conversations)(deps.rootDir);
+    const result = readConnection(commandRecordDir(records, mapped.conversationId));
+    (deps.onOutput ?? console.log)(mapped.json ? JSON.stringify(result) : result.message);
+    return { kind: "connection-status" };
+  }
+  if (mapped.kind === "artifact-publish") {
+    const { publishArtifact, readPublicationRequest } = await import("./artifact-publish.js");
+    const result = await publishArtifact(
+      await readPublicationRequest(mapped.request),
+      deps.rootDir,
+      deps.nativeAuthority,
+    );
+    (deps.onOutput ?? console.log)(
+      mapped.json ? JSON.stringify(result) : `${result.artifactUrl}\n${result.connection.message}`,
+    );
+    return { kind: "artifact-publish" };
+  }
   if (mapped.kind === "context") {
     const { readOfferedContext } = await import("../store/context-offer.js");
     const result = readOfferedContext(mapped.path, mapped.offset, mapped.bytes);

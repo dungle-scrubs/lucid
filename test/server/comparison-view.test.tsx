@@ -198,7 +198,9 @@ test("one inline editor preserves source, focus and selection through stale arri
     expect(button("Send note").disabled).toBe(false);
     await React.act(() => button("Inspect v1").click());
     expect(container.querySelector("dialog")?.open).toBe(true);
-    expect(container.querySelector("iframe")?.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(container.querySelector("iframe")?.getAttribute("sandbox")).toBe(
+      "allow-scripts allow-popups allow-popups-to-escape-sandbox",
+    );
     await React.act(() => button("Back to comparison").click());
     expect(container.querySelector(".comparison-retained textarea")).not.toBeNull();
     pair = { ...pair, earlier: null };

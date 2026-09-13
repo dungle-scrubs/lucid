@@ -2,10 +2,11 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, resolve } from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { selfInvocation } from "../cli/invocation.js";
+import { HEADLESS_NATIVE_ROLE, NATIVE_ROLE_ENV, selfInvocation } from "../cli/invocation.js";
 import type { CompatibilityDiagnostic, HcnInstallation } from "./compatibility.js";
-import type { HarnessDeps, HcnProcess, SpawnHcn } from "./process.js";
+import type { HarnessDeps, HcnProcess, SpawnHcn, SpawnInteractiveHcn } from "./process.js";
 import { HarnessSpawnError } from "./runner.js";
 
 /** Where to look, injected so both package-local branches are reachable in
@@ -60,10 +61,16 @@ export const resolveHcnBin = (opts: HcnBinLookup = {}): { bin: string; source: s
   return { bin: "hcn", source: "path" };
 };
 
-const toLines = (stream: NodeJS.ReadableStream | null): AsyncIterable<string> => ({
+const decodedOutput = (stream: NodeJS.ReadableStream | null): AsyncIterable<string> => ({
   async *[Symbol.asyncIterator]() {
     if (stream === null) return;
-    for await (const chunk of stream) yield String(chunk);
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    for await (const chunk of stream) {
+      const text = typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
+      if (text) yield text;
+    }
+    const tail = decoder.decode();
+    if (tail) yield tail;
   },
 });
 
@@ -85,6 +92,7 @@ const spawnHcn = (
     child = nodeSpawn(bin, args, {
       stdio: supervised ? ["pipe", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "pipe"],
       ...(opts.cwd === undefined ? {} : { cwd: opts.cwd }),
+      env: { ...process.env, [NATIVE_ROLE_ENV]: HEADLESS_NATIVE_ROLE },
     });
   } catch (cause) {
     throw new HarnessSpawnError(cause);
@@ -97,8 +105,8 @@ const spawnHcn = (
   });
   return {
     inputError,
-    stdout: toLines(child.stdout),
-    stderr: toLines(child.stderr),
+    stdout: decodedOutput(child.stdout),
+    stderr: decodedOutput(child.stderr),
     exited: new Promise<number | null>((res) => {
       child.on("close", (code) => res(code));
       child.on("error", () => res(null));
@@ -120,6 +128,37 @@ const spawnHcn = (
 };
 
 export const nodeSpawnHcn: SpawnHcn = (argv, opts) => spawnHcn(argv, opts, false);
+
+/** Keep the caller's terminal and process group. HCN supervises its own native child. */
+export const nodeSpawnInteractiveHcn: SpawnInteractiveHcn = (argv, opts) => {
+  const [binary, ...args] = argv;
+  if (!binary) throw new HarnessSpawnError("empty argv");
+  let child: ReturnType<typeof nodeSpawn>;
+  try {
+    child = nodeSpawn(binary, args, {
+      cwd: opts.cwd,
+      stdio: ["inherit", "inherit", "inherit", "pipe"],
+    });
+  } catch (cause) {
+    throw new HarnessSpawnError(cause);
+  }
+  const control = child.stdio[3] instanceof Readable ? child.stdio[3] : null;
+  return {
+    control: decodedOutput(control),
+    exited: new Promise<number | null>((resolve) => {
+      child.once("close", (code) => resolve(code));
+      child.on("error", () => {
+        if (child.pid === undefined) resolve(null);
+      });
+    }),
+    disposeControl: () => {
+      control?.destroy();
+    },
+    kill: (signal = "SIGTERM") => {
+      child.kill(signal);
+    },
+  };
+};
 
 function selectedInstallation(lookup: HcnBinLookup): {
   readonly bin: string;
@@ -172,6 +211,7 @@ function checkedDeps(
   return {
     installation,
     spawn: (argv, opts) => spawnHcn(argv, opts, true),
+    spawnInteractive: nodeSpawnInteractiveHcn,
     bin,
     ...(log === undefined ? {} : { log }),
   };

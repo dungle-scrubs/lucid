@@ -1,3 +1,4 @@
+import { awaitingNativeBinding } from "./connection.js";
 import { supportsManagedInput } from "./frames.js";
 /**
  * The pure chat-session reducer: (state, frame, now) -> accepted | refusal.
@@ -47,6 +48,7 @@ import {
 import { AttachmentLedger, LEASE_RENEW_EVERY_MS, LEASE_TTL_MS } from "./ledgers/attachment.js";
 import { CreditLedger } from "./ledgers/credit.js";
 import { InputLedger } from "./ledgers/input.js";
+import { settleApprovals } from "./native-approvals.js";
 import type { ProcessOwner } from "./process-owner.js";
 
 export type { RefusalIssue } from "./frames.js";
@@ -130,6 +132,10 @@ export interface OpenQuestion {
 }
 
 export interface ChannelState {
+  readonly approvals: Readonly<Record<string, import("./native-approvals.js").ApprovalState>>;
+  readonly approvalRevision: number;
+  readonly nativePublication: import("./connection.js").NativePublication | null;
+  readonly connection: import("./connection.js").ConnectionState | null;
   readonly conversationId: string;
   /** Minted by the host at record creation (D-004); checked only at attach. */
   readonly secret: string;
@@ -300,6 +306,10 @@ export const initialChannelState = (init: {
   readonly conversationId: string;
   readonly secret: string;
 }): ChannelState => ({
+  approvals: {},
+  approvalRevision: 0,
+  connection: null,
+  nativePublication: null,
   conversationId: init.conversationId,
   secret: init.secret,
   seq: 0,
@@ -636,6 +646,7 @@ const reduceAttach = (
         !Object.hasOwn(state.explicitAttachments, frame.explicitAttachmentId)
           ? { ...state.explicitAttachments, [frame.explicitAttachmentId]: epoch }
           : state.explicitAttachments,
+      ...settleApprovals(state, (request) => request.epoch < epoch, "executor-replaced"),
       terminalParticipations:
         frame.profile === "interactive"
           ? [
@@ -770,7 +781,9 @@ const reducePostAttach = (
         type: "send",
         frame: { kind: "event-ack", epoch: frame.epoch, n: frame.n },
       } as const;
-      const redelivered = InputLedger.redeliverable(state.inputs, sameTurn);
+      const redelivered = awaitingNativeBinding(state)
+        ? []
+        : InputLedger.redeliverable(state.inputs, sameTurn);
       // RFC-03: attribute an identity to the harness that was live when it
       // was accepted. This is the whole attribution mechanism - done as the
       // fold goes, because after the next attach this attachment is gone.
@@ -1010,7 +1023,7 @@ export const enqueueInput = (
   // eligible, and handing it new work invites double-application across
   // the handoff. The input still queues, armed for boundary delivery
   // (if this writer recovers) or attach replay (if another takes over).
-  const live = AttachmentLedger.isLive(state, now);
+  const live = !awaitingNativeBinding(state) && AttachmentLedger.isLive(state, now);
   const queued: QueuedInput = {
     id: input.id,
     seq: state.seq + 1,
@@ -1047,6 +1060,7 @@ export const enqueueInput = (
     return hostRefusal(state, frame, "invalid-input", now);
   if (
     state.inputs.some((existing) => existing.id === input.id) ||
+    Object.hasOwn(state.connection?.cancelledInputs ?? {}, input.id) ||
     Object.hasOwn(state.appliedInputs, input.id)
   )
     return hostRefusal(state, frame, "input-id-reused", now);
@@ -1178,6 +1192,46 @@ export const grantCredit = (state: ChannelState, tokens: number, now: number): R
   };
 };
 
+/** Only accepted evidence from the original epoch can settle pre-publication delivery. */
+function settlePublicationDelivery(
+  state: ChannelState,
+  frame: PostAttachFrame,
+  result: ReduceResult,
+): ReduceResult {
+  const publication = state.nativePublication;
+  if (
+    !publication ||
+    result.verdict !== "accepted" ||
+    frame.epoch !== publication.legacyDelivery.epoch
+  )
+    return result;
+  const delivery = publication.legacyDelivery;
+  let next = delivery;
+  if (
+    frame.kind === "disposition" &&
+    frame.outcome === "applied" &&
+    delivery.uncertainInputs.includes(frame.inputId)
+  ) {
+    next = {
+      ...delivery,
+      inFlight: InputLedger.inputDelivered(delivery.inFlight),
+      uncertainInputs: delivery.uncertainInputs.filter((id) => id !== frame.inputId),
+    };
+  } else if (
+    frame.kind === "event" &&
+    frame.event.kind === EventKind.done &&
+    delivery.inFlight > 0
+  ) {
+    next = { ...delivery, inFlight: InputLedger.turnEnded(delivery.inFlight, frame.event.kind) };
+  }
+  return next === delivery
+    ? result
+    : {
+        ...result,
+        state: { ...result.state, nativePublication: { ...publication, legacyDelivery: next } },
+      };
+}
+
 export const reduce = (
   state: ChannelState,
   frame: Frame,
@@ -1192,7 +1246,7 @@ export const reduce = (
     case "disposition":
     case "heartbeat":
     case "detach":
-      return reducePostAttach(state, frame, now);
+      return settlePublicationDelivery(state, frame, reducePostAttach(state, frame, now));
     // lucid->source kinds arriving AT lucid are forgeries or bugs, never
     // applied: an impersonator cannot end, redirect, or grant anything by
     // replaying the server's own vocabulary at it.

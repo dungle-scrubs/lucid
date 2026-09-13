@@ -110,3 +110,27 @@ describe("formatElapsed", () => {
     expect(formatElapsed(-5)).toBe("0s");
   });
 });
+
+test("a pending permission request waits for the person without a stall alarm", () => {
+  expect(describeActivity(running, 999, true, 1)).toEqual({
+    busy: true,
+    disconnected: false,
+    elapsed: null,
+    label: "Waiting for your permission choice",
+    stalled: false,
+  });
+  expect(describeActivity(running, 999, false, 1).disconnected).toBe(true);
+});
+
+test("native connection status owns activity announcements even without an ordinary attachment", () => {
+  for (const connected of [true, false])
+    expect(
+      describeActivity({ ...running, nativeConnectionRequired: true }, 999, connected, 1),
+    ).toEqual({
+      busy: false,
+      disconnected: false,
+      elapsed: null,
+      label: "",
+      stalled: false,
+    });
+});

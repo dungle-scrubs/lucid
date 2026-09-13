@@ -5,6 +5,10 @@ export interface ProcessOwner {
   readonly startedAt: string;
 }
 
+export function sameProcessOwner(a: ProcessOwner | undefined, b: ProcessOwner): boolean {
+  return a?.pid === b.pid && a.startedAt === b.startedAt && a.executable === b.executable;
+}
+
 export function parseProcessOwner(value: unknown): ProcessOwner | undefined {
   if (!value || typeof value !== "object") return undefined;
   const fields = value as Record<string, unknown>;

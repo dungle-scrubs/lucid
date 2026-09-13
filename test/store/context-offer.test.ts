@@ -11,9 +11,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli } from "../../src/cli/dispatch.js";
+import { readProcessOwner } from "../../src/process-owner.js";
 import { encodeAnnotationBatch } from "../../src/protocol/annotations.js";
 import { putBlob } from "../../src/store/blobs.js";
 import {
+  closeNativeContextOffers,
   offerContext,
   offerProjectedContext,
   readOfferedContext,
@@ -244,5 +246,61 @@ test("orphaned context copies are removed after process loss while a live copy s
     live.close();
     if (orphan) rmSync(orphan, { recursive: true, force: true });
     rmSync(record, { recursive: true, force: true });
+  }
+});
+
+test("a context copy survives its preparing helper when the receiving process is still alive", () => {
+  const record = mkdtempSync(join(tmpdir(), "lucid-native-context-owner-"));
+  const script = join(record, "prepare.ts");
+  const contextModule = new URL("../../src/store/context-offer.ts", import.meta.url).pathname;
+  const ownerModule = new URL("../../src/process-owner.ts", import.meta.url).pathname;
+  writeFileSync(
+    script,
+    [
+      `import { offerContext } from ${JSON.stringify(contextModule)};`,
+      `import { readProcessOwner } from ${JSON.stringify(ownerModule)};`,
+      `const owner = readProcessOwner(${process.pid});`,
+      'if (!owner) throw new Error("Missing receiving process");',
+      `const copy = offerContext(${JSON.stringify(record)}, "complete feedback survives", { owner });`,
+      "process.stdout.write(copy.path);",
+    ].join("\n"),
+  );
+  let path = "";
+  try {
+    const helper = Bun.spawnSync([process.execPath, script]);
+    expect(helper.exitCode).toBe(0);
+    path = helper.stdout.toString();
+    expect(existsSync(path)).toBe(true);
+    const next = offerContext(record, "another preparation triggers cleanup");
+    next.close();
+    expect(existsSync(path)).toBe(true);
+    expect(readOfferedContext(path, 0, 64).text).toBe("complete feedback survives");
+  } finally {
+    if (path) rmSync(path, { force: true, recursive: true });
+    rmSync(record, { force: true, recursive: true });
+  }
+});
+
+// Confirm cleanup is scoped to both durable offer identity and the exact receiving process.
+test("settling one native offer preserves another offer and a different process generation", () => {
+  const record = mkdtempSync(join(tmpdir(), "lucid-copy-scope-"));
+  const owner = readProcessOwner(process.pid);
+  if (!owner) throw new Error("Missing receiving process");
+  const firstId = crypto.randomUUID();
+  const secondId = crypto.randomUUID();
+  const first = offerContext(record, "first", { offerId: firstId, owner });
+  const second = offerContext(record, "second", { offerId: secondId, owner });
+  try {
+    closeNativeContextOffers(owner, firstId);
+    expect(existsSync(first.path)).toBe(false);
+    expect(readOfferedContext(second.path, 0, 64).text).toBe("second");
+    closeNativeContextOffers({ ...owner, startedAt: "another-generation" }, secondId);
+    expect(existsSync(second.path)).toBe(true);
+    closeNativeContextOffers(owner, secondId);
+    expect(existsSync(second.path)).toBe(false);
+  } finally {
+    first.close();
+    second.close();
+    rmSync(record, { force: true, recursive: true });
   }
 });

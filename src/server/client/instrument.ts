@@ -30,8 +30,9 @@
  * the same file `app.css` self-hosts (digits, space, middle dot; the weight
  * axis survives). `unicode-range` keeps it from shadowing the full face on
  * the behaviour reference, which loads both. */
-import frameSerif from "./fonts/source-serif-4-frame.txt";
 
+import { installArtifactLinks } from "./artifact-links.js";
+import frameSerif from "./fonts/source-serif-4-frame.txt";
 import { flattenNewlines } from "./snapshot-dom.js";
 import { BLOCK_SELECTOR } from "./version-diff.js";
 
@@ -167,17 +168,11 @@ html {
   overscroll-behavior: none;
 }
 
-/* A ground for a document that gave itself none.
- *
- * Agent HTML routinely sets a text colour and no background, then relies on
- * the browser default of white. Rendered in a frame with no background of
- * its own that is dark text on a dark page, and close to unreadable.
- *
- * The :where() wrapper carries no specificity, so a document that sets its own
- * background wins — including a deliberately dark one. A default, not an
- * override. */
+/* Keep the root background untouched. Even a zero-specificity background
+ * blocks the browser from propagating an authored body background across
+ * the canvas, leaving contrasting margins around a narrow body. The
+ * embedding iframe supplies the Canvas backing instead. */
 :where(html) {
-  background: Canvas;
   color: CanvasText;
 }
 
@@ -484,6 +479,7 @@ const script = (artifactId: string, version: number, author: string): string => 
   var AUTHOR_ATTR = ${JSON.stringify(AUTHOR_ATTR)};
   var AUTHOR = ${JSON.stringify(author)};
   var COUNT_ATTR = ${JSON.stringify(COUNT_ATTR)};
+  var restoreArtifactLinks = (${installArtifactLinks.toString()})();
 
   // An id per element, in document order. Assigned by lucid rather than
   // taken from the document: an agent-written id may be missing, repeated,
@@ -505,7 +501,7 @@ const script = (artifactId: string, version: number, author: string): string => 
     textCursor = null;
   };
   var linkAt = function (target) {
-    return target && target.nodeType === 1 ? target.closest("a[href]") : null;
+    return target && target.nodeType === 1 ? target.closest("a[href], area[href]") : null;
   };
 
   // Caret lookup can snap to nearby text even in padding or past a line's
@@ -671,6 +667,7 @@ const script = (artifactId: string, version: number, author: string): string => 
   // would read it, not as lucid rendered it.
   var clean = function () {
     var copy = document.documentElement.cloneNode(true);
+    restoreArtifactLinks(copy);
     var added = copy.querySelectorAll("[data-lucid]");
     for (var a = 0; a < added.length; a++) added[a].parentNode.removeChild(added[a]);
     var cursors = copy.querySelectorAll(".lucid-text-cursor");
@@ -1007,10 +1004,18 @@ const script = (artifactId: string, version: number, author: string): string => 
     // changed, so nothing here has to match anything.
     if (m.kind === "restore-place" && typeof m.index === "number") {
       var backTo = blocks()[m.index];
-      if (!backTo) return;
-      var want = typeof m.top === "number" ? m.top : 0;
-      var have = backTo.getBoundingClientRect().top;
-      window.scrollBy(0, have - want);
+      if (backTo) {
+        var want = typeof m.top === "number" ? m.top : 0;
+        var have = backTo.getBoundingClientRect().top;
+        window.scrollBy({ top: have - want, behavior: "instant" });
+      }
+      placeReady = true;
+      reportPlace();
+      return;
+    }
+    if (m.kind === "report-place") {
+      placeReady = true;
+      reportPlace();
       return;
     }
 
@@ -1239,7 +1244,9 @@ const script = (artifactId: string, version: number, author: string): string => 
   // replaces this document, so the page has to already hold the answer. It
   // cannot ask for it after the fact.
   var placeTimer = null;
+  var placeReady = false;
   var reportPlace = function () {
+    if (!placeReady) return;
     var list = blocks();
     for (var i = 0; i < list.length; i++) {
       var r = list[i].getBoundingClientRect();
@@ -1259,10 +1266,11 @@ const script = (artifactId: string, version: number, author: string): string => 
     }
   };
   window.addEventListener("scroll", function () {
+    // Save the latest position without waiting for the marks-below throttle.
+    reportPlace();
     if (placeTimer !== null) return;
     placeTimer = setTimeout(function () {
       placeTimer = null;
-      reportPlace();
       // The fold moved, so the marks-below count moved with it (3g).
       reportBelow();
     }, 150);
@@ -1270,12 +1278,20 @@ const script = (artifactId: string, version: number, author: string): string => 
   // The page cannot restore a place until the document exists to hold one,
   // and srcdoc loads on its own schedule. Saying so beats guessing at a
   // delay or resending until something sticks.
-  parent.postMessage(
-    { source: SOURCE, kind: "ready", artifactId: ARTIFACT, version: VERSION },
-    "*"
-  );
-  // Once at the start, so a reader who never scrolls still has a place.
-  setTimeout(reportPlace, 0);
+  var announceReady = function () {
+    var ready = function () {
+      parent.postMessage(
+        { source: SOURCE, kind: "ready", artifactId: ARTIFACT, version: VERSION },
+        "*"
+      );
+    };
+    // Images and fonts must establish layout before a saved offset is applied.
+    if (document.fonts) document.fonts.ready.then(ready);
+    else ready();
+  };
+  if (document.readyState === "complete") announceReady();
+  else window.addEventListener("load", announceReady, { once: true });
+  // The parent requests the initial place after deciding whether to restore.
   // And so the 3g pill knows where the fold sat when the frame opened.
   setTimeout(reportBelow, 0);
 

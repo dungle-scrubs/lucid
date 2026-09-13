@@ -29,9 +29,20 @@ export interface HcnProcess {
 
 export type SpawnHcn = (argv: readonly string[], opts: { readonly cwd?: string }) => HcnProcess;
 
+export interface InteractiveHcnProcess extends Pick<HcnProcess, "exited" | "kill"> {
+  readonly control: AsyncIterable<string>;
+  disposeControl(): void;
+}
+
+export type SpawnInteractiveHcn = (
+  argv: readonly string[],
+  opts: { readonly cwd: string },
+) => InteractiveHcnProcess;
+
 export interface HarnessDeps {
   readonly installation?: HcnInstallation;
   readonly spawn: SpawnHcn;
+  readonly spawnInteractive?: SpawnInteractiveHcn;
   /** Grace before escalating a refused child from SIGTERM to SIGKILL. */
   readonly refusalGraceMs?: number;
   /** Context-accounting wall-clock ceiling, including native probe cleanup. */
@@ -47,10 +58,25 @@ export interface HarnessDeps {
 export const flag = (name: string, value: string | undefined): string[] =>
   value === undefined ? [] : [name, value];
 
+/** Split decoded process output into lines, retaining its partial tail. */
+export async function* lines(chunks: AsyncIterable<string>): AsyncIterable<string> {
+  let buffer = "";
+  for await (const chunk of chunks) {
+    buffer += chunk;
+    let nl = buffer.indexOf("\n");
+    while (nl !== -1) {
+      yield buffer.slice(0, nl);
+      buffer = buffer.slice(nl + 1);
+      nl = buffer.indexOf("\n");
+    }
+  }
+  if (buffer.trim() !== "") yield buffer;
+}
+
 /** One escalation policy. The caller chooses whether process exit or its
  * output pump is the terminal evidence it needs to await. */
 export async function terminateHcn(
-  proc: HcnProcess,
+  proc: Pick<HcnProcess, "exited" | "kill">,
   graceMs: number,
   settled: Promise<unknown> = proc.exited,
 ): Promise<boolean> {
