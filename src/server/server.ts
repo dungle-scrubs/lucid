@@ -771,11 +771,15 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             // are never one field: after a refused re-spawn they differ, and
             // the difference is the story the page has to tell. Null is the
             // state of every record no choice has been made in.
-            ...(await settings.project(dir, {
-              ...(attached?.harness ? { harness: attached.harness } : {}),
-              ...(attached?.profile ? { profile: attached.profile } : {}),
-              ...(typeof observed.model === "string" ? { model: observed.model } : {}),
-            })),
+            ...(await settings.project(
+              dir,
+              {
+                ...(attached?.harness ? { harness: attached.harness } : {}),
+                ...(attached?.profile ? { profile: attached.profile } : {}),
+                ...(typeof observed.model === "string" ? { model: observed.model } : {}),
+              },
+              nativeRequired,
+            )),
             // The lists the choice is made from (RFC-12): the four harnesses,
             // each harness's models and efforts. Read once per process through
             // the harness seam, so a poll costs no spawn.
@@ -1217,7 +1221,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
               return json({ error: "text-required", inputId, verdict: "refused" }, 400);
             const saved = preferenceState(dir);
             const completed =
-              !saved.error && !saved.revision
+              !requiresNativeConnection(host.state()) && !saved.error && !saved.revision
                 ? (await settings.project(dir)).conversationSettings.selected
                 : null;
             return reply(

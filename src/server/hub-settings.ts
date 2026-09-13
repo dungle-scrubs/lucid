@@ -148,7 +148,11 @@ export function createHubSettings(
     }
     return choiceLists;
   };
-  const project = async (dir: string, actual: Partial<Settings> = {}) => {
+  const project = async (
+    dir: string,
+    actual: Partial<Settings> = {},
+    nativeConnectionRequired = false,
+  ) => {
     const state = preferenceState(dir);
     const location = locationProjection(readRecordMetadata(dir));
     const base = {
@@ -156,6 +160,13 @@ export function createHubSettings(
       location,
       driverPreference: state.preference,
     };
+    // Native admission uses the bound session's settings. Keep browser preferences
+    // available for inspection without diagnosing them as the active connection.
+    if (nativeConnectionRequired)
+      return {
+        ...base,
+        conversationSettings: { selected: null, revision: state.revision, error: state.error },
+      };
     try {
       if (state.error) throw new HubError(state.error, "E-HUB-03");
       const saved = state.preference;
