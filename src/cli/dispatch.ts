@@ -56,6 +56,7 @@ import { watchConversation } from "./watch.js";
 
 /** Injected seams — defaulted in production, faked in tests. */
 export interface DispatchDeps {
+  readonly reconnectDeps?: import("./reconnect.js").ReconnectDeps;
   readonly nativeAuthority?: import("../store/native-registration.js").RegistrationAuthority;
   /** Record root override — defaults to `process.env.LUCID_ROOT`. One read, not three. */
   readonly rootDir?: string;
@@ -94,6 +95,11 @@ export interface DispatchDeps {
 }
 
 export type DispatchResult =
+  | {
+      readonly kind: "reconnect";
+      readonly verdict: "completed" | "held" | "cancelled" | "pending";
+      readonly exitCode: number;
+    }
   | { readonly kind: "codex-hook" }
   | { readonly kind: "connection-listen"; readonly verdict: "requested" | "held" }
   | { readonly kind: "connection-setup"; readonly verdict: "installed" | "unchanged" | "refused" }
@@ -134,6 +140,37 @@ export const dispatch = async (
 
   // Help is terminal — no seams, no root, no flock.
   if (mapped.kind === "help") return { kind: "help", message: mapped.message };
+  if (mapped.kind === "reconnect") {
+    const { reconnectConversation } = await import("./reconnect.js");
+    const records = (deps.conversationsFactory ?? conversations)(deps.rootDir);
+    const result = await reconnectConversation(
+      records,
+      mapped.conversationId,
+      {
+        signal: deps.signal ?? new AbortController().signal,
+        onProgress: (message) =>
+          (deps.onStderr ?? ((line: string) => process.stderr.write(line)))(`${message}\n`),
+      },
+      deps.reconnectDeps,
+    );
+    const message =
+      result.kind !== "completed"
+        ? result.message
+        : "The native interactive process ended. Use connection status to check listening and saved feedback.";
+    (deps.onStderr ?? ((line: string) => process.stderr.write(line)))(`${message}\n`);
+    return {
+      kind: "reconnect",
+      verdict: result.kind,
+      exitCode:
+        result.kind === "completed" && result.result.kind === "closed"
+          ? (result.result.exitCode ?? 1)
+          : result.kind === "pending"
+            ? 0
+            : result.kind === "cancelled"
+              ? 130
+              : 1,
+    };
+  }
   if (mapped.kind === "connection-setup") {
     const { setupCodexHooks } = await import("./codex-setup.js");
     const records = (deps.conversationsFactory ?? conversations)(deps.rootDir);

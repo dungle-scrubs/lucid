@@ -4928,3 +4928,404 @@ test.each(["wrong-session", "wrong-folder", "wrong-interface", "spawn-threw"] as
     }
   },
 );
+
+test.each(["closed", "uncertain"])(
+  "public reconnect reserves once and preserves a %s native result",
+  async (outcome) => {
+    const { createHcnRunner } = await import("../../src/harness/hcn-runner.js");
+    const { FakeHcnProcess } = await import("../harness/fakes.js");
+    const f = boundFixture();
+    const proc = new FakeHcnProcess();
+    let calls = 0;
+    try {
+      f.controls.probe = () => false;
+      const runner = createHcnRunner({
+        bin: "/fake/hcn",
+        spawn: () => {
+          throw new Error("Wrong transport");
+        },
+        spawnInteractive: (argv) => {
+          calls++;
+          const state = viewConversation(f.paths.dir).state;
+          const request = state.connection?.reconnects[state.connection?.reconnectId ?? ""];
+          expect(request?.kind).toBe("intended");
+          const launchId = argv[argv.indexOf("--launch-id") + 1];
+          expect(argv[argv.indexOf("--resume") + 1]).toBe(f.controls.registration.nativeSessionId);
+          expect(argv[argv.indexOf("--cwd") + 1]).toBe(f.controls.registration.workingDirectory);
+          proc.emit({ v: 1, operation: "interactive", launchId, kind: "ready" });
+          proc.emit({
+            v: 1,
+            operation: "interactive",
+            launchId,
+            kind: "started",
+            sessionId: f.controls.registration.nativeSessionId,
+            cwd: f.controls.registration.workingDirectory,
+            interface: "codex-cli",
+            owner: returningRegistration(f.controls.registration).owner,
+          });
+          if (outcome === "closed")
+            proc.emit({
+              v: 1,
+              operation: "interactive",
+              launchId,
+              kind: "closed",
+              cleanupComplete: true,
+              exitCode: 0,
+            });
+          proc.exit(0);
+          return {
+            control: proc.stdout,
+            exited: proc.exited,
+            kill: (signal) => proc.kill(signal),
+            disposeControl: () => proc.disposeOutput(),
+          };
+        },
+      });
+      const result = await dispatch(["reconnect", f.host.conversationId], {
+        rootDir: f.controls.registration.workingDirectory,
+        onStderr: () => {},
+        reconnectDeps: { runner, terminal: true, ownerPresence: () => false },
+      });
+      expect(result).toMatchObject({
+        kind: "reconnect",
+        verdict: outcome === "closed" ? "completed" : "held",
+      });
+      expect(calls).toBe(1);
+      expect(presenceHeld(f.paths.dir)).toBe(false);
+    } finally {
+      proc.exit(null);
+      f.close();
+    }
+  },
+);
+
+test("public reconnect waits without launching while the executor lock is held", async () => {
+  const { createHcnRunner } = await import("../../src/harness/hcn-runner.js");
+  const { FakeHcnProcess } = await import("../harness/fakes.js");
+  const { createTailer } = await import("../../src/store/tailer.js");
+  const f = boundFixture();
+  const proc = new FakeHcnProcess();
+  const controller = new AbortController();
+  const waiting = Promise.withResolvers<void>();
+  let trigger = () => {};
+  let calls = 0;
+  let running: Promise<unknown> | undefined;
+  try {
+    f.controls.probe = () => false;
+    f.acquire();
+    const runner = createHcnRunner({
+      bin: "/fake/hcn",
+      spawn: () => {
+        throw new Error("Wrong transport");
+      },
+      spawnInteractive: (argv) => {
+        calls++;
+        proc.emit({
+          v: 1,
+          operation: "interactive",
+          launchId: argv[argv.indexOf("--launch-id") + 1],
+          kind: "refused",
+          evidence: "spawn-not-attempted",
+          reason: "resume-unavailable",
+        });
+        proc.exit(2);
+        return {
+          control: proc.stdout,
+          exited: proc.exited,
+          kill: (signal) => proc.kill(signal),
+          disposeControl: () => proc.disposeOutput(),
+        };
+      },
+    });
+    running = dispatch(["reconnect", f.host.conversationId], {
+      rootDir: f.controls.registration.workingDirectory,
+      signal: controller.signal,
+      onStderr: (line) => {
+        if (line.includes("Waiting for")) waiting.resolve();
+      },
+      reconnectDeps: {
+        runner,
+        terminal: true,
+        ownerPresence: () => false,
+        follow: async (opts: import("../../src/store/tailer.js").FollowOpts) => {
+          trigger = () => opts.onTrigger(createTailer(opts.dir));
+          trigger();
+          if (opts.signal?.aborted) return;
+          await new Promise<void>((resolve) =>
+            opts.signal?.addEventListener("abort", () => resolve(), { once: true }),
+          );
+        },
+      },
+    });
+    await Promise.race([
+      waiting.promise,
+      running.then(() => {
+        throw new Error("Reconnect returned while the current executor still held its lease");
+      }),
+    ]);
+    expect(calls).toBe(0);
+    expect(presenceHeld(f.paths.dir)).toBe(true);
+    const before = viewConversation(f.paths.dir).state.connection;
+    expect(before?.reconnects[before.reconnectId ?? ""]?.kind).toBe("requested");
+    f.controls.lease?.release();
+    trigger();
+    expect(await running).toMatchObject({ kind: "reconnect", verdict: "held" });
+    expect(calls).toBe(1);
+  } finally {
+    controller.abort();
+    proc.exit(null);
+    try {
+      await running;
+    } finally {
+      f.close();
+    }
+  }
+});
+
+test("cancelling public reconnect withdraws only its pre-launch wait and keeps feedback", async () => {
+  const { createHcnRunner } = await import("../../src/harness/hcn-runner.js");
+  const f = boundFixture();
+  const controller = new AbortController();
+  const waiting = Promise.withResolvers<void>();
+  let running: Promise<unknown> | undefined;
+  let calls = 0;
+  try {
+    f.controls.probe = () => false;
+    f.acquire();
+    expect(
+      f.host.enqueueInput({ id: "keep-on-cancel", mode: "queue", text: "Keep this feedback" })
+        .verdict,
+    ).toBe("accepted");
+    running = dispatch(["reconnect", f.host.conversationId], {
+      rootDir: f.controls.registration.workingDirectory,
+      signal: controller.signal,
+      onStderr: (line) => {
+        if (line.includes("Waiting for")) waiting.resolve();
+      },
+      reconnectDeps: {
+        terminal: true,
+        ownerPresence: () => false,
+        runner: createHcnRunner({
+          bin: "/fake/hcn",
+          spawn: () => {
+            throw new Error("Wrong transport");
+          },
+          spawnInteractive: () => {
+            calls++;
+            throw new Error("Must not launch during a wait");
+          },
+        }),
+      },
+    });
+    await Promise.race([
+      waiting.promise,
+      running.then(() => {
+        throw new Error("Wait ended early");
+      }),
+    ]);
+    controller.abort();
+    expect(await running).toMatchObject({ kind: "reconnect", verdict: "cancelled" });
+    const state = viewConversation(f.paths.dir).state;
+    expect(state.connection?.reconnectId).toBeNull();
+    expect(
+      Object.values(state.connection?.reconnects ?? {}).map((request) => request.kind),
+    ).toEqual(["withdrawn"]);
+    expect(state.inputs.map((input) => input.id)).toContain("keep-on-cancel");
+    expect(presenceHeld(f.paths.dir)).toBe(true);
+    expect(calls).toBe(0);
+  } finally {
+    controller.abort();
+    try {
+      await running;
+    } finally {
+      f.close();
+    }
+  }
+});
+
+test("a duplicate public reconnect reports the existing request without invoking a native process", async () => {
+  const { createHcnRunner } = await import("../../src/harness/hcn-runner.js");
+  const f = boundFixture();
+  let calls = 0;
+  try {
+    f.controls.probe = () => false;
+    expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("accepted");
+    const before = viewConversation(f.paths.dir).state;
+    const result = await dispatch(["reconnect", f.host.conversationId], {
+      rootDir: f.controls.registration.workingDirectory,
+      onStderr: () => {},
+      reconnectDeps: {
+        terminal: true,
+        ownerPresence: () => false,
+        runner: createHcnRunner({
+          bin: "/fake/hcn",
+          spawn: () => {
+            throw new Error("Wrong transport");
+          },
+          spawnInteractive: () => {
+            calls++;
+            throw new Error("Duplicate launch");
+          },
+        }),
+      },
+    });
+    expect(result).toMatchObject({ kind: "reconnect", verdict: "pending" });
+    expect(calls).toBe(0);
+    expect(viewConversation(f.paths.dir).state.seq).toBe(before.seq);
+  } finally {
+    f.close();
+  }
+});
+
+test("public reconnect directs a live author back to listening without changing the record", async () => {
+  const f = boundFixture();
+  const output: string[] = [];
+  try {
+    const before = f.host.state().seq;
+    const result = await dispatch(["reconnect", f.host.conversationId], {
+      rootDir: f.controls.registration.workingDirectory,
+      onStderr: (line) => output.push(line),
+      reconnectDeps: { terminal: true, ownerPresence: () => true },
+    });
+    expect(result).toMatchObject({ kind: "reconnect", verdict: "held" });
+    expect(output.join("\n")).toContain("Your interactive session is still open");
+    expect(output.join("\n")).toContain("resume-listen");
+    expect(viewConversation(f.paths.dir).state.seq).toBe(before);
+  } finally {
+    f.close();
+  }
+});
+
+test.each(["no-terminal", "unknown-owner", "already-cancelled"] as const)(
+  "public reconnect %s cannot reserve or invoke",
+  async (reason) => {
+    const { createHcnRunner } = await import("../../src/harness/hcn-runner.js");
+    const f = boundFixture();
+    const controller = new AbortController();
+    let calls = 0;
+    try {
+      if (reason === "already-cancelled") controller.abort();
+      const before = f.host.state().seq;
+      const result = await dispatch(["reconnect", f.host.conversationId], {
+        rootDir: f.controls.registration.workingDirectory,
+        signal: controller.signal,
+        onStderr: () => {},
+        reconnectDeps: {
+          terminal: reason !== "no-terminal",
+          ownerPresence: () => undefined,
+          runner: createHcnRunner({
+            bin: "/fake/hcn",
+            spawn: () => {
+              throw new Error("Wrong transport");
+            },
+            spawnInteractive: () => {
+              calls++;
+              throw new Error("Must not launch");
+            },
+          }),
+        },
+      });
+      expect(result).toMatchObject({
+        kind: "reconnect",
+        verdict: reason === "already-cancelled" ? "cancelled" : "held",
+      });
+      expect(calls).toBe(0);
+      expect(viewConversation(f.paths.dir).state.seq).toBe(before);
+    } finally {
+      f.close();
+    }
+  },
+);
+
+test.each(["--harness", "--model", "--resume", "--cwd", "--startup-prompt", "--json"])(
+  "public reconnect refuses the %s override before touching a record",
+  async (flag) => {
+    expect(
+      await dispatch(["reconnect", "not-created", flag, "value"], {
+        conversationsFactory: () => {
+          throw new Error("Parsing must not open a record");
+        },
+      }),
+    ).toMatchObject({ kind: "help" });
+  },
+);
+
+test("public reconnect retains a live foreign waiter and replaces it only after verified exit", async () => {
+  const { createHcnRunner } = await import("../../src/harness/hcn-runner.js");
+  const { FakeHcnProcess } = await import("../harness/fakes.js");
+  const f = boundFixture();
+  const proc = new FakeHcnProcess();
+  let calls = 0;
+  const program = `import {createConversationHost} from ${JSON.stringify(new URL("../../src/store/conversation-host.ts", import.meta.url).href)}; const host=createConversationHost(${JSON.stringify(f.paths.dir)},{executorLease:()=>false,nativeSessionRoot:${JSON.stringify(f.controls.registration.workingDirectory)},now:Date.now,onEffect(){},onRecord(){},ownerPresence:()=>false,presence:()=>undefined}); if(host.controlReconnect({kind:'request'}).verdict!=='accepted')throw new Error('Request refused');console.log('READY');await Bun.stdin.stream().getReader().read();`;
+  const child = Bun.spawn([process.execPath, "-e", program], {
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  try {
+    await readReady(child.stdout);
+    const before = viewConversation(f.paths.dir).state;
+    const oldId = before.connection?.reconnectId;
+    if (!oldId) throw new Error("No foreign wait");
+    const deps = {
+      rootDir: f.controls.registration.workingDirectory,
+      onStderr: () => {},
+      reconnectDeps: {
+        terminal: true,
+        ownerPresence,
+        runner: createHcnRunner({
+          bin: "/fake/hcn",
+          spawn: () => {
+            throw new Error("Wrong transport");
+          },
+          spawnInteractive: (argv) => {
+            calls++;
+            proc.emit({
+              v: 1,
+              operation: "interactive",
+              launchId: argv[argv.indexOf("--launch-id") + 1],
+              kind: "refused",
+              evidence: "spawn-not-attempted",
+              reason: "resume-unavailable",
+            });
+            proc.exit(2);
+            return {
+              control: proc.stdout,
+              exited: proc.exited,
+              kill: (signal) => proc.kill(signal),
+              disposeControl: () => proc.disposeOutput(),
+            };
+          },
+        }),
+      },
+    };
+    expect(await dispatch(["reconnect", f.host.conversationId], deps)).toMatchObject({
+      kind: "reconnect",
+      verdict: "pending",
+    });
+    expect(calls).toBe(0);
+    expect(viewConversation(f.paths.dir).state.seq).toBe(before.seq);
+    child.kill("SIGKILL");
+    await child.exited;
+    const departed = before.connection?.reconnects[oldId]?.request.requester;
+    if (!departed) throw new Error("Missing requester provenance");
+    expect(ownerPresence(departed)).toBe(false);
+    expect(await dispatch(["reconnect", f.host.conversationId], deps)).toMatchObject({
+      kind: "reconnect",
+      verdict: "held",
+    });
+    expect(calls).toBe(1);
+    const after = viewConversation(f.paths.dir).state.connection;
+    expect(after?.reconnects[oldId]).toMatchObject({
+      kind: "withdrawn",
+      reason: "requester-exited",
+    });
+    expect(Object.keys(after?.reconnects ?? {})).toHaveLength(2);
+    expect(after?.reconnectId).not.toBe(oldId);
+  } finally {
+    child.kill("SIGKILL");
+    await child.exited;
+    proc.exit(null);
+    f.close();
+  }
+});

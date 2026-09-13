@@ -14,6 +14,7 @@ import { validConversationId } from "../store/errors.js";
  */
 
 export type MappedCommand =
+  | { readonly kind: "reconnect"; readonly conversationId: string }
   | { readonly kind: "codex-hook"; readonly root?: string }
   | { readonly kind: "connection-setup"; readonly hooksFile: string; readonly json: boolean }
   | { readonly kind: "connection-listen"; readonly conversationId: string; readonly json: boolean }
@@ -83,6 +84,14 @@ export type MappedCommand =
 export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
   const [cmd, ...rest] = argv;
   switch (cmd) {
+    case "reconnect":
+      return rest.length === 1 && rest[0] && validConversationId(rest[0])
+        ? { kind: "reconnect", conversationId: rest[0] }
+        : {
+            kind: "help",
+            message:
+              "usage: lucid reconnect CONVERSATION\nReserve return to the exact saved native session, wait for the current response and process cleanup, then open it in this terminal. Ctrl+C cancels the wait only before launch. Direct native resume bypasses this protection. For machine-readable detection, use lucid connection status CONVERSATION --json.",
+          };
     case "_codex-hook":
       return rest.length === 0
         ? { kind: "codex-hook" }
@@ -346,7 +355,8 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
     case "-h":
       return {
         kind: "help",
-        message: "usage: lucid <send|watch|run|chat|serve|announce|inject|context> [...]",
+        message:
+          "usage: lucid <send|watch|run|chat|serve|reconnect|connection|artifact|announce|inject|context> [...]",
       };
     default:
       return { kind: "help", message: `unknown command: ${cmd}` };

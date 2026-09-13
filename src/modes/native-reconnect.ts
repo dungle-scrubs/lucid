@@ -1,4 +1,4 @@
-import { selfInvocation, shellCommand } from "../cli/invocation.js";
+import { listeningCommand } from "../cli/invocation.js";
 import type { HarnessRunner, InteractiveHandle, InteractiveResult } from "../harness/runner.js";
 import { HarnessRefusal } from "../harness/runner.js";
 import { ownerPresence } from "../process-owner.js";
@@ -90,11 +90,7 @@ export async function runNativeReconnect(
       startupPrompt: [
         `Resume listening to Lucid conversation ${writer.conversationId}.`,
         "Run this command exactly once in this native session:",
-        shellCommand([
-          "/usr/bin/env",
-          `LUCID_ROOT=${options.root}`,
-          ...selfInvocation(["connection", "resume-listen", writer.conversationId, "--json"]),
-        ]),
+        listeningCommand(options.root, writer.conversationId),
         "If the result is requested, finish this turn so the installed Stop hook can listen. If it is held, refused, or fails, report the result and stop. Do not retry or poll. Do not process saved feedback in this startup turn; feedback requires its own offer and receipt.",
       ].join("\n"),
     });

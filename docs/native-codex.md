@@ -85,8 +85,12 @@ The reconnect source supplies one startup instruction to run the exact-record
 `resume-listen` command, then finish the native turn so Stop can listen. Native
 approval policy still applies to that command. A startup prompt is not feedback
 and does not confirm receipt or readiness. A refused command keeps feedback
-held; it is not retried automatically. The public reconnect command and browser
-controls remain pending integration.
+held; it is not retried automatically. Use `lucid reconnect CONVERSATION` in a terminal pane to reserve the return,
+wait for the current response and cleanup, and open that same native session.
+Ctrl+C cancels a pre-launch wait without stopping the current response. Duplicate
+commands report the existing request. This command uses native terminal I/O;
+use `connection status CONVERSATION --json` for machine-readable detection.
+Browser controls and automatic bound-runtime activation remain pending.
 
 Expiry or interruption disables listening until another explicit
 `resume-listen` request in the same native session. `lucid connection
