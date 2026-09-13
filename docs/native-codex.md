@@ -108,3 +108,10 @@ Headless start confirmation requires HCN's `harness-minted` identity for the exa
 saved session and owned invocation. A preliminary `caller-assigned` identity stays
 in the record but grants no start confirmation. Missing confirmation keeps the
 launch held; it does not authorize replay.
+
+Connection status distinguishes an owned headless launch that is starting, a
+confirmed native response in progress, and a terminal response awaiting process
+cleanup. Those active labels require a matching current attempt, fresh owner
+confirmation and a held executor lock. Missing owner or lock evidence stays
+unknown. A settled process with an uncertain response remains outcome unknown.
+These labels describe evidence; they do not authorize launch or replay.

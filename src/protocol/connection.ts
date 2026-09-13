@@ -162,10 +162,14 @@ export type NativeLaunchState =
       readonly refusedActionId: string;
     };
 
+export function isUnsettledLaunch(
+  entry: NativeLaunchState,
+): entry is Extract<NativeLaunchState, { kind: "intended" | "started" }> {
+  return entry.kind === "intended" || entry.kind === "started";
+}
+
 export function hasUnsettledLaunch(connection: ConnectionState | null): boolean {
-  return Object.values(connection?.launches ?? {}).some(
-    (entry) => entry.kind === "intended" || entry.kind === "started",
-  );
+  return Object.values(connection?.launches ?? {}).some(isUnsettledLaunch);
 }
 
 export const LISTENER_WAIT_MAX_MS = 45_000;

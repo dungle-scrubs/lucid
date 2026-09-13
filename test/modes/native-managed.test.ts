@@ -10,6 +10,7 @@ import { createManagedExecution } from "../../src/modes/managed-execution.js";
 import { createManagedPreparation } from "../../src/modes/managed-preparation.js";
 import { createManagedSource } from "../../src/modes/managed-source.js";
 import { hasUnsettledNativeWork, type NativeBinding } from "../../src/protocol/connection.js";
+import { observeConnection, readConnection } from "../../src/store/connection-view.js";
 import { createConversationHost } from "../../src/store/conversation-host.js";
 import { registerNativeSession } from "../../src/store/native-registration.js";
 import { acquirePresence, type PresenceHandle } from "../../src/store/presence.js";
@@ -288,6 +289,13 @@ test("owned cleanup preserves an uncertain response and blocks later native work
     ]);
     expect(hasUnsettledNativeWork(f.host.state())).toBe(true);
     expect(
+      observeConnection(f.host.state(), {
+        executorPresent: false,
+        now: 1,
+        ownerPresence: () => false,
+      }),
+    ).toMatchObject({ state: "outcome-unknown", reason: "execution-outcome-unverified" });
+    expect(
       f.host.acceptInput({ id: "later", mode: "queue", text: "Next request" }, { managed: true })
         .verdict,
     ).toBe("accepted");
@@ -502,6 +510,101 @@ test("an admitted native source records one approval answer and completes the sa
     f.close();
   }
 });
+
+test("current owned native work projects starting, responding and cleanup as separate states", async () => {
+  const f = setup();
+  const execution = createManagedExecution({
+    cwd: f.root,
+    driver: f.driver,
+    host: f.host,
+    runner: f.runner,
+  });
+  const status = () =>
+    readConnection(f.host.dir, {
+      now: () => 1,
+      ownerPresence: (owner) => owner.pid === process.pid,
+    });
+  try {
+    const prepared = await execution.prepare({
+      inputId: "feedback",
+      text: "Use the same native session",
+      turnId: "projection-turn",
+      native: { kind: "fresh" },
+      profile: "headless-turn",
+      signal: new AbortController().signal,
+    });
+    if (prepared.kind !== "ready" || !prepared.nativeApprovals) throw new Error("Preparation held");
+    expect(status()).toMatchObject({ state: "headless-starting" });
+    prepared.nativeApprovals.dispatch?.(() => undefined);
+    expect(
+      execution.sendFrame({
+        kind: "event",
+        epoch: f.host.state().epoch,
+        n: 1,
+        turnId: "projection-turn",
+        event: {
+          kind: "identity",
+          authority: "harness-minted",
+          sessionId: f.binding.nativeSessionId,
+        },
+      }).verdict,
+    ).toBe("accepted");
+    expect(status()).toMatchObject({ state: "headless-running" });
+    expect(
+      execution.sendFrame({
+        kind: "event",
+        epoch: f.host.state().epoch,
+        n: 2,
+        turnId: "projection-turn",
+        event: { kind: "done", cause: "clean", exitCode: 0 },
+      }).verdict,
+    ).toBe("accepted");
+    expect(status()).toMatchObject({ state: "cleanup" });
+    execution.turnSettled("projection-turn");
+    expect(status()).toMatchObject({ state: "closed" });
+  } finally {
+    execution.close();
+    f.close();
+  }
+});
+
+test.each(["unknown-owner", "unknown-lock"] as const)(
+  "%s cannot project a native launch as currently starting",
+  async (missing) => {
+    const f = setup();
+    const preparation = createManagedPreparation({
+      cwd: f.root,
+      driver: f.driver,
+      host: f.host,
+      runner: f.runner,
+    });
+    try {
+      const prepared = await preparation.prepare({
+        inputId: "feedback",
+        text: "Use the same native session",
+        turnId: "unknown-status",
+        native: { kind: "fresh" },
+        profile: "headless-turn",
+        signal: new AbortController().signal,
+      });
+      expect(prepared.kind).toBe("ready");
+      expect(
+        observeConnection(f.host.state(), {
+          executorPresent: missing === "unknown-lock" ? undefined : true,
+          now: 1,
+          ownerPresence: (owner) =>
+            owner.pid === process.pid ? (missing === "unknown-owner" ? undefined : true) : false,
+        }),
+      ).toMatchObject({
+        state: "owner-unknown",
+        reason: missing === "unknown-owner" ? "headless-owner-unverified" : "executor-unverified",
+      });
+    } finally {
+      preparation.close();
+      f.close();
+    }
+  },
+);
 
 test("native registration stays serialized through the HCN creation callback", async () => {
   const f = setup();

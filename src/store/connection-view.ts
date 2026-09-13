@@ -5,6 +5,7 @@ import {
   currentReconnect,
   hasUncertainReconnect,
   hasUnsettledLaunch,
+  isUnsettledLaunch,
   nativeOwners,
 } from "../protocol/connection.js";
 import type { ProcessOwner } from "../protocol/process-owner.js";
@@ -27,6 +28,9 @@ export interface ConnectionStatus {
     | "delivery-uncertain"
     | "outcome-unknown"
     | "launch-uncertain"
+    | "headless-starting"
+    | "headless-running"
+    | "cleanup"
     | "reconnect-waiting"
     | "resume-failed"
     | "closed";
@@ -99,20 +103,75 @@ export function observeConnection(
     conflict = values.filter((value) => value === true).length > 1;
     alive = values.includes(undefined) || conflict ? undefined : values.includes(true);
   }
-  if (hasUnsettledLaunch(state.connection))
-    return observations.some((entry) => entry.present === true)
-      ? {
+  if (hasUnsettledLaunch(state.connection)) {
+    if (observations.some((entry) => entry.present === true))
+      return {
+        message:
+          "An interactive owner is open while a same-session launch is unsettled. Resolve ownership and launch outcome before continuing.",
+        reason: "native-identity-conflict",
+        state: "owner-conflict",
+      };
+    const launches = Object.values(state.connection?.launches ?? {}).filter(isUnsettledLaunch);
+    const pending = launches.length === 1 ? launches[0] : undefined;
+    const attempt = pending && state.executions[pending.launch.inputId];
+    const interactiveOwnersGone = observations.every((entry) => entry.present === false);
+    const requester = pending ? present(pending.launch.requester) : false;
+    if (!interactiveOwnersGone || requester === undefined || executorPresent === undefined)
+      return {
+        message:
+          "Lucid cannot verify the owners or executor lock for this headless launch. Saved feedback remains held.",
+        reason: !interactiveOwnersGone
+          ? "owner-unknown"
+          : requester === undefined
+            ? "headless-owner-unverified"
+            : "executor-unverified",
+        state: "owner-unknown",
+      };
+    if (
+      pending &&
+      attempt?.kind === "attempt-started" &&
+      pending.launch.execution?.turnId === attempt.turnId &&
+      pending.launch.execution.attempt === attempt.attempt &&
+      pending.launch.epoch === state.epoch &&
+      requester === true &&
+      executorPresent === true
+    ) {
+      if (state.completedTurns[attempt.turnId] !== undefined)
+        return {
           message:
-            "An interactive owner is open while a same-session launch is unsettled. Resolve ownership and launch outcome before continuing.",
-          reason: "native-identity-conflict",
-          state: "owner-conflict",
-        }
-      : {
-          message:
-            "A same-session launch was admitted, but process creation and cleanup are not settled. Saved feedback will not be sent again automatically.",
-          reason: "launch-unsettled",
-          state: "launch-uncertain",
+            "The response ended. Waiting for its process to finish cleanup before continuing.",
+          reason: null,
+          state: "cleanup",
         };
+      return pending.kind === "started"
+        ? {
+            message: "The same native session is responding headlessly.",
+            reason: null,
+            state: "headless-running",
+          }
+        : {
+            message: "Resuming the same native session headlessly.",
+            reason: null,
+            state: "headless-starting",
+          };
+    }
+    return {
+      message:
+        "A same-session launch was admitted, but process creation and cleanup are not settled. Saved feedback will not be sent again automatically.",
+      reason: "launch-unsettled",
+      state: "launch-uncertain",
+    };
+  }
+  const uncertain = Object.values(state.connection?.launches ?? {}).find(
+    (entry) => entry.kind === "settled" && entry.outcome.kind === "uncertain",
+  );
+  if (uncertain?.kind === "settled")
+    return {
+      message:
+        "The headless process ended, but its response outcome could not be confirmed. Saved feedback will not be sent again automatically.",
+      reason: "execution-outcome-unverified",
+      state: "outcome-unknown",
+    };
   const reconnect = currentReconnect(state.connection);
   if (reconnect?.kind === "intended" && conflict) return OWNER_CONFLICT;
   if (hasUncertainReconnect(state.connection))
@@ -291,7 +350,10 @@ export function readConnection(
   const observedAt = (deps.now ?? Date.now)();
   return {
     ...observeConnection(state, {
-      executorPresent: currentListener(state.connection) ? presenceHeld(dir) : false,
+      executorPresent:
+        currentListener(state.connection) || hasUnsettledLaunch(state.connection)
+          ? presenceHeld(dir)
+          : false,
       now: observedAt,
       ownerPresence: deps.ownerPresence ?? ownerPresence,
     }),
