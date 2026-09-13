@@ -273,7 +273,45 @@ export function hasUncertainReconnect(connection: ConnectionState | null): boole
   );
 }
 
+export const PUBLICATION_MESSAGE_MAX = 2000;
+
+export interface NativePublication {
+  readonly actions: Readonly<Record<string, string>>;
+  readonly failure: {
+    readonly actionId: string;
+    readonly at: number;
+    readonly message: string;
+    readonly reason: string;
+  } | null;
+  readonly legacyDelivery: {
+    readonly epoch: number;
+    readonly inFlight: number;
+    readonly uncertainInputs: readonly string[];
+  };
+  readonly requestedActionId: string;
+}
+
+export function requiresNativeConnection(state: ChannelState): boolean {
+  return state.nativePublication !== null || state.connection !== null;
+}
+
+export function awaitingNativeBinding(state: ChannelState): boolean {
+  return requiresNativeConnection(state) && state.connection === null;
+}
+
+export function hasUnsettledPublicationDelivery(state: ChannelState): boolean {
+  const delivery = state.nativePublication?.legacyDelivery;
+  return !!delivery && (delivery.inFlight > 0 || delivery.uncertainInputs.length > 0);
+}
+
 export type ConnectionFact =
+  | { readonly actionId: string; readonly kind: "publication-requested" }
+  | {
+      readonly actionId: string;
+      readonly kind: "publication-connection-failed";
+      readonly message: string;
+      readonly reason: string;
+    }
   | {
       readonly actionId: string;
       readonly kind: "reconnect-settled";
@@ -554,6 +592,23 @@ function parseInteractiveResult(value: unknown): InteractiveResult | null {
 
 export function parseConnectionFact(value: unknown): ConnectionFact | null {
   if (!object(value) || !connectionId(value.actionId)) return null;
+  if (value.kind === "publication-requested") return { actionId: value.actionId, kind: value.kind };
+  if (value.kind === "publication-connection-failed") {
+    if (
+      typeof value.reason !== "string" ||
+      !isWireId(value.reason) ||
+      typeof value.message !== "string" ||
+      !value.message.length ||
+      value.message.length > PUBLICATION_MESSAGE_MAX
+    )
+      return null;
+    return {
+      actionId: value.actionId,
+      kind: value.kind,
+      message: value.message,
+      reason: value.reason,
+    };
+  }
   if (
     value.kind === "reconnect-settled" &&
     connectionId(value.requestId) &&
@@ -893,14 +948,52 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
   const fact = parseConnectionFact(raw);
   if (!fact) return refuseConnection(state, now, "invalid-connection");
   const serialized = JSON.stringify(fact);
-  const prior = state.connection?.actions[fact.actionId];
+  const prior =
+    state.connection?.actions[fact.actionId] ?? state.nativePublication?.actions[fact.actionId];
   if (prior !== undefined && prior !== serialized)
     return refuseConnection(state, now, "connection-conflict");
   let next = state;
   if (prior !== serialized) {
     const actions = { ...state.connection?.actions, [fact.actionId]: serialized };
-    if (fact.kind === "bound") {
-      if (!state.connection && hasUnsettledExecution(state))
+    if (fact.kind === "publication-requested" || fact.kind === "publication-connection-failed") {
+      const publication = state.nativePublication;
+      if (
+        fact.kind === "publication-requested" &&
+        publication &&
+        publication.requestedActionId !== fact.actionId
+      )
+        return refuseConnection(state, now, "connection-conflict");
+      if (fact.kind === "publication-connection-failed" && !publication)
+        return refuseConnection(state, now, "connection-not-admitted");
+      next = {
+        ...state,
+        nativePublication: {
+          actions: { ...publication?.actions, [fact.actionId]: serialized },
+          failure:
+            fact.kind === "publication-connection-failed"
+              ? { actionId: fact.actionId, at: now, message: fact.message, reason: fact.reason }
+              : (publication?.failure ?? null),
+          legacyDelivery: publication?.legacyDelivery ?? {
+            epoch: state.epoch,
+            inFlight: state.inFlightInputs,
+            uncertainInputs: state.inputs
+              .filter(
+                (input) =>
+                  !Object.hasOwn(state.executions, input.id) &&
+                  !input.redeliver &&
+                  !Object.hasOwn(state.appliedInputs, input.id),
+              )
+              .map((input) => input.id),
+          },
+          requestedActionId: publication?.requestedActionId ?? fact.actionId,
+        },
+        seq: state.seq + 1,
+      };
+    } else if (fact.kind === "bound") {
+      if (
+        !state.connection &&
+        (hasUnsettledExecution(state) || hasUnsettledPublicationDelivery(state))
+      )
         return refuseConnection(state, now, "execution-blocked");
       const previousNative = state.harnessSessions[fact.binding.harness];
       if (

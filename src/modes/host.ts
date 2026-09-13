@@ -167,6 +167,7 @@ export type SourceEnd =
 export interface ArtifactHost
   extends Pick<
     ConversationHost,
+    | "dispatchOrdinary"
     | "cursor"
     | "collectEffects"
     | "advanceCursor"
@@ -179,6 +180,7 @@ export interface ArtifactHost
 }
 
 export const hostSeamFor = (host: ConversationHost): ArtifactHost => ({
+  dispatchOrdinary: (epoch, invoke) => host.dispatchOrdinary(epoch, invoke),
   comparisonSnapshot: (id) => host.comparisonSnapshot(id),
   inputStatus: (id) => host.state().inputs.find((input) => input.id === id)?.status,
   cursor: () => host.cursor(),
@@ -520,6 +522,20 @@ interface HostContext {
   delivering(): void;
 }
 
+/** The callback starts work synchronously; returned promises outlive the short append lock. */
+function ordinaryDispatch<TValue>(
+  deps: HeadlessDeps,
+  ctx: HostContext,
+  invoke: () => TValue,
+): TValue {
+  const admitted = deps.host.dispatchOrdinary(ctx.sequencer.epoch, invoke);
+  if (admitted.verdict === "refused") {
+    deps.onDispatchRejected?.(ctx.getTurnId(), "dispatch-not-called");
+    throw new ExecutionSettlementError(admitted.issue);
+  }
+  return admitted.value;
+}
+
 interface StrategyHandle {
   recordChanged(): void;
   /** Handle an input arrival — must disposition via sequencer and arrange
@@ -548,32 +564,39 @@ const sessionStrategy = (
   // hcn session carries --model, --provider and (since 0.6.0) --effort.
   const cancellation = new AbortController();
   const open = (resume: string | undefined) =>
-    deps.runner.openSession({
-      signal: cancellation.signal,
-      ...(deps.cwd === undefined ? {} : { cwd: deps.cwd }),
-      harness: deps.harness,
-      sessionId: deps.sessionId,
-      // Continue the session this harness last held in this record, if lucid
-      // found one. The id comes from attach-ok and nowhere else.
-      ...(resume === undefined ? {} : { resume }),
-      ...(deps.model === undefined ? {} : { model: deps.model }),
-      ...(deps.provider === undefined ? {} : { provider: deps.provider }),
-      ...(deps.effort === undefined ? {} : { effort: deps.effort }),
-    });
+    ordinaryDispatch(deps, ctx, () =>
+      deps.runner.openSession({
+        signal: cancellation.signal,
+        ...(deps.cwd === undefined ? {} : { cwd: deps.cwd }),
+        harness: deps.harness,
+        sessionId: deps.sessionId,
+        // Continue the session this harness last held in this record, if lucid
+        // found one. The id comes from attach-ok and nowhere else.
+        ...(resume === undefined ? {} : { resume }),
+        ...(deps.model === undefined ? {} : { model: deps.model }),
+        ...(deps.provider === undefined ? {} : { provider: deps.provider }),
+        ...(deps.effort === undefined ? {} : { effort: deps.effort }),
+      }),
+    );
   const deferred = Promise.withResolvers<SessionHandle>();
   const opening = deferred.promise;
   let openingStarted = false;
   const startOpening = (resume: string | undefined): Promise<SessionHandle> => {
     if (openingStarted) return opening;
     openingStarted = true;
-    deferred.resolve(
-      deps.beforeProcess
-        ? deps.beforeProcess(resume, cancellation.signal).then(() => {
-            if (cancellation.signal.aborted) throw new Error("Source closed before process start");
-            return open(resume);
-          })
-        : open(resume),
-    );
+    try {
+      deferred.resolve(
+        deps.beforeProcess
+          ? deps.beforeProcess(resume, cancellation.signal).then(() => {
+              if (cancellation.signal.aborted)
+                throw new Error("Source closed before process start");
+              return open(resume);
+            })
+          : open(resume),
+      );
+    } catch (cause) {
+      deferred.reject(cause);
+    }
     return opening;
   };
   if (!deps.prepareTurn) startOpening(ctx.resumeSessionId);
@@ -610,6 +633,8 @@ const sessionStrategy = (
     received.delete(id);
     ctx.sequencer.disposition(id, "rejected", reason);
   };
+  const rejectDelivery = (id: string, cause: unknown): void =>
+    reject(id, cause instanceof ExecutionSettlementError ? cause.message : "session closed");
   let artifactPreambleSent = false;
 
   const refusePrepared = (cause: unknown, fallbackCode: string): void => {
@@ -715,7 +740,7 @@ const sessionStrategy = (
       // (RFC-05 R7) — the same discipline as never mirroring the harness
       // normaliser's vocabulary anywhere else.
       void opening
-        .then((session) => session.answer(id, composed))
+        .then((session) => ordinaryDispatch(deps, ctx, () => session.answer(id, composed)))
         .then((ans) => {
           if (ans.disposition === "rejected" && ans.reason === "no-open-question") {
             // The harness disagrees that a question is open. lucid replaced
@@ -733,7 +758,11 @@ const sessionStrategy = (
               terminal: false,
             });
             return opening
-              .then((session) => session.send(id, `${LUCID_REQUEST_GUIDANCE}\n\n${text}`))
+              .then((session) =>
+                ordinaryDispatch(deps, ctx, () =>
+                  session.send(id, `${LUCID_REQUEST_GUIDANCE}\n\n${text}`),
+                ),
+              )
               .then((sent) => {
                 if (sent.disposition === "rejected") {
                   reject(id, sent.reason ?? "send rejected");
@@ -742,8 +771,8 @@ const sessionStrategy = (
                 ctx.expected.push({ inputId: id, applied: true });
                 ctx.sequencer.disposition(id, "applied");
               })
-              .catch(() => {
-                reject(id, "session closed");
+              .catch((cause: unknown) => {
+                rejectDelivery(id, cause);
               });
           }
           if (ans.disposition === "rejected") {
@@ -753,8 +782,8 @@ const sessionStrategy = (
           ctx.expected.push({ inputId: id, applied: true });
           ctx.sequencer.disposition(id, "applied");
         })
-        .catch(() => {
-          reject(id, "session closed");
+        .catch((cause: unknown) => {
+          rejectDelivery(id, cause);
         });
       return;
     }
@@ -803,7 +832,7 @@ const sessionStrategy = (
             ctx.owedBytes.clear();
             ctx.handedOver();
             sendCalled = true;
-            return session.send(id, prepared.prompt);
+            return ordinaryDispatch(deps, ctx, () => session.send(id, prepared.prompt));
           })()
         : opening.then((session) => {
             if (closed) return null;
@@ -814,7 +843,9 @@ const sessionStrategy = (
               return null;
             }
             if (prepared.kind === "ready") ctx.delivering();
-            return session.send(id, prepared.kind === "ready" ? prepared.prompt : composed);
+            return ordinaryDispatch(deps, ctx, () =>
+              session.send(id, prepared.kind === "ready" ? prepared.prompt : composed),
+            );
           });
     void delivery
       .then((sent) => {
@@ -840,7 +871,7 @@ const sessionStrategy = (
         if (prepare && mode === "queue") {
           if (!sendCalled) deps.onDispatchRejected?.(preparedTurnId, "dispatch-not-called");
           refusePrepared(cause, failureCode);
-        } else reject(id, "session closed");
+        } else rejectDelivery(id, cause);
       });
   };
 
@@ -1142,21 +1173,24 @@ const turnStrategy = (
             if (closed || ctx.isStopped())
               return { done: true, value: undefined as unknown as AsyncIterable<HarnessEvent> };
             if (deps.prepareTurn) ctx.handedOver();
-            let raw = deps.runner.streamTurn({
-              signal: activeAbort.signal,
-              ...(deps.cwd === undefined ? {} : { cwd: deps.cwd }),
-              harness: deps.harness,
-              prompt: composedPrompt,
-              turnId,
-              ...(nativeApprovals
-                ? { nativeApprovals }
-                : {
-                    ...(deps.model === undefined ? {} : { model: deps.model }),
-                    ...(deps.provider === undefined ? {} : { provider: deps.provider }),
-                    ...(deps.effort === undefined ? {} : { effort: deps.effort }),
-                  }),
-              ...(attemptResume && resumeId !== undefined ? { resume: resumeId } : {}),
-            });
+            const signal = activeAbort.signal;
+            const invoke = () =>
+              deps.runner.streamTurn({
+                signal,
+                ...(deps.cwd === undefined ? {} : { cwd: deps.cwd }),
+                harness: deps.harness,
+                prompt: composedPrompt,
+                turnId,
+                ...(nativeApprovals
+                  ? { nativeApprovals }
+                  : {
+                      ...(deps.model === undefined ? {} : { model: deps.model }),
+                      ...(deps.provider === undefined ? {} : { provider: deps.provider }),
+                      ...(deps.effort === undefined ? {} : { effort: deps.effort }),
+                    }),
+                ...(attemptResume && resumeId !== undefined ? { resume: resumeId } : {}),
+              });
+            let raw = nativeApprovals ? invoke() : ordinaryDispatch(deps, ctx, invoke);
             if (attemptResume || (deps.probeFirstTurn === true && spawns === 0)) {
               spawns += 1;
               const probe = raw[Symbol.asyncIterator]();

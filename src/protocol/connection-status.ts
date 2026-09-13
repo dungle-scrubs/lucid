@@ -31,6 +31,7 @@ export interface ConnectionProjection extends ConnectionStatus {
   readonly actions: readonly ConnectionAction[];
   readonly conversationId: string;
   readonly interface: NativeInterface | null;
+  readonly nativeConnectionRequired: boolean;
   readonly nativeSessionId: string | null;
   readonly observedAt: number;
   readonly savedPreference: DriverPreference | null;

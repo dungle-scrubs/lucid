@@ -55,6 +55,7 @@ import type {
   ReconnectControl,
 } from "../protocol/connection.js";
 import {
+  awaitingNativeBinding,
   connectionId,
   connectionParticipation,
   connectionRegistration,
@@ -66,6 +67,7 @@ import {
   parseNativeBinding,
   reduceConnection,
   refuseConnection,
+  requiresNativeConnection,
   sameNativeBinding,
   sameNativeHistory,
 } from "../protocol/connection.js";
@@ -295,6 +297,12 @@ export interface ConversationHost {
   ):
     | { readonly verdict: "accepted" }
     | { readonly verdict: "refused"; readonly issue: ProtocolIssue };
+  dispatchOrdinary<TValue>(
+    epoch: number,
+    invoke: () => TValue,
+  ):
+    | { readonly verdict: "accepted"; readonly value: TValue }
+    | { readonly verdict: "refused"; readonly issue: ProtocolIssue };
   /** Checks before locking and again under the append lock. Native listener callers hold the
    * registration lock throughout; the raw kernel handle grants no authority.
    * The caller owns the returned lease through process cleanup; the host borrows it for checks. */
@@ -318,6 +326,10 @@ export interface ConversationHost {
   controlConnection(control: ConnectionControl): ReduceResult;
   controlReconnect(control: ReconnectControl): ReduceResult;
   writeConnection(fact: unknown): ReduceResult;
+  recordNativePublication(failure?: {
+    readonly message: string;
+    readonly reason: string;
+  }): ReduceResult;
   captureDispatch(
     inputId: string,
     from: number | ((state: ChannelState) => number),
@@ -431,6 +443,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
         readonly invoked: boolean;
       }
     | undefined;
+  const ordinaryInvocations = new WeakSet<() => unknown>();
   let nativeExecutor:
     | {
         readonly binding: NativeBinding;
@@ -503,7 +516,29 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     };
   };
 
-  const collectEffects = (fromOffset: number): CollectedBatch => log.collectEffects(fromOffset);
+  const collectEffects = (fromOffset: number): CollectedBatch => {
+    const batch = log.collectEffects(fromOffset);
+    if (
+      !awaitingNativeBinding(batch.state) ||
+      !batch.entries.some((entry) =>
+        entry.effects.some((effect) => effect.type === "send" && effect.frame.kind === "input"),
+      )
+    )
+      return batch;
+    return {
+      ...batch,
+      entries: batch.entries.map((entry) =>
+        entry.effects.some((effect) => effect.type === "send" && effect.frame.kind === "input")
+          ? {
+              ...entry,
+              effects: entry.effects.filter(
+                (effect) => effect.type !== "send" || effect.frame.kind !== "input",
+              ),
+            }
+          : entry,
+      ),
+    };
+  };
   const cursor = (): number => log.cursor();
   const advanceCursor = (offset: number): void => log.advanceCursor(offset);
   const artifactIndex = (): ReadonlyMap<string, number> => log.artifactIndex();
@@ -599,7 +634,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
       const result =
         "issue" in decision
           ? refuseExecution(state, at, decision.issue)
-          : state.connection && fact?.kind === "attempt-started"
+          : requiresNativeConnection(state) && fact?.kind === "attempt-started"
             ? refuseExecution(state, at, "connection-not-admitted")
             : reduceExecution(state, fact, at, deps.executorLease());
       return {
@@ -721,6 +756,8 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     reconnectCompletionId?: string,
   ): { readonly fact: ConnectionFact | null; readonly result: ReduceResult } => {
     const fact = parseConnectionFact(raw);
+    if (fact?.kind === "publication-requested" || fact?.kind === "publication-connection-failed")
+      return { fact, result: reduceConnection(state, fact, at) };
     if (fact?.kind === "reconnect-settled") {
       if (state.connection?.actions[fact.actionId] === JSON.stringify(fact))
         return { fact, result: reduceConnection(state, fact, at) };
@@ -1110,7 +1147,40 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
   };
 
   return {
+    dispatchOrdinary: (epoch, invoke) =>
+      log.inspectState((state) => {
+        if (
+          requiresNativeConnection(state) ||
+          !deps.executorLease() ||
+          !state.attachment ||
+          state.epoch !== epoch ||
+          ordinaryInvocations.has(invoke)
+        )
+          return { verdict: "refused", issue: "connection-not-admitted" };
+        ordinaryInvocations.add(invoke);
+        return { verdict: "accepted", value: invoke() };
+      }),
     writeConnection: writeAdmittedConnection,
+    recordNativePublication: (failure) =>
+      writeConnection((state) => {
+        const previous = state.nativePublication?.failure;
+        return {
+          fact: failure
+            ? {
+                actionId:
+                  previous?.reason === failure.reason && previous.message === failure.message
+                    ? previous.actionId
+                    : crypto.randomUUID(),
+                kind: "publication-connection-failed",
+                message: failure.message,
+                reason: failure.reason,
+              }
+            : {
+                actionId: state.nativePublication?.requestedActionId ?? crypto.randomUUID(),
+                kind: "publication-requested",
+              },
+        };
+      }),
     recordReconnectResult: ({ launchId, result }) =>
       writeConnection(
         (state) => {
@@ -1338,7 +1408,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
           if (request.kind === "native-headless") {
             const issue = nativeHeadlessIssue(state, request.binding, request.inputId);
             if (issue) return issue;
-          } else if (state.connection) return "connection-not-admitted";
+          } else if (requiresNativeConnection(state)) return "connection-not-admitted";
           return terminalDepartureIssue(state);
         });
       const check = (): ProtocolIssue | undefined => {
@@ -1588,7 +1658,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
       };
       const apply = (): ReduceResult =>
         transact(entry, (s) => {
-          if (s.connection && decoded.frame.kind === "attach") {
+          if (requiresNativeConnection(s) && decoded.frame.kind === "attach") {
             const admission = nativeExecutor;
             let issue: ProtocolIssue | undefined;
             if (

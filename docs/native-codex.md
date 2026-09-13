@@ -47,7 +47,7 @@ this parent session's registration or receive its feedback.
    `version: 1`. Follow the [artifact appearance contract](artifacts.md).
 3. Run `lucid artifact publish --request FILE --json`. Retain its
    `conversationId`, `artifactUrl`, `publication`, and separate `connection`
-   result. Open the returned URL. Registration is resolved from verified
+   result. The native connection requirement is saved before artifact write, so a failed or interrupted connection cannot send feedback to an ordinary fresh session. `connection.persistence` says whether the returned connection result was saved. If it is `unverified`, publication can still have succeeded; retain its URL and report the unsaved diagnostic separately. Open the returned URL. Registration is resolved from verified
    native context; do not supply a guessed native session ID.
 4. If publication succeeds but connection fails, keep that conversation and
    report the returned reason. Fix the named setup or ownership problem.
@@ -90,7 +90,7 @@ wait for the current response and cleanup, and open that same native session.
 Ctrl+C cancels a pre-launch wait without stopping the current response. Duplicate
 commands report the existing request. This command uses native terminal I/O;
 use `connection status CONVERSATION --json` for machine-readable detection.
-The browser shows a bound native conversation's current connection above chat.
+The browser shows the native connection above chat, including publications whose native session identity is not verified yet.
 Connection instructions name the exact record and configured Lucid executable.
 An open Codex CLI session gets resume-listening instructions; an eligible closed
 or managed connection gets terminal reconnect instructions. Check connection
@@ -100,10 +100,9 @@ recovery instructions. Setup and retained reconnect refusals provide instruction
 only; there is no browser retry of an uncertain attempt or cancellation of a
 terminal-owned reconnect wait. Saved response preferences remain separate.
 
-Unbound publication failures still need durable connection-failure evidence before
-the browser can distinguish them from ordinary managed artifacts. Per-input native
-delivery labels, browser-owned cancellation and automatic bound-runtime activation
-remain pending.
+An unbound publication shows its last saved connection failure, or an incomplete-attempt notice, with generic setup guidance for the exact conversation. Refreshing cannot recreate native registration. Saved feedback stays queued. A legacy send without a confirmed receipt or completion remains held even after process exit; this flow offers no reset that assumes it finished. Ordinary managed artifacts are unchanged until explicitly published through the native publication command.
+
+Per-input native delivery labels, browser-owned cancellation and automatic bound-runtime activation remain pending.
 
 Expiry or interruption disables listening until another explicit
 `resume-listen` request in the same native session. `lucid connection

@@ -33,7 +33,11 @@ import {
   truncateSync,
   writeSync,
 } from "node:fs";
-import { nativeOutcomeEvent, reduceConnection } from "../protocol/connection.js";
+import {
+  awaitingNativeBinding,
+  nativeOutcomeEvent,
+  reduceConnection,
+} from "../protocol/connection.js";
 import { reduceContextCoverage } from "../protocol/context-coverage.js";
 import { EventKind } from "../protocol/events.js";
 import { reduceExecution } from "../protocol/execution.js";
@@ -1092,6 +1096,8 @@ export interface LockedRecordSnapshot {
 }
 
 export interface ConversationLog {
+  /** Fresh state-only admission; no artifact or transcript materialization. */
+  inspectState<TValue>(read: (state: ChannelState) => TValue): TValue;
   /** Catch up and read one coherent record under the append lock. */
   inspect<TValue>(read: (snapshot: LockedRecordSnapshot) => TValue): TValue;
   readonly paths: RecordPaths;
@@ -1337,6 +1343,8 @@ export const createLog = (
     }
     return { artifacts, state: curState, transcript: transcript() };
   };
+  const inspectState = <TValue>(read: (state: ChannelState) => TValue): TValue =>
+    transaction(() => ({ line: null, result: read(curState) }));
   const inspect = <TValue>(read: (snapshot: LockedRecordSnapshot) => TValue): TValue =>
     transaction((_folded, raw) => ({ line: null, result: read(lockedSnapshot(raw)) }));
   const comparisonAdmission = (
@@ -1489,6 +1497,7 @@ export const createLog = (
         `cursor offset must be a non-negative safe integer, got ${offset}`,
       );
     transaction((folded) => {
+      if (awaitingNativeBinding(folded.state)) return { line: null, result: undefined };
       if (offset > folded.goodBytes)
         throw new StoreError(
           "corrupt-log",
@@ -1569,6 +1578,7 @@ export const createLog = (
 
   return {
     inspect,
+    inspectState,
     paths,
     conversationId,
     state: () => curState,

@@ -1,6 +1,7 @@
 import { isAbsolute } from "node:path";
 import { readUserConfig } from "../config/user-config.js";
 import type { NativeBinding } from "../protocol/connection.js";
+import { PUBLICATION_MESSAGE_MAX } from "../protocol/connection.js";
 import { settingsShape } from "../protocol/driver-settings.js";
 import { isWireId } from "../protocol/frames.js";
 import { HubError } from "../protocol/hub-errors.js";
@@ -17,6 +18,8 @@ import { nativeCommandAuthority } from "./native-context.js";
 import { commandRecordDir, conversations, validConversationId } from "./record-addressing.js";
 
 interface PublicationConnection extends ConnectionStatus {
+  readonly attempt?: { readonly message: string; readonly reason: string };
+  readonly persistence: "saved" | "unverified";
   readonly nativeSessionId?: string;
 }
 
@@ -135,6 +138,9 @@ export async function publishArtifact(
     ownerPresence: authority.ownerPresence,
   });
   try {
+    const requirement = host.recordNativePublication();
+    if (requirement.verdict === "refused")
+      throw new HubError(`Native publication refused: ${requirement.issue}.`, "E-HUB-03", 409);
     const params = {
       artifactId: artifact.artifactId,
       author: "agent" as const,
@@ -180,12 +186,35 @@ export async function publishArtifact(
             now: Date.now(),
             ownerPresence: authority.ownerPresence,
           });
+    let publicationConnection: PublicationConnection = {
+      ...status,
+      persistence: "saved",
+      ...(binding ? { nativeSessionId: binding.nativeSessionId } : {}),
+    };
+    if (!connection.ok || connection.value.verdict === "refused") {
+      const attempt = {
+        message: status.message.slice(0, PUBLICATION_MESSAGE_MAX),
+        reason: status.reason ?? "connection-setup-required",
+      };
+      let saved = false;
+      try {
+        saved = host.recordNativePublication(attempt).verdict === "accepted";
+      } catch {
+        /* Artifact success is independent of diagnostic persistence. */
+      }
+      if (!saved)
+        publicationConnection = {
+          attempt,
+          message:
+            "The artifact was saved, but the connection result could not be recorded. Saved feedback remains held.",
+          persistence: "unverified",
+          reason: "connection-result-unrecorded",
+          state: "setup-required",
+        };
+    }
     return {
       artifactUrl: `${url.origin}/c/${encodeURIComponent(id)}/${encodeURIComponent(params.artifactId)}`,
-      connection: {
-        ...status,
-        ...(binding ? { nativeSessionId: binding.nativeSessionId } : {}),
-      },
+      connection: publicationConnection,
       conversationId: id,
       publication: { status: "published", version: params.version },
     };

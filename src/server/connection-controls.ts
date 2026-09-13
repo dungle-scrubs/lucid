@@ -33,6 +33,18 @@ export function connectionControls(
             },
           ];
         case "setup-instructions":
+          if (connection.nativeSessionId === null)
+            return [
+              {
+                action,
+                command: lucidCommand(root, ["artifact", "publish", "--help"]),
+                label: "Connect the publishing session",
+                text:
+                  "Use a supported Lucid integration from the native session that authored this artifact. After repairing its registration, repeat publication with conversationId " +
+                  connection.conversationId +
+                  ", the same artifact identity and the saved version and bytes. If no version was saved, provide valid artifact content. This help command makes no changes and does not send saved feedback.",
+              },
+            ];
           return [
             {
               action,

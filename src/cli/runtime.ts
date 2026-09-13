@@ -1,4 +1,5 @@
 import { failureDiagnostic } from "../harness/compatibility.js";
+import { requiresNativeConnection } from "../protocol/connection.js";
 import { LockError } from "../store/flock.js";
 /**
  * HostRuntime — the deep module that owns the headless conversation lifecycle.
@@ -271,7 +272,7 @@ export const openDrivenConversation = async (
     };
   }
 
-  if (previous.connection) {
+  if (requiresNativeConnection(previous)) {
     host.close();
     throw new HubError(
       "Same-session continuation has not been admitted. Feedback remains saved in this conversation.",
@@ -383,9 +384,9 @@ export const openDrivenConversation = async (
       }
     }
 
-    if (host.state().connection)
+    if (requiresNativeConnection(host.state()))
       throw new HubError(
-        "The conversation became bound before launch. Same-session continuation must be admitted first.",
+        "This conversation requires a verified native connection before launch. Same-session continuation must be admitted first.",
         "E-HUB-03",
         409,
         [],

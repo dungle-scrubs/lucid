@@ -8,7 +8,7 @@ const SYNTHETIC_HCN_IDENTITY = "synthetic";
 
 import { createHeadlessHost, hostSeamFor, type SourceEnd } from "../../src/modes/host.js";
 import type { Frame } from "../../src/protocol/frames.js";
-import { openWriter } from "../../src/store/conversation-host.js";
+import { createConversationHost } from "../../src/store/conversation-host.js";
 import { StoreError } from "../../src/store/errors.js";
 import { LockError } from "../../src/store/flock.js";
 import { createConversationRecord } from "../../src/store/store.js";
@@ -25,7 +25,13 @@ const rig = async (
 ) => {
   const root = mkdtempSync(join(tmpdir(), "lucid-read-failed-"));
   const { secret } = createConversationRecord(root, "conv");
-  const host = openWriter(join(root, "conv"));
+  const host = createConversationHost(join(root, "conv"), {
+    executorLease: () => true,
+    now: Date.now,
+    onEffect: () => {},
+    onRecord: () => {},
+    presence: () => undefined,
+  });
   await host.writeArtifact({
     artifactId: "doc",
     version: 1,

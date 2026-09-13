@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { hasUnsettledNativeWork } from "../protocol/connection.js";
+import { hasUnsettledNativeWork, requiresNativeConnection } from "../protocol/connection.js";
 import type { ExecutionHold } from "../protocol/execution.js";
 import type { ChannelState } from "../protocol/reducer.js";
 import { preferenceState } from "./driver-preference.js";
@@ -31,8 +31,8 @@ export function managedCandidates(
   state: ChannelState,
   heads: ReadonlyMap<string, number> = new Map(),
 ): readonly string[] {
-  // Bound conversations require same-session admission before any executor may start.
-  if (state.connection) return [];
+  // Native publications require same-session admission before any executor may start.
+  if (requiresNativeConnection(state)) return [];
   if (
     Object.values(state.executions).some(
       (entry) => entry.kind === "attempt-ended" && entry.outcome.kind === "uncertain",

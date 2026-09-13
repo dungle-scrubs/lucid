@@ -149,6 +149,7 @@ export const fakeArtifactHost = (overrides: Partial<ArtifactHost> = {}): Artifac
   let cursor = 0;
   const empty = foldCollect("fake", "fake-secret", Buffer.alloc(0));
   return {
+    dispatchOrdinary: (_epoch, invoke) => ({ verdict: "accepted", value: invoke() }),
     cursor: () => cursor,
     collectEffects: () => ({ ...empty, entries: empty.collected }),
     advanceCursor: (offset) => {

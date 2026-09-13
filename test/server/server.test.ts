@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { publishArtifact } from "../../src/cli/artifact-publish.js";
 import { dispatch } from "../../src/cli/dispatch.js";
 import { sendInput } from "../../src/cli/send.js";
 import { startServe } from "../../src/cli/serve.js";
@@ -49,6 +50,40 @@ afterEach(async () => {
 });
 
 describe("the way in", () => {
+  test("a reopened native publication shows its retained failure and generic exact-record guidance", async () => {
+    const published = await publishArtifact(
+      {
+        artifact: {
+          artifactId: "flow",
+          bytes: "<h1>Review me</h1>",
+          contentType: "text/html",
+          version: 1,
+        },
+        creationId: "unbound-http",
+        serverUrl: server.url,
+        settings: { harness: "codex", model: "test", effort: "high", profile: "headless-turn" },
+        workingDirectory: root,
+      },
+      root,
+      { callerOwns: () => false, ownerPresence: () => false },
+    );
+    const response = await api(`/api/conversations/${published.conversationId}/connection`);
+    expect(response.status).toBe(200);
+    const connection = await response.json();
+    expect(connection).toMatchObject({
+      nativeConnectionRequired: true,
+      nativeSessionId: null,
+      interface: null,
+      state: "setup-required",
+      reason: "registration-missing",
+      actions: ["setup-instructions"],
+    });
+    expect(connection.instructions).toHaveLength(1);
+    expect(connection.instructions[0].text).toContain(published.conversationId);
+    expect(connection.instructions[0].text).not.toContain("Codex");
+    expect(connection.instructions[0].command).toContain("'artifact' 'publish' '--help'");
+    expect(connection.instructions[0].command).toContain(`LUCID_ROOT=${root}`);
+  });
   test("native connection instructions name the served record and root without starting a session", async () => {
     const id = crypto.randomUUID();
     const { paths } = createConversationRecord(root, id, { workingDirectory: root });

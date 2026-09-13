@@ -13,6 +13,7 @@ const initial: BrowserConnection = {
   instructions: [],
   interface: "codex-cli",
   message: "Cannot confirm whether the session is open.",
+  nativeConnectionRequired: true,
   nativeSessionId: "native-one",
   observedAt: 1000,
   reason: "owner-unknown",
@@ -126,6 +127,52 @@ test("connection refresh keeps focus, announces only changed status and hides st
       ),
     );
     expect(container.textContent).not.toContain("native-one");
+    const unbound: BrowserConnection = {
+      ...initial,
+      actions: ["setup-instructions"],
+      interface: null,
+      nativeSessionId: null,
+      message: "Last connection attempt: no verified registration. Saved feedback remains held.",
+      state: "setup-required",
+      instructions: [
+        {
+          action: "setup-instructions",
+          command: null,
+          label: "Connect the publishing session",
+          text: "Repeat publication into record-four after repairing registration.",
+        },
+      ],
+    };
+    await React.act(() =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <NativeConnection
+            key="record-four"
+            conversationId="record-four"
+            enabled
+            request={async () => Response.json(unbound)}
+          />
+        </QueryClientProvider>,
+      ),
+    );
+    await flush();
+    expect(container.textContent).toContain("Native session identity is not verified yet.");
+    expect(container.textContent).toContain("Repeat publication into record-four");
+    expect(container.querySelector('[role="status"]')?.textContent).toBe(unbound.message);
+    await React.act(() =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <NativeConnection
+            key="ordinary"
+            conversationId="ordinary"
+            enabled
+            request={async () => Response.json({ ...unbound, nativeConnectionRequired: false })}
+          />
+        </QueryClientProvider>,
+      ),
+    );
+    await flush();
+    expect(container.querySelector("section")).toBeNull();
     await React.act(() =>
       root.render(
         <QueryClientProvider client={client}>

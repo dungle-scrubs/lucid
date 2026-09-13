@@ -33,10 +33,10 @@ export function NativeConnection(props: NativeConnectionProps) {
   const [announcement, setAnnouncement] = React.useState("");
   // Populate the mounted live region only when its message changes, never on timestamp polls.
   React.useEffect(() => {
-    setAnnouncement(connection?.nativeSessionId ? message : "");
-  }, [connection?.nativeSessionId, message]);
-  // Unbound managed records have no native connection to recover.
-  if (!connection?.nativeSessionId) return null;
+    setAnnouncement(connection?.nativeConnectionRequired ? message : "");
+  }, [connection?.nativeConnectionRequired, message]);
+  // A native publication can need setup before its session identity is known.
+  if (!connection?.nativeConnectionRequired) return null;
   return (
     <section className="native-connection" aria-label="Current native connection">
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
@@ -45,7 +45,13 @@ export function NativeConnection(props: NativeConnectionProps) {
       <h3>Current connection</h3>
       <p>{message}</p>
       <p className="native-connection-identity">
-        Native session <code>{connection.nativeSessionId}</code>
+        {connection.nativeSessionId ? (
+          <>
+            Native session <code>{connection.nativeSessionId}</code>
+          </>
+        ) : (
+          "Native session identity is not verified yet."
+        )}
       </p>
       <Button
         aria-disabled={!enabled || result.isFetching}

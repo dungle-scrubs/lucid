@@ -12,12 +12,14 @@ export type {
 
 import { ownerPresence } from "../process-owner.js";
 import {
+  awaitingNativeBinding,
   currentListener,
   currentReconnect,
   hasUncertainReconnect,
   hasUnsettledLaunch,
   isUnsettledLaunch,
   nativeOwners,
+  requiresNativeConnection,
 } from "../protocol/connection.js";
 import type { ProcessOwner } from "../protocol/process-owner.js";
 import { sameProcessOwner } from "../protocol/process-owner.js";
@@ -55,6 +57,36 @@ export function observeConnection(
 ): ConnectionStatus {
   const { executorPresent, now, ownerPresence: probe } = observation;
   const binding = state.connection?.binding;
+  if (!binding && state.nativePublication) {
+    const failure = state.nativePublication.failure;
+    const delivery = state.nativePublication.legacyDelivery;
+    const history = failure ? ` Last connection attempt: ${failure.message}` : "";
+    if (delivery.uncertainInputs.length)
+      return {
+        message:
+          "An earlier input has no confirmed receipt. Saved feedback remains held; process exit does not confirm delivery." +
+          history,
+        reason: "delivery-uncertain",
+        state: "delivery-uncertain",
+      };
+    if (delivery.inFlight > 0)
+      return {
+        message:
+          "An earlier response has no confirmed outcome. Saved feedback remains held until that response finishes with recorded evidence." +
+          history,
+        reason: "execution-outcome-unverified",
+        state: "outcome-unknown",
+      };
+    return {
+      message: failure
+        ? "Last connection attempt: " +
+          failure.message +
+          " Saved feedback remains held until a native connection is verified."
+        : "Native publication or connection did not finish. Saved feedback remains held until a native connection is verified.",
+      reason: failure?.reason ?? "publication-connection-incomplete",
+      state: "setup-required",
+    };
+  }
   let alive: boolean | undefined;
   let conflict = false;
   const observations = nativeOwners(state).map(({ owner }) => {
@@ -342,6 +374,7 @@ export function readConnection(
     actions: connectionActions(status, state),
     conversationId: state.conversationId,
     interface: binding?.interface ?? null,
+    nativeConnectionRequired: requiresNativeConnection(state),
     nativeSessionId: binding?.nativeSessionId ?? null,
     observedAt,
     savedPreference: preferenceState(dir).preference,
@@ -352,6 +385,8 @@ function connectionActions(
   status: ConnectionStatus,
   state: ChannelState,
 ): readonly ConnectionAction[] {
+  if (awaitingNativeBinding(state))
+    return status.state === "setup-required" ? ["setup-instructions"] : [];
   if (status.state === "owner-unknown" || status.state === "owner-conflict")
     return ["retry-detection"];
   if (state.connection?.binding.interface !== "codex-cli") return [];
