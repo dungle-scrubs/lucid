@@ -2,6 +2,7 @@
 @import "./conversation-panel.css";
 @import "./content-comparison.css";
 @import "./compatibility-notice.css";
+@import "./native-connection.css";
 
 .input-recovery-text {
   max-block-size: 8rem;

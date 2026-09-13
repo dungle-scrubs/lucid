@@ -16,8 +16,9 @@ import { join } from "node:path";
 import { dispatch } from "../../src/cli/dispatch.js";
 import { sendInput } from "../../src/cli/send.js";
 import { startServe } from "../../src/cli/serve.js";
+import { readProcessOwner } from "../../src/process-owner.js";
 import { ARTIFACT_TITLE_MAX } from "../../src/protocol/artifact-title.js";
-import { createConversationHost } from "../../src/store/conversation-host.js";
+import { createConversationHost, openWriter } from "../../src/store/conversation-host.js";
 import { acquirePresence } from "../../src/store/presence.js";
 import { createConversationRecord } from "../../src/store/store.js";
 
@@ -48,6 +49,51 @@ afterEach(async () => {
 });
 
 describe("the way in", () => {
+  test("native connection instructions name the served record and root without starting a session", async () => {
+    const id = crypto.randomUUID();
+    const { paths } = createConversationRecord(root, id, { workingDirectory: root });
+    const owner = readProcessOwner(process.pid);
+    if (!owner) throw new Error("Expected the test process identity");
+    const binding = {
+      generation: crypto.randomUUID(),
+      harness: "codex" as const,
+      interface: "codex-cli" as const,
+      nativeSessionId: "native-instructions",
+      owner,
+      registrationId: crypto.randomUUID(),
+      workingDirectory: root,
+    };
+    const host = openWriter(paths.dir, {
+      connectionAuthority: () => binding,
+      ownerPresence: () => true,
+    });
+    try {
+      expect(
+        host.writeConnection({ actionId: crypto.randomUUID(), binding, kind: "bound" }).verdict,
+      ).toBe("accepted");
+    } finally {
+      host.close();
+    }
+    const before = readFileSync(paths.logPath);
+    const response = await api(`/api/conversations/${id}/connection`);
+    expect(response.status).toBe(200);
+    const connection = await response.json();
+    expect(connection).toMatchObject({
+      actions: ["resume-listening-instructions"],
+      conversationId: id,
+      nativeSessionId: "native-instructions",
+      state: "not-listening",
+    });
+    expect(connection.instructions).toHaveLength(1);
+    expect(connection.instructions[0].command).toContain(`'LUCID_ROOT=${root}'`);
+    expect(connection.instructions[0].command).toContain(
+      `'connection' 'resume-listen' '${id}' '--json'`,
+    );
+    expect(connection.instructions[0].text).toContain("already-open native session");
+    expect(readFileSync(paths.logPath)).toEqual(before);
+    expect((await api("/api/conversations/missing-native/connection")).status).toBe(404);
+    expect((await api("/api/conversations/..%2Fescape/connection")).status).toBe(400);
+  });
   test("browser and CLI report the same connection state without exposing record authority", async () => {
     const response = await api(`/api/conversations/${CONV}/connection`);
     expect(response.status).toBe(200);

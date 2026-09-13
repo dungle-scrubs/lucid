@@ -90,7 +90,20 @@ wait for the current response and cleanup, and open that same native session.
 Ctrl+C cancels a pre-launch wait without stopping the current response. Duplicate
 commands report the existing request. This command uses native terminal I/O;
 use `connection status CONVERSATION --json` for machine-readable detection.
-Browser controls and automatic bound-runtime activation remain pending.
+The browser shows a bound native conversation's current connection above chat.
+Connection instructions name the exact record and configured Lucid executable.
+An open Codex CLI session gets resume-listening instructions; an eligible closed
+or managed connection gets terminal reconnect instructions. Check connection
+status performs a fresh read without sending feedback or starting a process.
+Status polls every two seconds while chat is visible. Failed reads hide stale
+recovery instructions. Setup and retained reconnect refusals provide instructions
+only; there is no browser retry of an uncertain attempt or cancellation of a
+terminal-owned reconnect wait. Saved response preferences remain separate.
+
+Unbound publication failures still need durable connection-failure evidence before
+the browser can distinguish them from ordinary managed artifacts. Per-input native
+delivery labels, browser-owned cancellation and automatic bound-runtime activation
+remain pending.
 
 Expiry or interruption disables listening until another explicit
 `resume-listen` request in the same native session. `lucid connection

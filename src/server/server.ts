@@ -9,6 +9,7 @@ import { HubError } from "../protocol/hub-errors.js";
 import { readConnection } from "../store/connection-view.js";
 import { renameConversation } from "../store/conversation-naming.js";
 import { readRecordMetadata } from "../store/record-identity.js";
+import { connectionControls } from "./connection-controls.js";
 
 /**
  * The loopback server — one command, every record, a record chosen by URL.
@@ -535,7 +536,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
         if (connection && req.method === "GET") {
           const id = decodeURIComponent(connection[1] ?? "");
           if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
-          return json(readConnection(dirForRequest(id)));
+          return json(connectionControls(readConnection(dirForRequest(id)), records.rootDir));
         }
 
         const read = path.match(/^\/api\/conversations\/([^/]+)\/?$/);

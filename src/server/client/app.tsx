@@ -106,6 +106,7 @@ import {
 } from "./layout.js";
 import { LocationControl, type LocationState } from "./location-control.js";
 import { NativeApproval } from "./native-approval.js";
+import { NativeConnection } from "./native-connection.js";
 import { NoteAnchorHelp } from "./note-anchor-help.js";
 import { NotePopover } from "./note-popover.js";
 import {
@@ -4318,6 +4319,17 @@ const App = (): React.ReactElement => {
                 >
                   <div className="pane conversation" {...conversationPanel.panelProps}>
                     <div className="conversation-header-space" aria-hidden="true" />
+                    <NativeConnection
+                      key={conversationId}
+                      conversationId={conversationId}
+                      enabled={conversationPanel.open && !dead && token !== null}
+                      request={(signal) =>
+                        fetch(
+                          `/api/conversations/${encodeURIComponent(conversationId)}/connection`,
+                          { headers: { [TOKEN_HEADER]: token ?? "" }, signal },
+                        )
+                      }
+                    />
                     <Thread
                       pending={notes}
                       onSendNotes={() => void sendNotes()}

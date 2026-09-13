@@ -41,3 +41,14 @@ export function settingsShape(value: unknown): Settings {
     ...(choice.provider === undefined ? {} : { provider: String(choice.provider) }),
   };
 }
+
+/** The saved choice and its revision, independent of the driver currently running. */
+export interface DriverPreference {
+  readonly profile?: SelectedProfile;
+  readonly revision?: number;
+  readonly v: 1;
+  readonly harness: HarnessName;
+  readonly provider?: string;
+  readonly model?: string;
+  readonly effort?: string;
+}

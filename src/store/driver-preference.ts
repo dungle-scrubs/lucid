@@ -1,3 +1,7 @@
+import type { DriverPreference } from "../protocol/driver-settings.js";
+
+export type { DriverPreference } from "../protocol/driver-settings.js";
+
 /**
  * The driver preference (RFC-12): `driver.json`, beside `meta.json`.
  *
@@ -43,19 +47,6 @@ export const DRIVER_FIELD_MAX = 128;
  * corresponding hcn default applies at spawn. */
 export interface DriverChoice {
   readonly profile?: import("../protocol/driver-settings.js").SelectedProfile;
-  readonly harness: HarnessName;
-  readonly provider?: string;
-  readonly model?: string;
-  readonly effort?: string;
-}
-
-/** What the file holds: the choice under a version stamp, like `meta.json`
- * carries its `v: 1`. What the read returns and the projection reports -
- * RFC-12 says the page is told the file's content. */
-export interface DriverPreference {
-  readonly profile?: import("../harness/runner.js").HarnessMode;
-  readonly revision?: number;
-  readonly v: 1;
   readonly harness: HarnessName;
   readonly provider?: string;
   readonly model?: string;

@@ -19,12 +19,12 @@ export const selfInvocation = (args: readonly string[] = []): readonly [string, 
       ];
 };
 
+export function lucidCommand(root: string, args: readonly string[]): string {
+  return shellCommand(["/usr/bin/env", `LUCID_ROOT=${root}`, ...selfInvocation(args)]);
+}
+
 export function listeningCommand(root: string, conversationId: string): string {
-  return shellCommand([
-    "/usr/bin/env",
-    `LUCID_ROOT=${root}`,
-    ...selfInvocation(["connection", "resume-listen", conversationId, "--json"]),
-  ]);
+  return lucidCommand(root, ["connection", "resume-listen", conversationId, "--json"]);
 }
 
 export const BACKGROUND_COMMAND = "LUCID_BACKGROUND_COMMAND";

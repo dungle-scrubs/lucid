@@ -1,6 +1,6 @@
 # 11: Expose connection state and supported recovery in the browser
 
-Status: open
+Status: claimed
 Blocked by: 01, 02, 08, 09
 
 ## What to build
@@ -22,3 +22,7 @@ RFC 26 and planning map https://github.com/dungle-scrubs/lucid/issues/253. Machi
 ## Projection implementation seam
 
 Machine-made under the accepted autonomous instruction: first complete the existing shared read projection before rendering browser controls. Tests attach at ConversationHost, managed execution and observeConnection/readConnection with real records and injected process observations. An owned current launch with a matching attempt and held executor lock distinguishes starting, responding and terminal response awaiting cleanup. Missing owner/lock evidence and settled uncertainty remain held. Reconnect waiting preserves the current response stage, and no status grants dispatch authority. This holds product scope: the same person needs an accurate explanation of where saved feedback is going.
+
+## Browser implementation seam
+
+Machine-made under the same autonomous instruction: test supported action selection through public readConnection on durable records and fresh owner observations, then test HTTP instructions with the configured root and exact conversation. Browser verification attaches to the rendered connection panel, request cancellation, read-only refresh and keyboard focus. Render the native connection panel only for a bound native conversation. A missing binding alone cannot distinguish a failed native publication from an ordinary managed artifact, so retaining publication failure evidence and exposing setup for that case remains a separate unfinished slice. Saved preferences never establish connection or readiness. Terminal reconnect owns its wait; browser cancellation is not offered without a supported ownership contract. This holds scope for the same person reading and annotating an artifact.

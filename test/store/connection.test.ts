@@ -110,14 +110,21 @@ test("connection status refreshes native ownership without writing or treating u
     let presence: boolean | undefined = true;
     const deps = { now: () => 2000, ownerPresence: () => presence };
     expect(readConnection(paths.dir, deps)).toMatchObject({
+      actions: ["resume-listening-instructions"],
       message: "Your interactive session is still open. Tell it to resume listening.",
       nativeSessionId: "native-one",
       state: "not-listening",
     });
     presence = undefined;
-    expect(readConnection(paths.dir, deps)).toMatchObject({ state: "owner-unknown" });
+    expect(readConnection(paths.dir, deps)).toMatchObject({
+      actions: ["retry-detection"],
+      state: "owner-unknown",
+    });
     presence = false;
-    expect(readConnection(paths.dir, deps)).toMatchObject({ state: "closed" });
+    expect(readConnection(paths.dir, deps)).toMatchObject({
+      actions: ["reconnect-instructions"],
+      state: "closed",
+    });
     expect(readFileSync(paths.logPath)).toEqual(before);
   } finally {
     rmSync(root, { recursive: true, force: true });

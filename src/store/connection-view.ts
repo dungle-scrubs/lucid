@@ -1,5 +1,16 @@
+import type {
+  ConnectionAction,
+  ConnectionProjection,
+  ConnectionStatus,
+} from "../protocol/connection-status.js";
+
+export type {
+  ConnectionAction,
+  ConnectionProjection,
+  ConnectionStatus,
+} from "../protocol/connection-status.js";
+
 import { ownerPresence } from "../process-owner.js";
-import type { NativeInterface } from "../protocol/connection.js";
 import {
   currentListener,
   currentReconnect,
@@ -12,38 +23,8 @@ import type { ProcessOwner } from "../protocol/process-owner.js";
 import { sameProcessOwner } from "../protocol/process-owner.js";
 import type { ChannelState } from "../protocol/reducer.js";
 import { viewConversation } from "./conversation-host.js";
-import type { DriverPreference } from "./driver-preference.js";
 import { preferenceState } from "./driver-preference.js";
 import { presenceHeld } from "./presence.js";
-
-export interface ConnectionStatus {
-  readonly message: string;
-  readonly reason: string | null;
-  readonly state:
-    | "setup-required"
-    | "listening"
-    | "not-listening"
-    | "owner-unknown"
-    | "owner-conflict"
-    | "delivery-uncertain"
-    | "outcome-unknown"
-    | "launch-uncertain"
-    | "headless-starting"
-    | "headless-running"
-    | "cleanup"
-    | "reconnect-waiting"
-    | "resume-failed"
-    | "closed";
-}
-
-export interface ConnectionProjection extends ConnectionStatus {
-  readonly actions: readonly string[];
-  readonly conversationId: string;
-  readonly interface: NativeInterface | null;
-  readonly nativeSessionId: string | null;
-  readonly observedAt: number;
-  readonly savedPreference: DriverPreference | null;
-}
 
 const OWNER_CONFLICT = connectionFailure(
   "native-identity-conflict",
@@ -348,20 +329,39 @@ export function readConnection(
   const { state } = viewConversation(dir);
   const binding = state.connection?.binding;
   const observedAt = (deps.now ?? Date.now)();
+  const status = observeConnection(state, {
+    executorPresent:
+      currentListener(state.connection) || hasUnsettledLaunch(state.connection)
+        ? presenceHeld(dir)
+        : false,
+    now: observedAt,
+    ownerPresence: deps.ownerPresence ?? ownerPresence,
+  });
   return {
-    ...observeConnection(state, {
-      executorPresent:
-        currentListener(state.connection) || hasUnsettledLaunch(state.connection)
-          ? presenceHeld(dir)
-          : false,
-      now: observedAt,
-      ownerPresence: deps.ownerPresence ?? ownerPresence,
-    }),
-    actions: [],
+    ...status,
+    actions: connectionActions(status, state),
     conversationId: state.conversationId,
     interface: binding?.interface ?? null,
     nativeSessionId: binding?.nativeSessionId ?? null,
     observedAt,
     savedPreference: preferenceState(dir).preference,
   };
+}
+
+function connectionActions(
+  status: ConnectionStatus,
+  state: ChannelState,
+): readonly ConnectionAction[] {
+  if (status.state === "owner-unknown" || status.state === "owner-conflict")
+    return ["retry-detection"];
+  if (state.connection?.binding.interface !== "codex-cli") return [];
+  if (status.state === "not-listening") return ["resume-listening-instructions"];
+  if (
+    !currentReconnect(state.connection) &&
+    ["closed", "headless-starting", "headless-running", "cleanup"].includes(status.state)
+  )
+    return ["reconnect-instructions"];
+  if (status.state === "setup-required" || status.state === "resume-failed")
+    return ["setup-instructions"];
+  return [];
 }
