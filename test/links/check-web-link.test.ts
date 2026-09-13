@@ -208,10 +208,12 @@ test("pinned transport does not follow an environment proxy", async () => {
     response.writeHead(200);
     response.end();
   });
+
   await Promise.all([
     new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve)),
     new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve)),
   ]);
+
   const proxyAddress = proxy.address();
   const serverAddress = server.address();
   if (
@@ -221,34 +223,46 @@ test("pinned transport does not follow an environment proxy", async () => {
     typeof serverAddress === "string"
   )
     throw new Error("missing port");
-  const keys = [
-    "HTTP_PROXY",
-    "http_proxy",
-    "HTTPS_PROXY",
-    "https_proxy",
-    "NO_PROXY",
-    "no_proxy",
-  ] as const;
-  const saved = keys.map((key) => [key, process.env[key]] as const);
+
   try {
-    for (const key of keys)
-      process.env[key] =
-        key.toLowerCase() === "no_proxy" ? "" : `http://127.0.0.1:${proxyAddress.port}`;
-    expect(
-      (
-        await requestLinkAddress(
-          new URL(`http://proxy-test.invalid:${serverAddress.port}/`),
-          { address: "127.0.0.1", family: 4 },
-          signal(),
-        )
-      ).status,
-    ).toBe(200);
+    // Subprocess isolation: Bun can retain proxy configuration after restoration,
+    // so we run the transport probe in a child process with isolated environment.
+    const proxyUrl = `http://127.0.0.1:${proxyAddress.port}`;
+    const destinationUrl = `http://proxy-test.invalid:${serverAddress.port}/`;
+    const sourceFile = new URL("../../src/links/check-web-link.js", import.meta.url).href;
+
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `import { requestLinkAddress } from "${sourceFile}"; const r = await requestLinkAddress(new URL("${destinationUrl}"), { address: "127.0.0.1", family: 4 }, AbortSignal.timeout(1000)); console.log(JSON.stringify(r));`,
+      ],
+      {
+        env: {
+          ...Bun.env,
+          HTTP_PROXY: proxyUrl,
+          http_proxy: proxyUrl,
+          HTTPS_PROXY: proxyUrl,
+          https_proxy: proxyUrl,
+          NO_PROXY: "",
+          no_proxy: "",
+        },
+        stdio: ["inherit", "pipe", "pipe"],
+      },
+    );
+
+    const [exitCode, stdoutText, stderrText] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+
+    expect(stderrText).toBe("");
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdoutText);
+    expect(result.status).toBe(200);
     expect(proxyRequests).toBe(0);
   } finally {
-    for (const [key, value] of saved) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
     proxy.closeAllConnections();
     server.closeAllConnections();
     await Promise.all([
