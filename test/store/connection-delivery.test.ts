@@ -5329,3 +5329,103 @@ test("public reconnect retains a live foreign waiter and replaces it only after 
     f.close();
   }
 });
+
+test("per-message delivery retains receipt when ownership is lost and leaves later feedback saved", () => {
+  const f = boundFixture();
+  try {
+    f.acquire();
+    const listener = f.enableFact();
+    expect(f.host.writeConnection(listener).verdict).toBe("accepted");
+    for (const id of ["first", "later"])
+      expect(f.host.acceptInput({ id, mode: "queue", text: id }).verdict).toBe("accepted");
+    expect(f.status().inputs).toMatchObject([
+      { inputId: "first", state: "saved" },
+      { inputId: "later", state: "saved" },
+    ]);
+    const prepared = prepareOffer(f.host, listener.participation.id, "first");
+    expect(f.host.writeConnection(prepared).verdict).toBe("accepted");
+    f.controls.lease?.release();
+    expect(f.status().inputs[0]).toMatchObject({ state: "sending", outcome: null });
+    f.controls.probe = () => undefined;
+    const before = readFileSync(f.paths.logPath);
+    expect(f.status().inputs[0]).toMatchObject({ state: "delivery-uncertain", outcome: null });
+    expect(f.status().inputs[1]).toMatchObject({ state: "saved" });
+    expect(readFileSync(f.paths.logPath)).toEqual(before);
+    f.controls.probe = () => true;
+    const { offer } = prepared;
+    expect(
+      f.host.writeConnection({
+        actionId: crypto.randomUUID(),
+        epoch: offer.epoch,
+        kind: "receipt-confirmed",
+        offerId: offer.id,
+        participationId: offer.participationId,
+      }).verdict,
+    ).toBe("accepted");
+    expect(f.status().inputs[0]).toMatchObject({ state: "received", outcome: null });
+    f.controls.probe = () => false;
+    expect(f.status().inputs[0]).toMatchObject({ state: "received", outcome: null });
+    expect(f.status().inputs[0]?.message).toContain("outcome is unknown");
+    expect(f.status().inputs[1]).toMatchObject({ state: "saved" });
+  } finally {
+    f.close();
+  }
+});
+
+test("delivery history keeps answer, question, refusal, failure and cancellation distinct after replay", () => {
+  for (const kind of ["answer", "question", "refusal", "failure"] as const) {
+    const f = boundFixture();
+    try {
+      f.acquire();
+      const listener = f.enableFact();
+      expect(f.host.writeConnection(listener).verdict).toBe("accepted");
+      expect(f.host.acceptInput({ id: "response", mode: "queue", text: "Review" }).verdict).toBe(
+        "accepted",
+      );
+      expect(f.host.acceptInput({ id: "cancel", mode: "queue", text: "Withdraw" }).verdict).toBe(
+        "accepted",
+      );
+      expect(
+        f.host.writeConnection({
+          actionId: crypto.randomUUID(),
+          inputId: "cancel",
+          kind: "input-cancelled",
+        }).verdict,
+      ).toBe("accepted");
+      const prepared = prepareOffer(f.host, listener.participation.id, "response");
+      expect(f.host.writeConnection(prepared).verdict).toBe("accepted");
+      const { offer } = prepared;
+      const correlation = {
+        epoch: offer.epoch,
+        offerId: offer.id,
+        participationId: offer.participationId,
+      };
+      expect(
+        f.host.writeConnection({
+          ...correlation,
+          actionId: crypto.randomUUID(),
+          kind: "receipt-confirmed",
+        }).verdict,
+      ).toBe("accepted");
+      const outcome = { kind, text: `Recorded ${kind}` };
+      expect(
+        f.host.writeConnection({
+          ...correlation,
+          actionId: crypto.randomUUID(),
+          kind: "offer-outcome",
+          outcome,
+        }).verdict,
+      ).toBe("accepted");
+      f.controls.lease?.release();
+      f.controls.probe = () => undefined;
+      const before = readFileSync(f.paths.logPath);
+      expect(f.status().inputs).toMatchObject([
+        { inputId: "response", outcome, state: "finished" },
+        { inputId: "cancel", outcome: null, state: "cancelled" },
+      ]);
+      expect(readFileSync(f.paths.logPath)).toEqual(before);
+    } finally {
+      f.close();
+    }
+  }
+});

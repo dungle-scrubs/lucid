@@ -26,6 +26,7 @@ import { sameProcessOwner } from "../protocol/process-owner.js";
 import type { ChannelState } from "../protocol/reducer.js";
 import { viewConversation } from "./conversation-host.js";
 import { preferenceState } from "./driver-preference.js";
+import { nativeInputViews } from "./native-input-view.js";
 import { presenceHeld } from "./presence.js";
 
 const OWNER_CONFLICT = connectionFailure(
@@ -358,7 +359,7 @@ export function readConnection(
     readonly ownerPresence?: (owner: ProcessOwner) => boolean | undefined;
   } = {},
 ): ConnectionProjection {
-  const { state } = viewConversation(dir);
+  const { state, transcript } = viewConversation(dir);
   const binding = state.connection?.binding;
   const observedAt = (deps.now ?? Date.now)();
   const status = observeConnection(state, {
@@ -373,6 +374,7 @@ export function readConnection(
     ...status,
     actions: connectionActions(status, state),
     conversationId: state.conversationId,
+    inputs: nativeInputViews(state, transcript, status),
     interface: binding?.interface ?? null,
     nativeConnectionRequired: requiresNativeConnection(state),
     nativeSessionId: binding?.nativeSessionId ?? null,

@@ -107,6 +107,7 @@ import {
 import { LocationControl, type LocationState } from "./location-control.js";
 import { NativeApproval } from "./native-approval.js";
 import { NativeConnection } from "./native-connection.js";
+import { NativeInputDelivery } from "./native-input-delivery.js";
 import { NoteAnchorHelp } from "./note-anchor-help.js";
 import { NotePopover } from "./note-popover.js";
 import {
@@ -140,6 +141,8 @@ const POLL_MS = 500;
 const TOKEN_HEADER = "x-lucid-token";
 
 interface Line {
+  readonly delivery?: Msg["delivery"];
+  readonly nativeRefusal?: boolean;
   readonly kind: "agent" | "human";
   readonly seq?: number;
   readonly text: string;
@@ -278,6 +281,8 @@ const linesToMessages = (lines: readonly Line[]): Msg[] =>
           ? { refusal: true, harnessFailed: true }
           : {}),
       ...(l.batch === undefined ? {} : { sentBatch: l.batch }),
+      ...(l.delivery === undefined ? {} : { delivery: l.delivery }),
+      ...(l.nativeRefusal ? { nativeRefusal: true } : {}),
     }));
 
 /** Who said it has to survive into the DOM: a transcript where the person
@@ -440,8 +445,10 @@ const Message = (): React.ReactElement => {
         <MessagePrimitive.Root>
           <div className="batch comparison-transcript-note" id={`comparison-note-${b.inputId}`}>
             <div className="note-card-head">
-              Your note on saved v{b.version} · {b.status === "applied" ? "delivered" : "queued"}
+              Your note on saved v{b.version}
+              {one.delivery ? null : ` · ${b.status === "applied" ? "delivered" : "queued"}`}
             </div>
+            <NativeInputDelivery delivery={one.delivery} />
             {b.notes.map((note) => (
               <div key={note.note}>
                 <blockquote>{note.spots.map((spot) => spot.snippet).join("\n")}</blockquote>
@@ -476,6 +483,7 @@ const Message = (): React.ReactElement => {
     return (
       <MessagePrimitive.Root>
         <div className="batch">
+          <NativeInputDelivery delivery={one.delivery} />
           {b.notes.map((n) => {
             const spot = n.spots[0];
             const status = resolutionFor(n.note, spot?.snippet ?? "");
@@ -499,7 +507,7 @@ const Message = (): React.ReactElement => {
             const lost = status?.lost === true;
             const state =
               status === undefined
-                ? `sent · v${b.version}`
+                ? `${one.delivery ? "saved" : "sent"} · v${b.version}`
                 : lost
                   ? "lost · nothing left to point at"
                   : status.later === true
@@ -617,7 +625,11 @@ const Message = (): React.ReactElement => {
     // the upstream refusing service, and the reader needs to know it was
     // not lucid and not the agent.
     const said = one.text.replace(/^([✗!])\s+/, "");
-    const who = one.harnessFailed === true ? "the turn failed" : "lucid refused";
+    const who = one.nativeRefusal
+      ? "the session refused"
+      : one.harnessFailed === true
+        ? "the turn failed"
+        : "lucid refused";
     return (
       <MessagePrimitive.Root>
         <div className="msg refusal">
@@ -650,6 +662,7 @@ const Message = (): React.ReactElement => {
           <div className="body">
             <MessagePrimitive.Parts />
           </div>
+          <NativeInputDelivery delivery={one?.delivery} />
         </div>
       </MessagePrimitive.If>
       {/* No label: the side says whose it is. Yours is the bubble on the

@@ -1,13 +1,15 @@
 import { ConfigurationError } from "../config/user-config.js";
 import { comparisonMetadata } from "../protocol/comparison-note.js";
+import { requiresNativeConnection } from "../protocol/connection.js";
 import {
   fallbackConversationTitle,
   storedConversationTitle,
   titleState,
 } from "../protocol/conversation-title.js";
 import { HubError } from "../protocol/hub-errors.js";
-import { readConnection } from "../store/connection-view.js";
+import { observeConnection, readConnection } from "../store/connection-view.js";
 import { renameConversation } from "../store/conversation-naming.js";
+import { nativeInputViews } from "../store/native-input-view.js";
 import { readRecordMetadata } from "../store/record-identity.js";
 import { connectionControls } from "./connection-controls.js";
 
@@ -620,19 +622,59 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
               });
             }
           }
-          const lines = view.lines.map((l) =>
-            l.seq !== undefined && batchBySeq.has(l.seq)
-              ? { ...l, batch: batchBySeq.get(l.seq) }
-              : l,
+          const nativeRequired = requiresNativeConnection(snapshot.state);
+          const deliveries = new Map(
+            (nativeRequired
+              ? nativeInputViews(
+                  snapshot.state,
+                  snapshot.transcript,
+                  observeConnection(snapshot.state, {
+                    executorPresent,
+                    now: Date.now(),
+                    ownerPresence,
+                  }),
+                )
+              : []
+            ).map((entry) => [entry.inputId, entry]),
           );
+          const deliveryBySeq = new Map(
+            nativeRequired
+              ? snapshot.transcript.inputs.map(
+                  (input) => [input.seq, deliveries.get(input.id)] as const,
+                )
+              : [],
+          );
+          const nativeRefusals = new Set(
+            nativeRequired
+              ? snapshot.transcript.events
+                  .filter(
+                    ({ event }) => event.kind === EventKind.failure && event.class === "refusal",
+                  )
+                  .map(({ seq }) => seq)
+              : [],
+          );
+          const lines = view.lines.map((line) => ({
+            ...line,
+            ...(line.seq !== undefined && nativeRefusals.has(line.seq)
+              ? { nativeRefusal: true }
+              : {}),
+            ...(line.seq !== undefined && batchBySeq.has(line.seq)
+              ? { batch: batchBySeq.get(line.seq) }
+              : {}),
+            ...(line.kind === "human" && line.seq !== undefined && deliveryBySeq.get(line.seq)
+              ? { delivery: deliveryBySeq.get(line.seq) }
+              : {}),
+          }));
 
-          let executions = executionViews(
-            snapshot.state,
-            driving,
-            terminalPresence(snapshot.state.terminalParticipations, (owner) =>
-              owner ? ownerPresence(owner) : undefined,
-            ) ?? null,
-          ).filter((entry) => entry.status !== "completed");
+          let executions = nativeRequired
+            ? []
+            : executionViews(
+                snapshot.state,
+                driving,
+                terminalPresence(snapshot.state.terminalParticipations, (owner) =>
+                  owner ? ownerPresence(owner) : undefined,
+                ) ?? null,
+              ).filter((entry) => entry.status !== "completed");
           if (executions.some((entry) => entry.actions.length > 0)) {
             const available = await settings.recovery(dir, snapshot.state);
             executions = executions.map((entry) => ({
@@ -658,6 +700,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
               ? {}
               : { approvals: approvalViews(snapshot.state, executorPresent) }),
             activity: {
+              ...(nativeRequired ? { nativeConnectionRequired: true } : {}),
               // Whether the NEWEST turn has produced a terminal event.
               //
               // Not `state.turn`: that names the most recent turn so an abort

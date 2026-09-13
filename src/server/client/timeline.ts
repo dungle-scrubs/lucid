@@ -11,8 +11,11 @@
  * proven, instead of inside a component.
  */
 import type { AnnotationSpot } from "../../protocol/annotations.js";
+import type { NativeInputDelivery } from "../../protocol/connection-status.js";
 
 export interface Msg {
+  readonly delivery?: NativeInputDelivery;
+  readonly nativeRefusal?: boolean;
   readonly id: string;
   readonly role: "assistant" | "user";
   readonly text: string;

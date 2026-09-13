@@ -10,6 +10,7 @@ import { NativeConnection } from "../../src/server/client/native-connection.js";
 const initial: BrowserConnection = {
   actions: ["retry-detection"],
   conversationId: "record-one",
+  inputs: [],
   instructions: [],
   interface: "codex-cli",
   message: "Cannot confirm whether the session is open.",

@@ -560,6 +560,8 @@ test("current owned native work projects starting, responding and cleanup as sep
       }).verdict,
     ).toBe("accepted");
     expect(status()).toMatchObject({ state: "cleanup" });
+    expect(status().inputs[0]).toMatchObject({ state: "finished", outcome: null });
+    expect(status().inputs[0]?.message).toContain("no reply was recorded");
     execution.turnSettled("projection-turn");
     expect(status()).toMatchObject({ state: "closed" });
   } finally {
@@ -712,6 +714,192 @@ test("a prepared native attempt reserves one HCN channel and cannot start a seco
   } finally {
     proc.exit(0);
     await reading;
+    execution.close();
+    f.close();
+  }
+});
+
+test("headless message delivery uses receipt and correlated terminal evidence, not process identity", async () => {
+  const f = setup();
+  const execution = createManagedExecution({
+    cwd: f.root,
+    driver: f.driver,
+    host: f.host,
+    runner: f.runner,
+  });
+  let known = true;
+  const delivery = () =>
+    readConnection(f.host.dir, {
+      now: () => 1,
+      ownerPresence: (owner) => (known ? owner.pid === process.pid : undefined),
+    }).inputs.find((input) => input.inputId === "feedback");
+  try {
+    const prepared = await execution.prepare({
+      inputId: "feedback",
+      text: "Review",
+      turnId: "delivery-turn",
+      native: { kind: "fresh" },
+      profile: "headless-turn",
+      signal: new AbortController().signal,
+    });
+    if (prepared.kind !== "ready" || !prepared.nativeApprovals) throw new Error("Preparation held");
+    expect(delivery()).toMatchObject({ state: "sending", outcome: null });
+    prepared.nativeApprovals.dispatch?.(() => undefined);
+    expect(
+      execution.sendFrame({
+        kind: "event",
+        epoch: f.host.state().epoch,
+        n: 1,
+        turnId: "delivery-turn",
+        event: {
+          kind: "identity",
+          authority: "harness-minted",
+          sessionId: f.binding.nativeSessionId,
+        },
+      }).verdict,
+    ).toBe("accepted");
+    expect(delivery()).toMatchObject({ state: "sending", outcome: null });
+    known = false;
+    expect(delivery()).toMatchObject({ state: "delivery-uncertain" });
+    known = true;
+    expect(
+      execution.sendFrame({
+        kind: "disposition",
+        epoch: f.host.state().epoch,
+        inputId: "feedback",
+        outcome: "applied",
+      }).verdict,
+    ).toBe("accepted");
+    expect(delivery()).toMatchObject({ state: "received", outcome: null });
+    known = false;
+    expect(delivery()?.message).toContain("outcome is unknown");
+    known = true;
+    expect(
+      execution.sendFrame({
+        kind: "event",
+        epoch: f.host.state().epoch,
+        n: 2,
+        turnId: "delivery-turn",
+        event: { kind: "question", question: "Which section?" },
+      }).verdict,
+    ).toBe("accepted");
+    expect(delivery()).toMatchObject({ state: "received" });
+    expect(
+      execution.sendFrame({
+        kind: "event",
+        epoch: f.host.state().epoch,
+        n: 3,
+        turnId: "delivery-turn",
+        event: { kind: "done", cause: "awaiting-input", exitCode: 0 },
+      }).verdict,
+    ).toBe("accepted");
+    expect(delivery()).toMatchObject({
+      state: "finished",
+      outcome: { kind: "question", text: "Which section?" },
+    });
+    execution.turnSettled("delivery-turn");
+    known = false;
+    expect(delivery()).toMatchObject({
+      state: "finished",
+      outcome: { kind: "question", text: "Which section?" },
+    });
+  } finally {
+    execution.close();
+    f.close();
+  }
+});
+
+test("a headless refusal before execution reports not started and retains its recorded reason", async () => {
+  const f = setup();
+  const execution = createManagedExecution({
+    cwd: f.root,
+    driver: f.driver,
+    host: f.host,
+    runner: f.runner,
+  });
+  try {
+    const prepared = await execution.prepare({
+      inputId: "feedback",
+      text: "Review",
+      turnId: "refused-delivery",
+      native: { kind: "fresh" },
+      profile: "headless-turn",
+      signal: new AbortController().signal,
+    });
+    expect(prepared.kind).toBe("ready");
+    execution.dispatchRejected("refused-delivery", "harness-refusal");
+    execution.turnSettled("refused-delivery");
+    const status = readConnection(f.host.dir, { ownerPresence: () => false });
+    expect(status.inputs[0]).toMatchObject({ state: "not-started", outcome: { kind: "refusal" } });
+    expect(status.inputs[0]?.message).toContain("refused the invocation before task execution");
+  } finally {
+    execution.close();
+    f.close();
+  }
+});
+
+test("a failed headless response keeps the terminal failure and never becomes response finished", async () => {
+  const f = setup();
+  const execution = createManagedExecution({
+    cwd: f.root,
+    driver: f.driver,
+    host: f.host,
+    runner: f.runner,
+  });
+  try {
+    const prepared = await execution.prepare({
+      inputId: "feedback",
+      text: "Review",
+      turnId: "failed-delivery",
+      native: { kind: "fresh" },
+      profile: "headless-turn",
+      signal: new AbortController().signal,
+    });
+    if (prepared.kind !== "ready" || !prepared.nativeApprovals) throw new Error("Preparation held");
+    prepared.nativeApprovals.dispatch?.(() => undefined);
+    const epoch = f.host.state().epoch;
+    expect(
+      execution.sendFrame({
+        kind: "event",
+        epoch,
+        n: 1,
+        turnId: "failed-delivery",
+        event: {
+          kind: "identity",
+          authority: "harness-minted",
+          sessionId: f.binding.nativeSessionId,
+        },
+      }).verdict,
+    ).toBe("accepted");
+    expect(
+      execution.sendFrame({ kind: "disposition", epoch, inputId: "feedback", outcome: "applied" })
+        .verdict,
+    ).toBe("accepted");
+    expect(
+      execution.sendFrame({
+        kind: "event",
+        epoch,
+        n: 2,
+        turnId: "failed-delivery",
+        event: { kind: "failure", class: "failure", message: "The model request failed." },
+      }).verdict,
+    ).toBe("accepted");
+    expect(
+      execution.sendFrame({
+        kind: "event",
+        epoch,
+        n: 3,
+        turnId: "failed-delivery",
+        event: { kind: "done", cause: "error", exitCode: 1 },
+      }).verdict,
+    ).toBe("accepted");
+    execution.turnSettled("failed-delivery");
+    const status = readConnection(f.host.dir, { ownerPresence: () => false });
+    expect(status.inputs[0]).toMatchObject({
+      state: "finished",
+      outcome: { kind: "failure", text: "The model request failed." },
+    });
+  } finally {
     execution.close();
     f.close();
   }

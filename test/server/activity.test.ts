@@ -121,3 +121,16 @@ test("a pending permission request waits for the person without a stall alarm", 
   });
   expect(describeActivity(running, 999, false, 1).disconnected).toBe(true);
 });
+
+test("native connection status owns activity announcements even without an ordinary attachment", () => {
+  for (const connected of [true, false])
+    expect(
+      describeActivity({ ...running, nativeConnectionRequired: true }, 999, connected, 1),
+    ).toEqual({
+      busy: false,
+      disconnected: false,
+      elapsed: null,
+      label: "",
+      stalled: false,
+    });
+});

@@ -343,11 +343,16 @@ test("publication holds later delivery while an earlier receipt and response set
       [],
     );
     expect(readConnection(paths.dir).state).toBe("delivery-uncertain");
+    expect(readConnection(paths.dir).inputs).toMatchObject([
+      { inputId: "earlier", state: "delivery-uncertain", outcome: null },
+      { inputId: "later", state: "saved", outcome: null },
+    ]);
     expect(bind().verdict).toBe("refused");
     const receipt = { kind: "disposition", epoch: 1, inputId: "earlier", outcome: "applied" };
     expect(frame(receipt).verdict).toBe("accepted");
     expect(frame(receipt).verdict).toBe("accepted");
     expect(readConnection(paths.dir).state).toBe("outcome-unknown");
+    expect(readConnection(paths.dir).inputs[0]).toMatchObject({ state: "received", outcome: null });
     const done = {
       kind: "event",
       epoch: 1,

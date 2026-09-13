@@ -1,4 +1,4 @@
-import type { NativeInterface } from "./connection.js";
+import type { NativeInterface, NativeOutcome } from "./connection.js";
 import type { DriverPreference } from "./driver-settings.js";
 
 export interface ConnectionStatus {
@@ -30,11 +30,26 @@ export type ConnectionAction =
 export interface ConnectionProjection extends ConnectionStatus {
   readonly actions: readonly ConnectionAction[];
   readonly conversationId: string;
+  readonly inputs: readonly NativeInputDelivery[];
   readonly interface: NativeInterface | null;
   readonly nativeConnectionRequired: boolean;
   readonly nativeSessionId: string | null;
   readonly observedAt: number;
   readonly savedPreference: DriverPreference | null;
+}
+
+export interface NativeInputDelivery {
+  readonly inputId: string;
+  readonly message: string;
+  readonly outcome: NativeOutcome | null;
+  readonly state:
+    | "saved"
+    | "sending"
+    | "received"
+    | "delivery-uncertain"
+    | "finished"
+    | "cancelled"
+    | "not-started";
 }
 
 export interface ConnectionInstruction {

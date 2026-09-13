@@ -50,6 +50,7 @@ export const TURN_STALL_AFTER = 180;
 export const UNDELIVERED_STALL_AFTER = 45;
 
 export interface Activity {
+  readonly nativeConnectionRequired?: boolean;
   readonly turn: boolean;
   /** Delivered inputs whose turn has produced no terminal event. */
   readonly inFlight: number;
@@ -91,6 +92,9 @@ export const describeActivity = (
   connected = true,
   pendingApprovals = 0,
 ): Report => {
+  // Native ownership and receipt do not depend on an ordinary source attachment.
+  if (activity.nativeConnectionRequired)
+    return { busy: false, disconnected: false, stalled: false, label: "", elapsed: null };
   const working = activity.turn || activity.inFlight > 0;
   const busy = working || activity.waiting > 0 || pendingApprovals > 0;
   if (!busy) return { busy: false, disconnected: false, stalled: false, label: "", elapsed: null };

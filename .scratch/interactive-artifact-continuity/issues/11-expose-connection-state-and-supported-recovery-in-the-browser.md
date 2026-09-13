@@ -26,3 +26,22 @@ Machine-made under the accepted autonomous instruction: first complete the exist
 ## Browser implementation seam
 
 Machine-made under the same autonomous instruction: test supported action selection through public readConnection on durable records and fresh owner observations, then test HTTP instructions with the configured root and exact conversation. Browser verification attaches to the rendered connection panel, request cancellation, read-only refresh and keyboard focus. Render the native connection panel only for a bound native conversation. A missing binding alone cannot distinguish a failed native publication from an ordinary managed artifact, so retaining publication failure evidence and exposing setup for that case remains a separate unfinished slice. Saved preferences never establish connection or readiness. Terminal reconnect owns its wait; browser cancellation is not offered without a supported ownership contract. This holds scope for the same person reading and annotating an artifact.
+
+## Per-input delivery seam
+
+Machine-made under autonomous continuation. This holds scope for the person reading and annotating an artifact: Lucid routes an agent conversation into a durable record, and the person needs to distinguish saved feedback from receipt and response. Ticket 17 now supplies the unbound publication requirement and setup failure evidence.
+
+Tests attach to public readConnection over real host records, then the HTTP poll and rendered message component. Cases in priority order:
+1. Saved feedback advances through offer and receipt without confusing another queued message; lost or unknown ownership preserves receipt and changes only the uncertainty explanation. Read-only status does not mutate or resend.
+2. Recorded answer, question, refusal, failure and unsent cancellation survive replay with their actual result.
+3. Same-session headless attempts distinguish dispatch, receipt, terminal response and unknown outcome; publication-era legacy inputs never acquire an invented receipt.
+4. HTTP joins delivery to the durable input ID for ordinary messages and annotation batches; native messages do not inherit unsupported ordinary recovery actions.
+5. Browser labels explain each state beside the message, preserve annotation navigation, and add no per-message live region. Existing connection status owns live announcements.
+
+No new cancellation, retry or reconnect mutation is introduced by this read-only slice.
+
+## Per-input checkpoint
+
+Implemented the read-only delivery projection and browser labels for plain messages and both annotation batch render paths. Durable offer/receipt/outcome, headless attempt/terminal evidence, unsent cancellation and legacy publication evidence retain separate meanings. A clean terminal with no recorded reply says Response ended. Native records no longer inherit ordinary recovery buttons or contradictory ordinary activity announcements. Native refusal class remains visible in transcript text.
+
+Full check: 1,715 tests, 9,517 assertions; lint and both typechecks pass. Build passes. Four Muse axes completed against ef340fe; small findings applied, unreachable duplicate-offer and unsupported ordinary-recovery concerns rejected with reducer/host evidence. Browser evidence under ignored input-delivery-* verifies six viewport/theme combinations, transcript/composer space, durable receipt/outcome updates, preserved summary focus/open state and one announcement per change. Synthetic native binding stands in for process ownership; no model or harness was started in this browser run. Existing native-process acceptance remains separate. Browser native mutations and full activation acceptance remain unfinished.

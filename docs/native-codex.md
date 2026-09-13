@@ -102,7 +102,19 @@ terminal-owned reconnect wait. Saved response preferences remain separate.
 
 An unbound publication shows its last saved connection failure, or an incomplete-attempt notice, with generic setup guidance for the exact conversation. Refreshing cannot recreate native registration. Saved feedback stays queued. A legacy send without a confirmed receipt or completion remains held even after process exit; this flow offers no reset that assumes it finished. Ordinary managed artifacts are unchanged until explicitly published through the native publication command.
 
-Per-input native delivery labels, browser-owned cancellation and automatic bound-runtime activation remain pending.
+Each saved message and annotation batch shows its delivery state. Saved means
+the record accepted it. Sending does not confirm receipt. Received requires a
+recorded receipt and remains Received if the response outcome becomes unknown.
+Recorded questions, refusals and failures have distinct labels. Response ended
+means a clean terminal event has no recorded reply; Response finished has a
+recorded answer. Expand a label to read its explanation. Cancelled records an
+unsent cancellation; Not started retains a known pre-start refusal. These labels
+grant no retry or dispatch authority.
+
+Ordinary execution recovery and activity cards are hidden for native-required
+records. The native connection panel owns their status announcements. Its
+scrolling area reserves space for the transcript and composer on stacked layouts.
+Browser-owned cancellation and automatic bound-runtime activation remain pending.
 
 Expiry or interruption disables listening until another explicit
 `resume-listen` request in the same native session. `lucid connection

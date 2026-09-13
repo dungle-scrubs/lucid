@@ -18,6 +18,7 @@ import { dispatch } from "../../src/cli/dispatch.js";
 import { sendInput } from "../../src/cli/send.js";
 import { startServe } from "../../src/cli/serve.js";
 import { readProcessOwner } from "../../src/process-owner.js";
+import { encodeAnnotationBatch } from "../../src/protocol/annotations.js";
 import { ARTIFACT_TITLE_MAX } from "../../src/protocol/artifact-title.js";
 import { createConversationHost, openWriter } from "../../src/store/conversation-host.js";
 import { acquirePresence } from "../../src/store/presence.js";
@@ -50,6 +51,38 @@ afterEach(async () => {
 });
 
 describe("the way in", () => {
+  test("poll joins native delivery to plain feedback and annotation batches without ordinary recovery", async () => {
+    const { paths } = createConversationRecord(root, "delivery-http");
+    const host = openWriter(paths.dir);
+    try {
+      expect(host.recordNativePublication().verdict).toBe("accepted");
+      const note = encodeAnnotationBatch({
+        artifactId: "flow",
+        version: 1,
+        notes: [{ note: "Clarify this", spots: [] }],
+      });
+      for (const [id, text] of [
+        ["plain", "Review this"],
+        ["annotation", note],
+      ] as const)
+        expect(host.acceptInput({ id, mode: "queue", text }, { managed: true }).verdict).toBe(
+          "accepted",
+        );
+      const before = readFileSync(paths.logPath);
+      const response = await api("/api/conversations/delivery-http");
+      expect(response.status).toBe(200);
+      const result = await response.json();
+      expect(result.lines.filter((line: { kind: string }) => line.kind === "human")).toMatchObject([
+        { delivery: { inputId: "plain", state: "saved" } },
+        { batch: { inputId: "annotation" }, delivery: { inputId: "annotation", state: "saved" } },
+      ]);
+      expect(result.executions).toEqual([]);
+      expect(result.activity.nativeConnectionRequired).toBe(true);
+      expect(readFileSync(paths.logPath)).toEqual(before);
+    } finally {
+      host.close();
+    }
+  });
   test("a reopened native publication shows its retained failure and generic exact-record guidance", async () => {
     const published = await publishArtifact(
       {
@@ -428,6 +461,31 @@ describe("whether the agent is working", () => {
       host.close();
     }
   };
+
+  test("a recorded native refusal retains its class beside the transcript text", async () => {
+    emit(
+      "refused",
+      { kind: "failure", class: "refusal", message: "The session refused this request." },
+      1,
+    );
+    const host = openWriter(join(root, CONV));
+    try {
+      expect(host.recordNativePublication().verdict).toBe("accepted");
+    } finally {
+      host.close();
+    }
+    const body = await (await api(`/api/conversations/${CONV}`)).json();
+    expect(body.lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "agent",
+          event: "failure",
+          nativeRefusal: true,
+          text: "✗ The session refused this request.",
+        }),
+      ]),
+    );
+  });
 
   test("a turn with no terminal event is running", async () => {
     emit("turn-1", { kind: "message", role: "assistant", text: "thinking out loud" }, 1);
