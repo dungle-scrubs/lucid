@@ -123,7 +123,33 @@ publication has no cancellation control.
 If cancellation is not confirmed, Check status only reads the record. Retry
 cancellation repeats the same idempotent cancellation request; neither control
 replays feedback. Reloading never repeats the request. A later recorded cancellation
-replaces the uncertainty notice. Automatic bound-runtime activation remains pending.
+replaces the uncertainty notice.
+
+## Automatic continuation
+
+The browser server can request a worker for a verified Codex CLI binding after
+fresh process evidence confirms that its interactive owners have exited. An open
+session keeps its feedback saved and shows resume-listening instructions. Unknown
+ownership keeps the feedback held. Other native interfaces remain separate lanes.
+
+The worker resumes the exact saved native session, folder spelling, model, effort,
+provider and supported permissions. Folder aliases must still resolve to the same
+directory at admission and dispatch. Browser preferences cannot replace these
+settings and do not produce model-selection errors for this connection. Actual
+unreadable saved preferences and runtime installation problems remain visible.
+
+The supported permission lane retains read-only filesystem access, restricted
+network access, a user reviewer, and on-request or never approval policy. Missing
+HCN operations or unsupported native settings hold the feedback before dispatch.
+Lucid does not switch to fresh execution or reduce permissions to make it start.
+Native permission requests appear in chat; only an explicit selected decision is
+sent to the current process. A response must finish and its process must be cleaned
+up before protected interactive reconnect starts.
+
+One admitted headless launch records: "No interactive session detected. Resuming
+headlessly with session <id>." A recorded response does not by itself prove cleanup.
+The source integration is verified; the required HCN release, dependency pin and
+recording update remain tracked in the active continuity acceptance tickets.
 
 Expiry or interruption disables listening until another explicit
 `resume-listen` request in the same native session. `lucid connection

@@ -17,3 +17,7 @@ Complete the five-interface acceptance matrix and deliver reviewed scoped commit
 ## Parent
 
 RFC 26 and planning map https://github.com/dungle-scrubs/lucid/issues/253. Machine-made implementation slice under the approved autonomous continuation.
+
+## Codex CLI checkpoint
+
+Ticket 16 now proves the joined production publication-to-automatic-worker-to-reconnect flow with actual native CLI processes and browser decisions. Final source gates and builds pass; isolated source commits and Muse review dispositions are recorded there. Registry/pin/recording/installed-app integration remains open. The five-interface matrix remains incomplete: Pi has a reproduced strict-resume race in its native session opening; Muse provenance and Codex desktop acceptance remain unverified; Claude native testing is outside the current no-Anthropic instruction. None is enabled by the Codex result.

@@ -9,9 +9,9 @@ The disposable native lane proves same-ID settings preservation, one native requ
 
 ## Acceptance criteria
 
-- [ ] A native CLI-authored session continues with its exact ID, model, effort, provider and supported permissions.
-- [ ] A native approval waits for an explicit browser decision and receives exactly that decision.
-- [ ] Cancellation, process loss and reconnect preserve queued feedback and executor ownership.
+- [x] A native CLI-authored session continues with its exact ID, model, effort, provider and supported permissions.
+- [x] A native approval waits for an explicit browser decision and receives exactly that decision.
+- [x] Cancellation, process loss and reconnect preserve queued feedback and executor ownership.
 - [ ] Pin and recording integration, full Lucid gates, build and review pass before the supported runtime lane is enabled. Desktop acceptance remains separately tracked.
 
 ## Parent
@@ -51,3 +51,13 @@ HCN ae9060c corrects its verified app-server identity authority after exact nati
 Machine-made under accepted RFC 26/27 and the instruction to continue autonomously. Scope holds: connect the existing Codex CLI continuation source to the normal worker after confirmed departure. The HCN release 0.6.8 does not include the new operations; an isolated integration branch combines that release with ae9060c before consumer package verification. Published dependency installation remains a separate completion gate.
 
 Tests attach to runManagedWorker/openDrivenConversation, real records and kernel executor locks, with injected HCN process I/O and native owner observations. Order: (1) one exact-ID native response after confirmed departure, preserving native settings despite incompatible browser preferences and recording one notice; (2) live, unknown, unbound or unsupported native authority starts nothing; (3) approval decisions, process cleanup, reconnect and a subsequent saved input use the same ownership guards. A final native browser run joins actual publication to the automatic worker. The public runtime must use native-headless admission and the configured registry root, never ordinary headless admission for a native-required record.
+
+## Joined Codex acceptance
+
+The native Codex CLI now publishes through the actual artifact command and generated hooks, records interactive feedback receipt and response, keeps later feedback saved while open without a listener, then exits. The ordinary browser server and worker resume that exact native session with one transcript notice. One real native command approval is answered once through the browser; the file effect, response, native cleanup and executor release are verified. Protected reconnect returns the same session to actual listening, then closes cleanly. All task owners are confirmed absent and the test pane is closed. This lane uses the supported local-Qwen/read-only/on-request settings; other permission profiles and interfaces are not inferred.
+
+The run found and corrected two integration failures: canonical record folders versus exact native folder spelling, and irrelevant browser selection diagnostics on a native connection. Both have RED/GREEN regressions, four Muse review axes, and committed fixes. Final full check passes 1,731 tests with 9,674 assertions and build. Cancellation/process-loss guards also retain their deterministic coverage.
+
+Lucid source commits: 0f57ced (automatic worker), dee4fc8 (native folder identity), 65c8c7c (browser selection separation). Integrated HCN 4090e23 combines released 0.6.8 with native operations and passes 1,258 tests in both runtimes plus package build/check. Guidance 5a8112f passes updated CLI claims and synthetic transcript checks. Detailed joined evidence is in ignored automatic-native-01-acceptance.json and related files.
+
+Remaining: publish/land the reviewed upstream integration, deliberately update Lucid's exact HCN pin and re-capture consumed recordings, then verify and activate the packaged app. The installed service and registry package remain unchanged. This ticket stays claimed until that distribution gate is complete.
