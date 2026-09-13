@@ -1,6 +1,6 @@
 import { compatibilityText } from "../protocol/compatibility.js";
 import type { NativeOutcome } from "../protocol/connection.js";
-import { requiresNativeConnection } from "../protocol/connection.js";
+import { nativeInputCancellationCheck, requiresNativeConnection } from "../protocol/connection.js";
 import type { ConnectionStatus, NativeInputDelivery } from "../protocol/connection-status.js";
 import { EventKind } from "../protocol/events.js";
 import type { ChannelState } from "../protocol/reducer.js";
@@ -13,6 +13,7 @@ export function nativeInputViews(
   connection: ConnectionStatus,
 ): readonly NativeInputDelivery[] {
   if (!requiresNativeConnection(state)) return [];
+  const cancellationIssue = nativeInputCancellationCheck(state);
   const offers = new Map(
     Object.values(state.connection?.offers ?? {}).map((entry) => [entry.offer.inputId, entry]),
   );
@@ -27,6 +28,7 @@ export function nativeInputViews(
     const offer = offers.get(input.id);
     if (offer?.kind === "finished")
       return {
+        actions: [],
         inputId: input.id,
         message: offer.outcome.text,
         outcome: offer.outcome,
@@ -34,6 +36,7 @@ export function nativeInputViews(
       };
     if (Object.hasOwn(state.connection?.cancelledInputs ?? {}, input.id))
       return {
+        actions: [],
         inputId: input.id,
         message: "Cancelled before it was sent. The message remains in this conversation.",
         outcome: null,
@@ -41,6 +44,7 @@ export function nativeInputViews(
       };
     if (offer?.kind === "sending")
       return {
+        actions: [],
         inputId: input.id,
         message: responding
           ? "Waiting for the interactive session to confirm receipt."
@@ -50,6 +54,7 @@ export function nativeInputViews(
       };
     if (offer?.kind === "received")
       return {
+        actions: [],
         inputId: input.id,
         message: responding
           ? "The session confirmed receipt. Waiting for its response."
@@ -63,6 +68,7 @@ export function nativeInputViews(
       if (execution.kind === "attempt-ended" && execution.outcome.kind === "pre-start-failed") {
         const failure = execution.outcome.failure;
         return {
+          actions: [],
           inputId: input.id,
           message: failure.reason,
           outcome: {
@@ -75,6 +81,7 @@ export function nativeInputViews(
       if (state.completedTurns[start.turnId] !== undefined) {
         const outcome = outcomeFor(start.turnId);
         return {
+          actions: [],
           inputId: input.id,
           message:
             outcome?.text ??
@@ -89,12 +96,19 @@ export function nativeInputViews(
           recorded?.kind === "failure" || recorded?.kind === "refusal"
             ? recorded
             : { kind: "failure", text: execution.outcome.failure.reason };
-        return { inputId: input.id, message: outcome.text, outcome, state: "finished" };
+        return {
+          actions: [],
+          inputId: input.id,
+          message: outcome.text,
+          outcome,
+          state: "finished",
+        };
       }
       const received = Object.hasOwn(state.appliedInputs, input.id);
       const active =
         connection.state === "headless-starting" || connection.state === "headless-running";
       return {
+        actions: [],
         inputId: input.id,
         message: received
           ? active
@@ -109,6 +123,7 @@ export function nativeInputViews(
     }
     if (input.status === "applied")
       return {
+        actions: [],
         inputId: input.id,
         message:
           "Receipt is recorded. A response outcome correlated to this earlier message is not available.",
@@ -117,6 +132,7 @@ export function nativeInputViews(
       };
     if (uncertainInputs.has(input.id))
       return {
+        actions: [],
         inputId: input.id,
         message:
           "This earlier message has no confirmed receipt. It will not be sent again automatically.",
@@ -124,6 +140,7 @@ export function nativeInputViews(
         state: "delivery-uncertain",
       };
     return {
+      actions: cancellationIssue(input.id) === undefined ? ["cancel-unsent-input"] : [],
       inputId: input.id,
       message:
         state.connection?.heldInputs[input.id]?.message ??

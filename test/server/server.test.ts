@@ -22,7 +22,7 @@ import { encodeAnnotationBatch } from "../../src/protocol/annotations.js";
 import { ARTIFACT_TITLE_MAX } from "../../src/protocol/artifact-title.js";
 import { createConversationHost, openWriter } from "../../src/store/conversation-host.js";
 import { acquirePresence } from "../../src/store/presence.js";
-import { createConversationRecord } from "../../src/store/store.js";
+import { createConversationRecord, viewConversation } from "../../src/store/store.js";
 
 const CONV = "srv-1";
 
@@ -51,6 +51,101 @@ afterEach(async () => {
 });
 
 describe("the way in", () => {
+  test("native cancellation preserves feedback, repeats safely and refuses a stale offered input", async () => {
+    const id = crypto.randomUUID();
+    const { paths } = createConversationRecord(root, id, { workingDirectory: root });
+    const owner = readProcessOwner(process.pid);
+    if (!owner) throw new Error("Missing test owner");
+    const binding = {
+      generation: crypto.randomUUID(),
+      harness: "codex" as const,
+      interface: "codex-cli" as const,
+      nativeSessionId: "cancel-native",
+      owner,
+      registrationId: crypto.randomUUID(),
+      workingDirectory: root,
+    };
+    let lease: ReturnType<typeof acquirePresence> | undefined;
+    const host = createConversationHost(paths.dir, {
+      connectionAuthority: () => binding,
+      executorLease: () => lease?.held() ?? false,
+      now: Date.now,
+      onEffect: () => {},
+      onRecord: () => {},
+      ownerPresence: () => true,
+      presence: () => undefined,
+    });
+    try {
+      expect(
+        host.writeConnection({ actionId: crypto.randomUUID(), binding, kind: "bound" }).verdict,
+      ).toBe("accepted");
+      for (const inputId of ["cancel", "race"])
+        expect(
+          host.acceptInput({ id: inputId, mode: "queue", text: `Keep ${inputId}` }).verdict,
+        ).toBe("accepted");
+      const cancelPath = `/api/conversations/${id}/inputs/cancel/cancel`;
+      const before = readFileSync(paths.logPath);
+      expect((await fetch(url(cancelPath), { method: "POST" })).status).toBe(401);
+      expect(readFileSync(paths.logPath)).toEqual(before);
+      const response = await api(cancelPath, { method: "POST" });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ inputId: "cancel", status: "cancelled" });
+      const cancelled = readFileSync(paths.logPath);
+      expect((await api(cancelPath, { method: "POST" })).status).toBe(200);
+      expect(readFileSync(paths.logPath)).toEqual(cancelled);
+      expect(viewConversation(paths.dir).transcript.inputs[0]).toMatchObject({
+        id: "cancel",
+        status: "cancelled",
+        text: "Keep cancel",
+      });
+      lease = acquirePresence(paths.dir, id);
+      const participation = {
+        epoch: host.state().epoch + 1,
+        executorOwner: owner,
+        expiresAt: Date.now() + 45000,
+        id: crypto.randomUUID(),
+        registration: binding,
+      };
+      expect(
+        host.writeConnection({
+          actionId: crypto.randomUUID(),
+          kind: "listener-enabled",
+          source: "explicit",
+          participation,
+        }).verdict,
+      ).toBe("accepted");
+      const snapshot = host.captureDispatch("race", 0);
+      const offer = {
+        attempt: 1,
+        context: snapshot.context,
+        epoch: snapshot.epoch,
+        id: crypto.randomUUID(),
+        inputId: "race",
+        participationId: participation.id,
+        turnId: crypto.randomUUID(),
+      };
+      expect(
+        host.writeConnection({
+          actionId: crypto.randomUUID(),
+          kind: "offer-started",
+          offer,
+          stamp: snapshot.stamp,
+        }).verdict,
+      ).toBe("accepted");
+      const offered = readFileSync(paths.logPath);
+      const raced = await api(`/api/conversations/${id}/inputs/race/cancel`, { method: "POST" });
+      expect(raced.status).toBe(409);
+      expect(await raced.json()).toMatchObject({ error: "input-already-dispatched" });
+      expect(readFileSync(paths.logPath)).toEqual(offered);
+      expect(lease.held()).toBe(true);
+      expect(
+        (await api(`/api/conversations/${id}/inputs/%00/cancel`, { method: "POST" })).status,
+      ).toBe(400);
+    } finally {
+      host.close();
+      lease?.release();
+    }
+  });
   test("poll joins native delivery to plain feedback and annotation batches without ordinary recovery", async () => {
     const { paths } = createConversationRecord(root, "delivery-http");
     const host = openWriter(paths.dir);

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
 import type { BrowserConnection } from "../../protocol/connection-status.js";
+import { NativeInputControlsContext, nativeConnectionQueryKey } from "./native-input-controls.js";
 import { Button } from "./ui/button.js";
 
 interface NativeConnectionProps {
@@ -11,6 +12,7 @@ interface NativeConnectionProps {
 
 export function NativeConnection(props: NativeConnectionProps) {
   const { conversationId, enabled, request } = props;
+  const controls = React.useContext(NativeInputControlsContext);
   const result = useQuery({
     enabled,
     gcTime: 0,
@@ -19,7 +21,7 @@ export function NativeConnection(props: NativeConnectionProps) {
       if (!response.ok) throw new Error("Connection status is unavailable. Check detection again.");
       return response.json();
     },
-    queryKey: ["native-connection", conversationId],
+    queryKey: nativeConnectionQueryKey(conversationId),
     refetchInterval: 2000,
     refetchIntervalInBackground: false,
     retry: false,
@@ -31,10 +33,21 @@ export function NativeConnection(props: NativeConnectionProps) {
     ? "Current connection could not be checked. Saved feedback is unchanged."
     : (connection?.message ?? "Checking the native connection…");
   const [announcement, setAnnouncement] = React.useState("");
+  const announcedAction = React.useRef<string | undefined>(undefined);
+  const actionId = controls?.announcement?.id;
+  const actionMessage = controls?.announcement?.message;
   // Populate the mounted live region only when its message changes, never on timestamp polls.
   React.useEffect(() => {
-    setAnnouncement(connection?.nativeConnectionRequired ? message : "");
-  }, [connection?.nativeConnectionRequired, message]);
+    const newAction = actionId !== undefined && actionId !== announcedAction.current;
+    announcedAction.current = actionId;
+    setAnnouncement(
+      connection?.nativeConnectionRequired
+        ? newAction
+          ? (actionMessage ?? message)
+          : message
+        : "",
+    );
+  }, [actionId, actionMessage, connection?.nativeConnectionRequired, message]);
   // A native publication can need setup before its session identity is known.
   if (!connection?.nativeConnectionRequired) return null;
   return (

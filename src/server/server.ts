@@ -461,6 +461,35 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           });
         }
 
+        const cancelInput = path.match(/^\/api\/conversations\/([^/]+)\/inputs\/([^/]+)\/cancel$/);
+        if (cancelInput && req.method === "POST") {
+          const id = decodeURIComponent(cancelInput[1] ?? "");
+          const inputId = decodeURIComponent(cancelInput[2] ?? "");
+          if (!validConversationId(id) || !isWireId(inputId))
+            return json(
+              {
+                error: "invalid-input-identity",
+                reason: "Invalid conversation or input identity.",
+              },
+              400,
+            );
+          return withWriter(dirForRequest(id), id, (host) => {
+            const result = host.controlConnection({ kind: "cancel-input", inputId });
+            if (result.verdict === "refused")
+              return json(
+                {
+                  error: result.issue,
+                  reason:
+                    result.issue === "input-already-dispatched"
+                      ? "This message has started dispatching. Cancellation is unavailable."
+                      : "This message cannot be cancelled. Check its delivery status.",
+                },
+                409,
+              );
+            return json({ inputId, status: "cancelled" });
+          });
+        }
+
         const recovery = path.match(/^\/api\/conversations\/([^/]+)\/inputs\/([^/]+)\/recovery$/);
         if (recovery && req.method === "POST") {
           const id = decodeURIComponent(recovery[1] ?? "");

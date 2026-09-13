@@ -253,6 +253,32 @@ export function hasUnresolvedOffer(connection: ConnectionState | null): boolean 
   return Object.values(connection?.offers ?? {}).some((offer) => offer.kind !== "finished");
 }
 
+/** Cancellation withdraws one saved input; it never stops a source or resolves uncertain work. */
+export function nativeInputCancellationCheck(
+  state: ChannelState,
+): (inputId: string) => ProtocolIssue | undefined {
+  const connection = state.connection;
+  if (!connection) return () => "connection-unverified";
+  const started = new Set([
+    ...Object.values(connection.offers).map((entry) => entry.offer.inputId),
+    ...Object.values(connection.launches)
+      .filter((entry) => entry.kind === "intended")
+      .map((entry) => entry.launch.inputId),
+  ]);
+  const pending = new Set(state.inputs.map((input) => input.id));
+  return (inputId) => {
+    const execution = state.executions[inputId];
+    if (
+      Object.hasOwn(state.appliedInputs, inputId) ||
+      started.has(inputId) ||
+      execution?.kind === "attempt-started" ||
+      execution?.kind === "attempt-ended"
+    )
+      return "input-already-dispatched";
+    return pending.has(inputId) ? undefined : "execution-ineligible";
+  };
+}
+
 export function hasUnsettledNativeWork(state: ChannelState): boolean {
   return currentReconnect(state.connection) !== undefined || hasUnsettledNativeExecution(state);
 }
@@ -1340,19 +1366,8 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
     } else if (fact.kind === "input-cancelled") {
       const connection = state.connection;
       if (!connection) return refuseConnection(state, now, "connection-unverified");
-      const execution = state.executions[fact.inputId];
-      if (
-        Object.hasOwn(state.appliedInputs, fact.inputId) ||
-        Object.values(connection.launches).some(
-          (entry) => entry.kind === "intended" && entry.launch.inputId === fact.inputId,
-        ) ||
-        Object.values(connection.offers).some((entry) => entry.offer.inputId === fact.inputId) ||
-        execution?.kind === "attempt-started" ||
-        execution?.kind === "attempt-ended"
-      )
-        return refuseConnection(state, now, "input-already-dispatched");
-      if (!state.inputs.some((input) => input.id === fact.inputId))
-        return refuseConnection(state, now, "execution-ineligible");
+      const issue = nativeInputCancellationCheck(state)(fact.inputId);
+      if (issue) return refuseConnection(state, now, issue);
       next = {
         ...state,
         connection: {

@@ -1,4 +1,5 @@
 import type { NativeInputDelivery as Delivery } from "../../protocol/connection-status.js";
+import { NativeInputCancellation } from "./native-input-cancellation.js";
 
 export function NativeInputDelivery(props: { readonly delivery: Delivery | undefined }) {
   const { delivery } = props;
@@ -26,6 +27,7 @@ export function NativeInputDelivery(props: { readonly delivery: Delivery | undef
     <details className="native-input-delivery" data-input-id={delivery.inputId}>
       <summary aria-label={`Message delivery: ${label}`}>{label}</summary>
       <p>{delivery.message}</p>
+      <NativeInputCancellation key={delivery.inputId} delivery={delivery} />
     </details>
   );
 }

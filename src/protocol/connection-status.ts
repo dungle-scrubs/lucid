@@ -39,6 +39,7 @@ export interface ConnectionProjection extends ConnectionStatus {
 }
 
 export interface NativeInputDelivery {
+  readonly actions: readonly "cancel-unsent-input"[];
   readonly inputId: string;
   readonly message: string;
   readonly outcome: NativeOutcome | null;

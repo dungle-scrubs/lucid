@@ -5429,3 +5429,39 @@ test("delivery history keeps answer, question, refusal, failure and cancellation
     }
   }
 });
+
+test("only an unsent bound-native input advertises cancellation, and cancellation is repeat-safe", () => {
+  const f = boundFixture();
+  try {
+    for (const id of ["withdraw", "deliver"])
+      expect(f.host.acceptInput({ id, mode: "queue", text: id }).verdict).toBe("accepted");
+    expect(f.status().inputs).toMatchObject([
+      { inputId: "withdraw", actions: ["cancel-unsent-input"] },
+      { inputId: "deliver", actions: ["cancel-unsent-input"] },
+    ]);
+    expect(f.host.controlConnection({ kind: "cancel-input", inputId: "withdraw" }).verdict).toBe(
+      "accepted",
+    );
+    const cancelled = f.host.state().seq;
+    expect(f.host.controlConnection({ kind: "cancel-input", inputId: "withdraw" }).verdict).toBe(
+      "accepted",
+    );
+    expect(f.host.state().seq).toBe(cancelled);
+    expect(f.status().inputs[0]).toMatchObject({ state: "cancelled", actions: [] });
+    f.acquire();
+    const listener = f.enableFact();
+    expect(f.host.writeConnection(listener).verdict).toBe("accepted");
+    expect(
+      f.host.writeConnection(prepareOffer(f.host, listener.participation.id, "deliver")).verdict,
+    ).toBe("accepted");
+    expect(f.status().inputs[1]).toMatchObject({ state: "sending", actions: [] });
+    expect(f.host.controlConnection({ kind: "cancel-input", inputId: "deliver" })).toMatchObject({
+      verdict: "refused",
+      issue: "input-already-dispatched",
+    });
+    f.controls.probe = () => undefined;
+    expect(f.status().inputs[1]).toMatchObject({ state: "delivery-uncertain", actions: [] });
+  } finally {
+    f.close();
+  }
+});

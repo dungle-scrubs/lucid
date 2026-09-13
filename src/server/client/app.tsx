@@ -107,6 +107,7 @@ import {
 import { LocationControl, type LocationState } from "./location-control.js";
 import { NativeApproval } from "./native-approval.js";
 import { NativeConnection } from "./native-connection.js";
+import { NativeInputControlsProvider } from "./native-input-controls.js";
 import { NativeInputDelivery } from "./native-input-delivery.js";
 import { NoteAnchorHelp } from "./note-anchor-help.js";
 import { NotePopover } from "./note-popover.js";
@@ -3567,6 +3568,15 @@ const App = (): React.ReactElement => {
     return { text: "", tone: "idle" };
   })();
 
+  const cancelNativeInput = React.useCallback(
+    (inputId: string) =>
+      fetch(
+        `/api/conversations/${encodeURIComponent(conversationId)}/inputs/${encodeURIComponent(inputId)}/cancel`,
+        { method: "POST", headers: { [TOKEN_HEADER]: token ?? "" } },
+      ),
+    [conversationId, token],
+  );
+
   /** Handed to every note card. Refuses while an older version is pinned:
    * the note's target was resolved against what is on screen, and jumping
    * inside a version the note was not written against points at the wrong
@@ -4332,142 +4342,149 @@ const App = (): React.ReactElement => {
                 >
                   <div className="pane conversation" {...conversationPanel.panelProps}>
                     <div className="conversation-header-space" aria-hidden="true" />
-                    <NativeConnection
+                    <NativeInputControlsProvider
                       key={conversationId}
                       conversationId={conversationId}
-                      enabled={conversationPanel.open && !dead && token !== null}
-                      request={(signal) =>
-                        fetch(
-                          `/api/conversations/${encodeURIComponent(conversationId)}/connection`,
-                          { headers: { [TOKEN_HEADER]: token ?? "" }, signal },
-                        )
-                      }
-                    />
-                    <Thread
-                      pending={notes}
-                      onSendNotes={() => void sendNotes()}
-                      onDiscardNotes={() => setNotes([])}
-                      sending={sending}
-                      report={report}
-                      version={doc?.version ?? null}
-                      dead={dead}
-                      invite={doc === null && !dead}
-                      collision={
-                        edited && waiting !== null && waiting > (doc?.version ?? 0)
-                          ? { arrived: waiting, next: nextVersion }
-                          : null
-                      }
-                      onSave={() => void save()}
-                      onShowWaiting={(arrived) => setConfirmDiscard(arrived)}
-                      attachments={attached}
-                      uploading={uploading}
-                      refusals={refusals}
-                      onAttach={(files) => void attachFiles(files)}
-                      onRemoveAttachment={removeAttachment}
-                      onDismissRefusal={(id) =>
-                        setRefusals((prev) => prev.filter((r) => r.id !== id))
-                      }
-                      driver={driver}
-                      driverPreference={driverPreference}
-                      driverChoices={driverChoices}
-                      onDriverChoice={chooseDriver}
-                      location={location}
-                      settingsIssue={
-                        settingsIssue && settingsErrorInCompatibility ? null : settingsIssue
-                      }
-                      onLocation={chooseLocation}
-                      comparisonBlocked={recoveryLocked}
-                      comparisonRecovery={
-                        <InputRecoveryPanel
-                          recovery={recovery}
-                          onReload={() => window.location.reload()}
-                          onRestore={restoreComparisonRequest}
-                        />
-                      }
-                      executionRecovery={
-                        <>
-                          {approvals.map((entry) => (
-                            <NativeApproval
-                              key={entry.request.requestId}
-                              entry={entry}
-                              disabled={dead || token === null}
-                              send={async (decision) => {
-                                if (token === null || dead)
-                                  return "Reload to reconnect before choosing.";
-                                const response = await fetch(
-                                  `/api/conversations/${encodeURIComponent(conversationId)}/approvals/decision`,
-                                  {
-                                    method: "POST",
-                                    headers: {
-                                      [TOKEN_HEADER]: token,
-                                      "content-type": "application/json",
+                      enabled={!dead && !damaged && token !== null && conversationPanel.open}
+                      cancel={cancelNativeInput}
+                    >
+                      <NativeConnection
+                        key={conversationId}
+                        conversationId={conversationId}
+                        enabled={conversationPanel.open && !dead && token !== null}
+                        request={(signal) =>
+                          fetch(
+                            `/api/conversations/${encodeURIComponent(conversationId)}/connection`,
+                            { headers: { [TOKEN_HEADER]: token ?? "" }, signal },
+                          )
+                        }
+                      />
+                      <Thread
+                        pending={notes}
+                        onSendNotes={() => void sendNotes()}
+                        onDiscardNotes={() => setNotes([])}
+                        sending={sending}
+                        report={report}
+                        version={doc?.version ?? null}
+                        dead={dead}
+                        invite={doc === null && !dead}
+                        collision={
+                          edited && waiting !== null && waiting > (doc?.version ?? 0)
+                            ? { arrived: waiting, next: nextVersion }
+                            : null
+                        }
+                        onSave={() => void save()}
+                        onShowWaiting={(arrived) => setConfirmDiscard(arrived)}
+                        attachments={attached}
+                        uploading={uploading}
+                        refusals={refusals}
+                        onAttach={(files) => void attachFiles(files)}
+                        onRemoveAttachment={removeAttachment}
+                        onDismissRefusal={(id) =>
+                          setRefusals((prev) => prev.filter((r) => r.id !== id))
+                        }
+                        driver={driver}
+                        driverPreference={driverPreference}
+                        driverChoices={driverChoices}
+                        onDriverChoice={chooseDriver}
+                        location={location}
+                        settingsIssue={
+                          settingsIssue && settingsErrorInCompatibility ? null : settingsIssue
+                        }
+                        onLocation={chooseLocation}
+                        comparisonBlocked={recoveryLocked}
+                        comparisonRecovery={
+                          <InputRecoveryPanel
+                            recovery={recovery}
+                            onReload={() => window.location.reload()}
+                            onRestore={restoreComparisonRequest}
+                          />
+                        }
+                        executionRecovery={
+                          <>
+                            {approvals.map((entry) => (
+                              <NativeApproval
+                                key={entry.request.requestId}
+                                entry={entry}
+                                disabled={dead || token === null}
+                                send={async (decision) => {
+                                  if (token === null || dead)
+                                    return "Reload to reconnect before choosing.";
+                                  const response = await fetch(
+                                    `/api/conversations/${encodeURIComponent(conversationId)}/approvals/decision`,
+                                    {
+                                      method: "POST",
+                                      headers: {
+                                        [TOKEN_HEADER]: token,
+                                        "content-type": "application/json",
+                                      },
+                                      body: JSON.stringify(decision),
                                     },
-                                    body: JSON.stringify(decision),
-                                  },
-                                );
-                                if (response.status === 401) {
-                                  setDead(true);
-                                  return "Lucid restarted. Reload to reconnect.";
-                                }
-                                if (response.ok) return null;
-                                return "Your choice could not be saved. Refresh to check whether this request is still waiting.";
-                              }}
-                            />
-                          ))}
-                          {executions.map((entry) => (
-                            <ExecutionRecovery
-                              key={`${entry.inputId}:${entry.attempt}`}
-                              entry={entry}
-                              disabled={dead || token === null}
-                              send={async (inputId, body) => {
-                                if (token === null || dead)
-                                  return "Reload to reconnect before recovery.";
-                                const response = await fetch(
-                                  `/api/conversations/${encodeURIComponent(conversationId)}/inputs/${encodeURIComponent(inputId)}/recovery`,
-                                  {
-                                    method: "POST",
-                                    headers: {
-                                      [TOKEN_HEADER]: token,
-                                      "content-type": "application/json",
+                                  );
+                                  if (response.status === 401) {
+                                    setDead(true);
+                                    return "Lucid restarted. Reload to reconnect.";
+                                  }
+                                  if (response.ok) return null;
+                                  return "Your choice could not be saved. Refresh to check whether this request is still waiting.";
+                                }}
+                              />
+                            ))}
+                            {executions.map((entry) => (
+                              <ExecutionRecovery
+                                key={`${entry.inputId}:${entry.attempt}`}
+                                entry={entry}
+                                disabled={dead || token === null}
+                                send={async (inputId, body) => {
+                                  if (token === null || dead)
+                                    return "Reload to reconnect before recovery.";
+                                  const response = await fetch(
+                                    `/api/conversations/${encodeURIComponent(conversationId)}/inputs/${encodeURIComponent(inputId)}/recovery`,
+                                    {
+                                      method: "POST",
+                                      headers: {
+                                        [TOKEN_HEADER]: token,
+                                        "content-type": "application/json",
+                                      },
+                                      body,
                                     },
-                                    body,
-                                  },
-                                );
-                                if (response.status === 401) {
-                                  setDead(true);
-                                  return "Lucid restarted. Reload to reconnect.";
-                                }
-                                if (response.ok) return null;
-                                const failure = (await response.json()) as { reason?: string };
-                                return (
-                                  failure.reason ??
-                                  "Recovery could not be confirmed. Refresh the artifact."
-                                );
-                              }}
-                            />
-                          ))}
-                        </>
-                      }
-                      recovery={{
-                        state: submission.current(),
-                        busy: submissionBusy,
-                        dead: dead || token === null,
-                        reason:
-                          token === null
-                            ? "Connecting before this send can be checked…"
-                            : submissionReason,
-                        onRetry: () => {
-                          if (!dead && token !== null) void performSubmission();
-                        },
-                        onDiscard: () => {
-                          if (!submission.discardInvalid())
-                            setSubmissionReason(
-                              "Cannot remove local recovery data. Browser storage is still unavailable.",
-                            );
-                          refreshSubmission();
-                        },
-                      }}
-                    />
+                                  );
+                                  if (response.status === 401) {
+                                    setDead(true);
+                                    return "Lucid restarted. Reload to reconnect.";
+                                  }
+                                  if (response.ok) return null;
+                                  const failure = (await response.json()) as { reason?: string };
+                                  return (
+                                    failure.reason ??
+                                    "Recovery could not be confirmed. Refresh the artifact."
+                                  );
+                                }}
+                              />
+                            ))}
+                          </>
+                        }
+                        recovery={{
+                          state: submission.current(),
+                          busy: submissionBusy,
+                          dead: dead || token === null,
+                          reason:
+                            token === null
+                              ? "Connecting before this send can be checked…"
+                              : submissionReason,
+                          onRetry: () => {
+                            if (!dead && token !== null) void performSubmission();
+                          },
+                          onDiscard: () => {
+                            if (!submission.discardInvalid())
+                              setSubmissionReason(
+                                "Cannot remove local recovery data. Browser storage is still unavailable.",
+                              );
+                            refreshSubmission();
+                          },
+                        }}
+                      />
+                    </NativeInputControlsProvider>
                   </div>
                 </div>
               </div>

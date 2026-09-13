@@ -114,7 +114,16 @@ grant no retry or dispatch authority.
 Ordinary execution recovery and activity cards are hidden for native-required
 records. The native connection panel owns their status announcements. Its
 scrolling area reserves space for the transcript and composer on stacked layouts.
-Browser-owned cancellation and automatic bound-runtime activation remain pending.
+For an eligible unsent message in a bound native conversation, expand its delivery
+label and choose Cancel unsent message. Lucid rechecks the exact input before
+recording cancellation. Its text stays in the conversation, and an active response
+continues. Offered or attempted feedback cannot be cancelled here. An unbound
+publication has no cancellation control.
+
+If cancellation is not confirmed, Check status only reads the record. Retry
+cancellation repeats the same idempotent cancellation request; neither control
+replays feedback. Reloading never repeats the request. A later recorded cancellation
+replaces the uncertainty notice. Automatic bound-runtime activation remains pending.
 
 Expiry or interruption disables listening until another explicit
 `resume-listen` request in the same native session. `lucid connection

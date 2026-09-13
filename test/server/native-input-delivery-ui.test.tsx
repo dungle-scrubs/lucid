@@ -22,7 +22,13 @@ test("message delivery labels retain outcome meaning and use keyboard-accessible
     const dom = new JSDOM(
       renderToStaticMarkup(
         <NativeInputDelivery
-          delivery={{ inputId: "durable-input", message: "Recorded explanation", outcome, state }}
+          delivery={{
+            actions: [],
+            inputId: "durable-input",
+            message: "Recorded explanation",
+            outcome,
+            state,
+          }}
         />,
       ),
     );
