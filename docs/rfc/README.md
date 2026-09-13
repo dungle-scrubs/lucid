@@ -4,7 +4,7 @@ RFC 27 defines [native approvals during headless continuation](27_native-approva
 It is accepted for implementation after two Muse review passes. Native transport and browser acceptance remain required.
 
 RFC 26 proposes [interactive artifact conversation continuity](26_interactive-artifact-conversation-continuity.rfc.md).
-It is accepted for implementation; v6 includes the user-approved startup instruction and the fourth Muse review dispositions. Native integration acceptance remains required for each interface.
+It is accepted for implementation; v9 retains the user-approved startup instruction and adds the reviewed native-publication admission correction. Native integration acceptance remains required for each interface.
 
 RFC 23 is implemented. Its proposal and cross-family review are preserved in
 commit `1e7bd70`. Current contracts live in [artifact links](../artifacts.md#link-navigation-and-validation)
