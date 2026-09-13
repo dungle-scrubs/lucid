@@ -98,7 +98,7 @@ function setup(attachSource = true) {
     },
     inspect: async (_harness, choice) => {
       expect(choice).toBeUndefined();
-      return { name: "codex", session: false, nativeContextManagement: true };
+      return { name: "codex", session: false, nativeContextManagement: "auto-compaction" };
     },
     capabilities: async () => {
       throw new Error("No model selection during native continuation");

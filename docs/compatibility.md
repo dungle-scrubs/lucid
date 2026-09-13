@@ -21,6 +21,14 @@ An unavailable resume or accounting result retains its operation-specific
 handling. Response shape, output limits, process cleanup, model and path
 identity, native session identity, and executor ownership remain checked.
 
+Claude headless turns can delegate context handling when HCN declares
+`native-session-auto-compaction` for exactly that mode and the locked capture
+has no history to transfer. Imported or unconfirmed history retains accounting
+and bounded preparation. HCN resume support describes an invocation, not saved
+session existence. Native failures remain authoritative and retain the input
+and existing recovery actions. See [Context preparation](drivers.md) for the
+history boundary and full-session limitation.
+
 Opening a saved selection does not start a version-only preview. Settings
 validation can inspect HCN's vocabulary and invocation. Managed workers
 inspect the requested operation, and recovery retains its separate 1500 ms

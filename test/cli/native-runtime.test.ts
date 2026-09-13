@@ -101,7 +101,7 @@ test.each([false, true])(
       ...wire,
       inspect: async (harness) => {
         expect(harness).toBe("codex");
-        return { name: "codex", nativeContextManagement: true, session: false };
+        return { name: "codex", nativeContextManagement: "auto-compaction", session: false };
       },
       inspectNativeContinuation: async (target) => {
         expect(target).toMatchObject({

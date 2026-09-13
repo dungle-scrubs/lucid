@@ -8,9 +8,11 @@ It is accepted for implementation after two Muse review passes. Native transport
 RFC 26 proposes [interactive artifact conversation continuity](26_interactive-artifact-conversation-continuity.rfc.md).
 It is accepted for implementation; v9 retains the user-approved startup instruction and adds the reviewed native-publication admission correction. Native integration acceptance remains required for each interface.
 
-RFC 23 is implemented. Its proposal and cross-family review are preserved in
-commit `1e7bd70`. Current contracts live in [artifact links](../artifacts.md#link-navigation-and-validation)
-and [ADR 0008](../adr/0008-browser-and-agent-content-have-separate-authority.md).
+RFC 24 is implemented with HCN 0.6.6. The completed proposal and reviews
+are preserved in commit `48461c5`. Current contracts live in
+[drivers](../drivers.md#recorded-context-preparation) and
+[compatibility feedback](../compatibility.md).
+RFC 23 is already allocated to portable artifact files on a separate branch.
 
 RFC 22 is implemented. HCN owns executable compatibility; Lucid consumes
 operation results without runtime version policy. The current contract is

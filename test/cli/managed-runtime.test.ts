@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { runManagedWorker } from "../../src/cli/managed-worker.js";
 import { openDrivenConversation } from "../../src/cli/runtime.js";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
-import type { HarnessRunner } from "../../src/harness/runner.js";
+import type { HarnessFacts, HarnessRunner } from "../../src/harness/runner.js";
 
 const SYNTHETIC_HCN_IDENTITY = "synthetic";
 
@@ -19,13 +19,16 @@ async function until(check: () => boolean): Promise<void> {
   for (let tick = 0; tick < 300 && !check(); tick++) await Bun.sleep(1);
   expect(check()).toBe(true);
 }
-function fixture(managedWorkspace = false, nativeManagement = false) {
+function fixture(
+  managedWorkspace = false,
+  nativeManagement?: HarnessFacts["nativeContextManagement"],
+) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "lucid-managed-runtime-")));
   const { paths, secret } = createConversationRecord(root, "managed", {
     workingDirectory: managedWorkspace ? null : root,
   });
   const driver = {
-    harness: nativeManagement ? "codex" : "claude",
+    harness: nativeManagement === "auto-compaction" ? "codex" : "claude",
     model: "selected",
     effort: "high",
     profile: "headless-turn",
@@ -47,7 +50,7 @@ function fixture(managedWorkspace = false, nativeManagement = false) {
     ...hcn,
     inspect: async (harness) => ({
       name: harness,
-      ...(nativeManagement ? { nativeContextManagement: true as const } : {}),
+      ...(nativeManagement ? { nativeContextManagement: nativeManagement } : {}),
       session: false,
       verifiedAgainst: "verified",
       runtime: {
@@ -69,6 +72,7 @@ function fixture(managedWorkspace = false, nativeManagement = false) {
   };
   return {
     root,
+    harness: driver.harness,
     paths,
     secret,
     procs,
@@ -79,14 +83,15 @@ function fixture(managedWorkspace = false, nativeManagement = false) {
 }
 
 test.each([
-  [false, false],
-  [true, false],
-  [true, true],
-])(
+  [false, undefined],
+  [true, undefined],
+  [true, "auto-compaction"],
+  [true, "native-session-auto-compaction"],
+] as const)(
   "managed runtime dispatches and resumes: managed workspace %s, native management %s",
   async (managedWorkspace, nativeManagement) => {
     const f = fixture(managedWorkspace, nativeManagement);
-    const harness = nativeManagement ? "codex" : "claude";
+    const harness = f.harness;
     const running = await openDrivenConversation({
       rootDir: f.root,
       conversationId: "managed",
@@ -1036,45 +1041,49 @@ test("a repaired startup failure can retry the original accepted input", async (
   }
 });
 
-test("native context rejection preserves the input without automatic retry or replacement session", async () => {
-  const f = fixture(true, true);
-  const running = await openDrivenConversation({
-    rootDir: f.root,
-    conversationId: "managed",
-    managed: true,
-    runner: f.runner,
-    presence: () => false,
-  });
-  if (running.kind !== "running") throw new Error("Worker did not start");
-  try {
-    await until(() => f.spawner.calls.length === 1);
-    // Synthetic native failure sequence; no captured fixture is modified.
-    f.procs[0]?.emit({
-      kind: "identity",
-      sessionId: "native-context-failure",
-      authority: "harness-minted",
+test.each(["auto-compaction", "native-session-auto-compaction"] as const)(
+  "native context rejection preserves the input without automatic retry or replacement session: %s",
+  async (management) => {
+    const f = fixture(true, management);
+    const harness = f.harness;
+    const running = await openDrivenConversation({
+      rootDir: f.root,
+      conversationId: "managed",
+      managed: true,
+      runner: f.runner,
+      presence: () => false,
     });
-    f.procs[0]?.emit({ kind: "error", text: "Context window exceeded" });
-    f.procs[0]?.emit({ kind: "done", cause: "error", exitCode: 1 });
-    f.procs[0]?.exit(1);
-    await until(() => running.host.state().executions.one?.kind === "attempt-ended");
-    expect(running.host.state().executions.one).toMatchObject({
-      kind: "attempt-ended",
-      outcome: { kind: "failed-after-start" },
-    });
-    expect(running.host.transcript().inputs).toHaveLength(1);
-    expect(running.host.state().harnessSessions.codex).toBe("native-context-failure");
-    const execution = running.host.state().executions.one;
-    if (!execution) throw new Error("Lost accepted input");
-    expect(recoveryPolicy(execution)).toEqual({
-      actions: ["continue-fresh"],
-      acknowledgeEffects: true,
-    });
-    expect(running.host.contextCoverage("codex", "native-context-failure")).toBe(0);
-    expect(f.spawner.calls).toHaveLength(1);
-  } finally {
-    running.abort();
-    await running.done;
-    f.close();
-  }
-});
+    if (running.kind !== "running") throw new Error("Worker did not start");
+    try {
+      await until(() => f.spawner.calls.length === 1);
+      // Synthetic native failure sequence; no captured fixture is modified.
+      f.procs[0]?.emit({
+        kind: "identity",
+        sessionId: "native-context-failure",
+        authority: "harness-minted",
+      });
+      f.procs[0]?.emit({ kind: "error", text: "Context window exceeded" });
+      f.procs[0]?.emit({ kind: "done", cause: "error", exitCode: 1 });
+      f.procs[0]?.exit(1);
+      await until(() => running.host.state().executions.one?.kind === "attempt-ended");
+      expect(running.host.state().executions.one).toMatchObject({
+        kind: "attempt-ended",
+        outcome: { kind: "failed-after-start" },
+      });
+      expect(running.host.transcript().inputs).toHaveLength(1);
+      expect(running.host.state().harnessSessions[harness]).toBe("native-context-failure");
+      const execution = running.host.state().executions.one;
+      if (!execution) throw new Error("Lost accepted input");
+      expect(recoveryPolicy(execution)).toEqual({
+        actions: ["continue-fresh"],
+        acknowledgeEffects: true,
+      });
+      expect(running.host.contextCoverage(harness, "native-context-failure")).toBe(0);
+      expect(f.spawner.calls).toHaveLength(1);
+    } finally {
+      running.abort();
+      await running.done;
+      f.close();
+    }
+  },
+);
