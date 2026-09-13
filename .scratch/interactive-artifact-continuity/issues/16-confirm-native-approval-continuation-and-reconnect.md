@@ -61,3 +61,9 @@ The run found and corrected two integration failures: canonical record folders v
 Lucid source commits: 0f57ced (automatic worker), dee4fc8 (native folder identity), 65c8c7c (browser selection separation). Integrated HCN 4090e23 combines released 0.6.8 with native operations and passes 1,258 tests in both runtimes plus package build/check. Guidance 5a8112f passes updated CLI claims and synthetic transcript checks. Detailed joined evidence is in ignored automatic-native-01-acceptance.json and related files.
 
 Remaining: publish/land the reviewed upstream integration, deliberately update Lucid's exact HCN pin and re-capture consumed recordings, then verify and activate the packaged app. The installed service and registry package remain unchanged. This ticket stays claimed until that distribution gate is complete.
+
+## Packaged dependency verification
+
+The integrated HCN release package installs in a separate Lucid checkout. Its CLI bytes match the tested integration, and passive inspection returns the same native settings for the disposable Codex session. Fresh single-turn and two-turn recordings through Pi/local Qwen pass the consuming suite. Lucid passes all 1,731 tests with 9,674 assertions, lint, both type checks, the compiled binary build and the portable package build against this local package.
+
+This is an unpublished candidate with the integration base's 0.6.8 label, not the public 0.6.8 package. The temporary file dependency and recordings stay in the package verification checkout. They must not land as a registry pin or be published under that existing version. The real release must receive a new version, then Lucid must install that exact registry version and capture its recordings. Evidence and the concrete release sequence are in ignored artifacts/evidence/interactive-artifact-wayfinder/release-handoff.md. The distribution acceptance criterion remains open.
