@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { NativeBinding } from "../protocol/connection.js";
 import { hasUnsettledNativeWork, requiresNativeConnection } from "../protocol/connection.js";
 import type { ExecutionHold } from "../protocol/execution.js";
 import type { ChannelState } from "../protocol/reducer.js";
@@ -63,7 +64,24 @@ export function nativePreparationPrerequisite(
     .digest("hex");
 }
 
-/** Eligibility does not grant an executor lease or authorize native dispatch. */
+/** Only interfaces with a verified automatic worker integration are selected. */
+export function workerNativeBinding(state: ChannelState): NativeBinding | undefined {
+  const binding = state.connection?.binding;
+  return binding?.interface === "codex-cli" ? binding : undefined;
+}
+
+/** Discovery requests a worker only for an integrated native interface. Execution
+ * still requires fresh native-headless admission under the executor lock. */
+export function workerCandidates(
+  dir: string,
+  state: ChannelState,
+  heads: ReadonlyMap<string, number>,
+): readonly string[] {
+  return workerNativeBinding(state)
+    ? nativeInputCandidates(dir, state, heads)
+    : managedCandidates(dir, state, heads);
+}
+
 export function nativeInputCandidates(
   dir: string,
   state: ChannelState,

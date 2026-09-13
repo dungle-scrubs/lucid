@@ -57,7 +57,11 @@ import { channelStatus } from "../protocol/liveness.js";
 import { createTurnIds } from "../protocol/turn-id.js";
 import { readRecordFiles } from "../store/conversation-host.js";
 import { requireDriverPreference } from "../store/driver-preference.js";
-import { managedCandidates, managedPrerequisite } from "../store/managed-readiness.js";
+import {
+  managedPrerequisite,
+  workerCandidates,
+  workerNativeBinding,
+} from "../store/managed-readiness.js";
 import { acquirePresence, type PresenceEvent, type PresenceHandle } from "../store/presence.js";
 import { readRecordMetadata } from "../store/record-identity.js";
 import { locationProjection } from "../store/settings.js";
@@ -204,6 +208,7 @@ export const openDrivenConversation = async (
   // this process holds nothing.
   let presenceHandle: PresenceHandle | undefined;
   const host = openConversationFn(dir, {
+    nativeSessionRoot: convs.rootDir,
     ownerPresence: opts.ownerPresence,
     now: nowFn,
     presence: () => presenceProbe(),
@@ -235,6 +240,7 @@ export const openDrivenConversation = async (
     );
   }
   const managed = opts.managed ?? Object.keys(previous.executions).length > 0;
+  const nativeBinding = opts.managed ? workerNativeBinding(previous) : undefined;
   const owners = nativeOwners(previous);
   const terminal = previous.lastTerminalParticipation;
   const probeOwner = (owner: import("../protocol/process-owner.js").ProcessOwner | undefined) =>
@@ -272,7 +278,10 @@ export const openDrivenConversation = async (
     };
   }
 
-  if (requiresNativeConnection(previous)) {
+  const nativeInput = nativeBinding
+    ? workerCandidates(dir, previous, host.artifactHeads())[0]
+    : undefined;
+  if (requiresNativeConnection(previous) && (!nativeBinding || nativeInput === undefined)) {
     host.close();
     throw new HubError(
       "Same-session continuation has not been admitted. Feedback remains saved in this conversation.",
@@ -286,11 +295,15 @@ export const openDrivenConversation = async (
   // death; the runtime ensures a single explicit release.
   let presence: PresenceHandle;
   try {
-    const admission = host.acquireExecutor({ kind: "headless" }, () =>
-      acquirePresenceFn(dir, conversationId, {
-        onEvent: opts.onPresenceEvent,
-        ...(opts.managed ? { timeoutMs: 0 } : {}),
-      }),
+    const admission = host.acquireExecutor(
+      nativeBinding && nativeInput !== undefined
+        ? { binding: nativeBinding, inputId: nativeInput, kind: "native-headless" }
+        : { kind: "headless" },
+      () =>
+        acquirePresenceFn(dir, conversationId, {
+          onEvent: opts.onPresenceEvent,
+          ...(opts.managed ? { timeoutMs: 0 } : {}),
+        }),
     );
     if (admission.verdict === "refused")
       throw new HubError(
@@ -318,7 +331,7 @@ export const openDrivenConversation = async (
     const code = cause instanceof HubError && cause.code === "E-HUB-04" ? "E-HUB-04" : "E-HUB-03";
     const reason = cause instanceof Error ? cause.message : "The selected driver could not start.";
     const state = host.state();
-    for (const inputId of managedCandidates(dir, state, host.artifactHeads())) {
+    for (const inputId of workerCandidates(dir, state, host.artifactHeads())) {
       const execution = state.executions[inputId];
       if (!execution || execution.kind === "attempt-started") continue;
       const result = host.writeExecution({
@@ -330,7 +343,11 @@ export const openDrivenConversation = async (
           reason: reason.slice(0, 4096),
           ...(failureDiagnostic(cause) ? { compatibility: failureDiagnostic(cause) } : {}),
           prerequisite: managedPrerequisite(dir, state, code),
-          actions: code === "E-HUB-04" ? ["choose-folder"] : ["change-settings", "retry"],
+          actions: nativeBinding
+            ? []
+            : code === "E-HUB-04"
+              ? ["choose-folder"]
+              : ["change-settings", "retry"],
         },
       });
       if (result.verdict === "refused")
@@ -384,7 +401,7 @@ export const openDrivenConversation = async (
       }
     }
 
-    if (requiresNativeConnection(host.state()))
+    if (requiresNativeConnection(host.state()) && !nativeBinding)
       throw new HubError(
         "This conversation requires a verified native connection before launch. Same-session continuation must be admitted first.",
         "E-HUB-03",
@@ -407,7 +424,7 @@ export const openDrivenConversation = async (
           409,
         );
     }
-    preference = requireDriverPreference(dir);
+    preference = nativeBinding ? null : requireDriverPreference(dir);
     if (terminal !== null && ownerState === false && preference?.profile === "interactive") {
       if (
         terminal.harness !== preference.harness ||
@@ -433,6 +450,29 @@ export const openDrivenConversation = async (
       );
     cwd = location.workingDirectory;
     runner = opts.runner ?? createHcnRunner(nodeHarnessDeps());
+    if (nativeBinding) {
+      const settings = await runner.inspectNativeContinuation?.({
+        cwd: nativeBinding.workingDirectory,
+        harness: nativeBinding.harness,
+        resume: nativeBinding.nativeSessionId,
+        signal: opts.signal,
+      });
+      if (settings?.status !== "available")
+        throw new HubError(
+          `Native continuation settings are unavailable (${settings?.reason ?? "operation-unavailable"}). Feedback remains saved.`,
+          "E-HUB-03",
+          409,
+          [],
+        );
+      preference = {
+        effort: settings.effort,
+        harness: nativeBinding.harness,
+        model: settings.model,
+        profile: "headless-turn",
+        provider: settings.provider,
+        v: 1,
+      };
+    }
   } catch (cause) {
     try {
       holdStartup(cause);
@@ -574,10 +614,13 @@ export const openDrivenConversation = async (
     source = await openHonoringDriver({
       signal: opts.signal,
       base: baseDeps,
-      sessionCapable: (h, signal) => supportsSession(runner, h, signal),
+      sessionCapable: nativeBinding
+        ? async () => false
+        : (h, signal) => supportsSession(runner, h, signal),
       initialHarness: harness,
-      harnessPinned: startup.pinned,
+      harnessPinned: nativeBinding !== undefined || startup.pinned,
       readPreference: () => {
+        if (nativeBinding) return preference;
         const saved = requireDriverPreference(dir);
         return modePreference !== null &&
           saved?.harness === modePreference.harness &&
