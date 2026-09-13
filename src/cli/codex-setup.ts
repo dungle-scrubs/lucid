@@ -12,7 +12,7 @@ import { isDeepStrictEqual } from "node:util";
 import { atomicSidecar } from "../store/atomic-file.js";
 import type { AppendLock } from "../store/flock.js";
 import { acquireAppendLock, LockError } from "../store/flock.js";
-import { selfInvocation } from "./invocation.js";
+import { selfInvocation, shellCommand } from "./invocation.js";
 
 export interface CodexSetupResult {
   readonly hooksFile: string;
@@ -28,9 +28,7 @@ const object = (value: unknown): value is Record<string, unknown> =>
 
 /** The native hook format accepts a shell command, so each argument is quoted independently. */
 function hookCommand(root: string): string {
-  return selfInvocation(["_codex-hook", "--root", root])
-    .map((arg) => `'${arg.replaceAll("'", "'\\''")}'`)
-    .join(" ");
+  return shellCommand(selfInvocation(["_codex-hook", "--root", root]));
 }
 
 /** Configuration installation does not establish native trust, registration or listening. */

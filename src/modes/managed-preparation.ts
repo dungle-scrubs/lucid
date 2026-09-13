@@ -1,3 +1,4 @@
+import { shellCommand } from "../cli/invocation.js";
 import {
   diagnosticMessage,
   failureDiagnostic,
@@ -327,7 +328,7 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
               "This fresh attempt continues the original input after an interrupted attempt. Partial workspace effects may already exist. Inspect the current workspace state before continuing the original request; do not assume that earlier work was undone.",
             ]
           : []),
-        `Read the complete quoted source with lucid context '${offered.path.replaceAll("'", "'\\''")}' --offset 0 --bytes 65536 --json. Follow nextOffset to read later slices.`,
+        `Read the complete quoted source with lucid context ${shellCommand([offered.path])} --offset 0 --bytes 65536 --json. Follow nextOffset to read later slices.`,
         renderAttachmentReferences(offered.attachments),
       ].join("\n\n");
       const render = (context: typeof captured.context): string =>

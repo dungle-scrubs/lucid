@@ -167,6 +167,9 @@ export function openInteractive(
                 options.cwd,
                 "--control-fd",
                 "3",
+                ...(options.startupPrompt === undefined
+                  ? []
+                  : ["--startup-prompt", options.startupPrompt]),
               ],
               { cwd: options.cwd },
             );

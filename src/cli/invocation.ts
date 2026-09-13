@@ -1,5 +1,10 @@
 import { fileURLToPath } from "node:url";
 
+/** POSIX shell data: quote each argument, including embedded single quotes. */
+export function shellCommand(args: readonly string[]): string {
+  return args.map((arg) => `'${arg.replaceAll("'", "'\\''")}'`).join(" ");
+}
+
 /** A compiled entry is already inside execPath; passing it again shifts the command. */
 export const selfInvocation = (args: readonly string[] = []): readonly [string, ...string[]] => {
   const embedded = import.meta.url.startsWith("file:///$bunfs/");

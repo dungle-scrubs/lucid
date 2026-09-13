@@ -256,6 +256,7 @@ export interface OpenInteractiveOptions {
   readonly launchId: string;
   readonly resume: string;
   readonly signal?: AbortSignal;
+  readonly startupPrompt?: string;
   /** Invoke synchronously inside the caller's native admission transaction. */
   readonly dispatch?: (invoke: () => undefined) => undefined;
 }

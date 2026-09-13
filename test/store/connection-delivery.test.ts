@@ -4540,6 +4540,7 @@ test("reconnect carries normalized HCN creation into the durable record before r
     if (!requestId) throw new Error("Missing request");
     let calls = 0;
     let launchId = "";
+    let startup = "";
     const native = f.controls.registration;
     const owner = returningRegistration(native).owner;
     const runner = createHcnRunner({
@@ -4550,6 +4551,7 @@ test("reconnect carries normalized HCN creation into the durable record before r
       },
       spawnInteractive: (argv) => {
         calls++;
+        startup = argv[argv.indexOf("--startup-prompt") + 1] ?? "";
         launchId = argv[argv.indexOf("--launch-id") + 1] ?? "";
         expect(viewConversation(f.paths.dir).state.connection?.reconnects[requestId]).toMatchObject(
           { kind: "intended", launchId },
@@ -4630,6 +4632,11 @@ test("reconnect carries normalized HCN creation into the durable record before r
     expect(ended.connection?.reconnectId).toBe(requestId);
     expect(f.status()).toMatchObject({ state: "resume-failed", reason: "reconnect-closed" });
     expect(calls).toBe(1);
+    expect(startup).toContain(`Resume listening to Lucid conversation ${f.host.conversationId}.`);
+    expect(startup).toContain("connection' 'resume-listen");
+    expect(startup).toContain(`LUCID_ROOT=${native.workingDirectory}`);
+    expect(startup).toContain("exactly once");
+    expect(startup).not.toContain("--offer");
   } finally {
     controller.abort();
     proc.exit(null);
@@ -4671,104 +4678,111 @@ test("durable reconnect refusal retains only the documented HCN pre-spawn reason
   ).not.toBeNull();
 });
 
-test("reconnect records HCN refusal only after control drains and its wrapper exits", async () => {
-  const { runNativeReconnect } = await import("../../src/modes/native-reconnect.js");
-  const { createHcnRunner } = await import("../../src/harness/hcn-runner.js");
-  const { FakeHcnProcess } = await import("../harness/fakes.js");
-  const f = boundFixture();
-  const proc = new FakeHcnProcess();
-  const read = Promise.withResolvers<void>();
-  const drained = Promise.withResolvers<void>();
-  const controller = new AbortController();
-  let running: Promise<unknown> | undefined;
-  try {
-    f.controls.probe = () => false;
-    expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("accepted");
-    const requestId = f.host.state().connection?.reconnectId;
-    if (!requestId) throw new Error("Missing request");
-    const runner = createHcnRunner({
-      bin: "/fake/hcn",
-      refusalGraceMs: 1,
-      spawn: () => {
-        throw new Error("Wrong transport");
-      },
-      spawnInteractive: (argv) => {
-        const launchId = argv[argv.indexOf("--launch-id") + 1];
-        proc.emit({
-          v: 1,
-          operation: "interactive",
-          launchId,
-          kind: "refused",
-          evidence: "spawn-not-attempted",
-          reason: "resume-unavailable",
-        });
-        return {
-          control: {
-            async *[Symbol.asyncIterator]() {
-              for await (const chunk of proc.stdout) {
-                yield chunk;
-                read.resolve();
-              }
-              drained.resolve();
-            },
-          },
-          exited: proc.exited,
-          kill: (signal) => proc.kill(signal),
-          disposeControl: () => proc.disposeOutput(),
-        };
-      },
-    });
-    running = runNativeReconnect(
-      {
-        recordDir: f.paths.dir,
-        root: f.controls.registration.workingDirectory,
-        requestId,
-        signal: controller.signal,
-      },
-      runner,
-      { now: () => f.controls.now, ownerPresence: () => false },
-    );
-    await Promise.race([
-      read.promise,
-      running.then(() => {
-        throw new Error("Result saved before stream drain");
-      }),
-    ]);
-    expect(viewConversation(f.paths.dir).state.connection?.reconnects[requestId]).toMatchObject({
-      kind: "intended",
-      completion: null,
-    });
-    expect(presenceHeld(f.paths.dir)).toBe(true);
-    proc.disposeOutput();
-    await drained.promise;
-    expect(viewConversation(f.paths.dir).state.connection?.reconnects[requestId]).toMatchObject({
-      kind: "intended",
-      completion: null,
-    });
-    expect(presenceHeld(f.paths.dir)).toBe(true);
-    proc.exit(2);
-    const result = {
-      kind: "refused",
-      evidence: "spawn-not-attempted",
-      reason: "resume-unavailable",
-    };
-    expect(await running).toMatchObject({ kind: "completed", result });
-    expect(viewConversation(f.paths.dir).state.connection?.reconnects[requestId]).toMatchObject({
-      kind: "intended",
-      started: null,
-      completion: { result },
-    });
-    expect(presenceHeld(f.paths.dir)).toBe(false);
-  } finally {
-    controller.abort();
-    proc.exit(null);
+test.each(["resume-unavailable", "invalid-request", "unsupported-interface"])(
+  "reconnect records HCN %s only after control drains and its wrapper exits",
+  async (reason) => {
+    const { runNativeReconnect } = await import("../../src/modes/native-reconnect.js");
+    const { createHcnRunner } = await import("../../src/harness/hcn-runner.js");
+    const { FakeHcnProcess } = await import("../harness/fakes.js");
+    const f = boundFixture();
+    const proc = new FakeHcnProcess();
+    const read = Promise.withResolvers<void>();
+    const drained = Promise.withResolvers<void>();
+    const controller = new AbortController();
+    let running: Promise<unknown> | undefined;
     try {
-      await running;
+      f.controls.probe = () => false;
+      expect(f.host.controlReconnect({ kind: "request" }).verdict).toBe("accepted");
+      const requestId = f.host.state().connection?.reconnectId;
+      if (!requestId) throw new Error("Missing request");
+      const runner = createHcnRunner({
+        bin: "/fake/hcn",
+        refusalGraceMs: 1,
+        spawn: () => {
+          throw new Error("Wrong transport");
+        },
+        spawnInteractive: (argv) => {
+          const launchId = argv[argv.indexOf("--launch-id") + 1];
+          proc.emit({
+            v: 1,
+            operation: "interactive",
+            launchId,
+            kind: "refused",
+            evidence: "spawn-not-attempted",
+            reason,
+          });
+          return {
+            control: {
+              async *[Symbol.asyncIterator]() {
+                for await (const chunk of proc.stdout) {
+                  yield chunk;
+                  read.resolve();
+                }
+                drained.resolve();
+              },
+            },
+            exited: proc.exited,
+            kill: (signal) => proc.kill(signal),
+            disposeControl: () => proc.disposeOutput(),
+          };
+        },
+      });
+      running = runNativeReconnect(
+        {
+          recordDir: f.paths.dir,
+          root: f.controls.registration.workingDirectory,
+          requestId,
+          signal: controller.signal,
+        },
+        runner,
+        { now: () => f.controls.now, ownerPresence: () => false },
+      );
+      await Promise.race([
+        read.promise,
+        running.then(() => {
+          throw new Error("Result saved before stream drain");
+        }),
+      ]);
+      expect(viewConversation(f.paths.dir).state.connection?.reconnects[requestId]).toMatchObject({
+        kind: "intended",
+        completion: null,
+      });
+      expect(presenceHeld(f.paths.dir)).toBe(true);
+      proc.disposeOutput();
+      await drained.promise;
+      expect(viewConversation(f.paths.dir).state.connection?.reconnects[requestId]).toMatchObject({
+        kind: "intended",
+        completion: null,
+      });
+      expect(presenceHeld(f.paths.dir)).toBe(true);
+      proc.exit(2);
+      const result = {
+        kind: "refused",
+        evidence: "spawn-not-attempted",
+        reason,
+      };
+      expect(await running).toMatchObject({ kind: "completed", result });
+      expect(viewConversation(f.paths.dir).state.connection?.reconnects[requestId]).toMatchObject({
+        kind: "intended",
+        started: null,
+        completion: { result },
+      });
+      expect(presenceHeld(f.paths.dir)).toBe(false);
+      if (reason === "invalid-request")
+        expect(f.status().message).toContain("startup instruction is invalid");
+      if (reason === "unsupported-interface")
+        expect(f.status().message).toContain("does not support interactive startup");
     } finally {
-      f.close();
+      controller.abort();
+      proc.exit(null);
+      try {
+        await running;
+      } finally {
+        f.close();
+      }
     }
-  }
-});
+  },
+);
 
 test("reconnect preserves no-dispatch evidence when cancellation arrives during final admission", async () => {
   const { runNativeReconnect } = await import("../../src/modes/native-reconnect.js");

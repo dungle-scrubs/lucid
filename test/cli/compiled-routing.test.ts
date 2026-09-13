@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { env } from "node:process";
 import { requestBackgroundWorker } from "../../src/cli/background-worker.js";
-import { BACKGROUND_COMMAND } from "../../src/cli/invocation.js";
+import { BACKGROUND_COMMAND, shellCommand } from "../../src/cli/invocation.js";
 
 test("a managed worker cannot recursively launch another worker", () => {
   const previous = env[BACKGROUND_COMMAND];
@@ -51,3 +51,23 @@ test("compiled worker commands route directly to their internal subcommand", asy
     rmSync(root, { force: true, recursive: true });
   }
 }, 15000);
+
+test("startup command quoting preserves literal paths and option-like arguments", async () => {
+  const args = [
+    'LUCID_ROOT=/tmp/quote\'s folder/"double"/\nnewline',
+    "--help",
+    "$(exit 93)",
+    "`exit 94`",
+  ];
+  const command = shellCommand([
+    process.execPath,
+    "-e",
+    "console.log(JSON.stringify(process.argv.slice(1)))",
+    "--",
+    ...args,
+  ]);
+  const child = Bun.spawn(["/bin/sh", "-c", command], { stdout: "pipe", stderr: "pipe" });
+  const output = await new Response(child.stdout).text();
+  expect(await child.exited).toBe(0);
+  expect(JSON.parse(output)).toEqual(args);
+});

@@ -81,6 +81,13 @@ for the reconnect requester to release its executor lock. Selecting the
 conversation keeps the reservation active; the listener fulfills it only
 when it connects. Selecting another conversation cannot bypass the reservation.
 
+The reconnect source supplies one startup instruction to run the exact-record
+`resume-listen` command, then finish the native turn so Stop can listen. Native
+approval policy still applies to that command. A startup prompt is not feedback
+and does not confirm receipt or readiness. A refused command keeps feedback
+held; it is not retried automatically. The public reconnect command and browser
+controls remain pending integration.
+
 Expiry or interruption disables listening until another explicit
 `resume-listen` request in the same native session. `lucid connection
 status CONVERSATION --json` reads current connection evidence. Feedback

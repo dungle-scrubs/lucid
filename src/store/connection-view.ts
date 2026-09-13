@@ -125,8 +125,13 @@ export function observeConnection(
   if (reconnect?.kind === "intended" && reconnect.completion)
     return reconnect.completion.result.kind === "refused"
       ? {
-          message:
-            "Reconnect did not start a native session. Saved feedback and the reconnect request remain held.",
+          message: `${
+            reconnect.completion.result.reason === "invalid-request"
+              ? "The reconnect request or startup instruction is invalid. Check the Lucid startup configuration."
+              : reconnect.completion.result.reason === "unsupported-interface"
+                ? "This interface does not support interactive startup through HCN. Check its setup instructions."
+                : "Reconnect did not start a native session."
+          } Saved feedback and the reconnect request remain held.`,
           reason: "reconnect-refused",
           state: "resume-failed",
         }
