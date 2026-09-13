@@ -1,5 +1,7 @@
 # Active RFCs
 
+RFC 28 drafts the [Pi native extension bridge and strict session locators](28_pi-native-extension-bridge-and-strict-session-locators.rfc.md). It is parked with unresolved protocol review and a demonstrated native lookup/open race. Pi stays unavailable; the verified Codex lane continues independently.
+
 RFC 27 defines [native approvals during headless continuation](27_native-approvals-during-headless-continuation.rfc.md).
 It is accepted for implementation after two Muse review passes. Native transport and browser acceptance remain required.
 
@@ -39,7 +41,7 @@ commit `000381b`; its current contract is in [the design reference](../design.md
 Current reading-view design is listed in the
 [documentation index](../README.md#browser-design).
 
-The highest allocated RFC number is **27**. The next RFC is **28**.
+The highest allocated RFC number is **28**. The next RFC is **29**.
 RFC 24 was allocated to Claude startup compatibility; RFC 25 is allocated to
 automatic recovery in concurrent work. Their numbers remain reserved.
 Never reset numbering because completed files have been removed. Before
