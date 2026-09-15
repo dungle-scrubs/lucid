@@ -19,7 +19,9 @@ export interface ContextSummary {
 }
 
 export interface PreparedContext {
-  readonly accounting: Accounting;
+  /** Null for routes with no probe: the prompt goes unmeasured, and no
+   * summary names a model that never measured it. */
+  readonly accounting: Accounting | null;
   readonly prompt: string;
   readonly summary: ContextSummary | null;
 }
@@ -31,6 +33,10 @@ export interface ContextPreparationRequest {
 }
 
 const fits = (count: Accounting): boolean => count.totalTokens <= count.inputLimitTokens;
+/** The probes the route can answer. pi reports the model it runs but
+ * answers no context probe: measuring there is a refusal shaped as
+ * unavailability, so the route skips measurement instead of failing it. */
+const measurable = (route: Pick<ContextCountOptions, "harness">): boolean => route.harness !== "pi";
 const measured = (count: ContextCount): Accounting => {
   if (
     count.status === "unavailable" &&
@@ -183,6 +189,7 @@ export function createContextPreparer(
     };
     checkCancelled();
     const prompt = render(context);
+    if (!measurable(route)) return { accounting: null, prompt, summary: null };
     const fullCount = await runner.countContext({ ...route, prompt });
     checkCancelled();
     const accounting =
