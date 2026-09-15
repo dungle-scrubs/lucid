@@ -153,6 +153,36 @@ describe("the projection from inspect facts", () => {
     expect(served.vocabulary.pi?.models).toEqual(["zai/glm-5.2"]);
   });
 
+  test("a non-extensible vocabulary never spawns a pair read", async () => {
+    let calls = 0;
+    const runner = {
+      openSession: () => {
+        throw new Error("unused");
+      },
+      streamTurn: () => {
+        throw new Error("unused");
+      },
+      inspect: (h: HarnessName) =>
+        h === "pi"
+          ? Promise.resolve(
+              facts({
+                vocabulary: { models: ["opus"], efforts: ["medium"], extensible: false },
+              }),
+            )
+          : Promise.reject(new Error("no descriptor")),
+      listModels: () => {
+        calls += 1;
+        return Promise.resolve([]);
+      },
+      capabilities: () => {
+        throw new Error("unused");
+      },
+    } as unknown as Parameters<typeof driverChoices>[0];
+    const served = await driverChoices(runner);
+    expect(served.vocabulary.pi?.models).toEqual(["opus"]);
+    expect(calls).toBe(0);
+  });
+
   test("an inspect that fails is a harness with no entry, not a refusal", async () => {
     // The runner answers what the real one would for a harness the dump
     // cannot describe: a thrown refusal.

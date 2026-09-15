@@ -97,9 +97,16 @@ export const driverChoices = (runner?: HarnessRunner): Promise<DriverChoices> =>
     const facts = await Promise.all(
       HARNESS_NAMES.map(async (harness) => {
         const fact = await hcn.inspect(harness).catch(() => undefined);
-        // The live list is best-effort: a runner predating the mode, or
-        // an hcn without it, degrades to the curated baseline.
-        const pairs = await hcn.listModels?.(harness).catch(() => undefined);
+        // The live list is best-effort and opt-in per harness: only an
+        // extensible vocabulary can have installed pairs, so only that
+        // spawns a second inspection. A runner predating the mode, or
+        // an hcn without it, degrades to the curated baseline. This
+        // also keeps record reads free of harness spawns where no
+        // vocabulary exists at all.
+        const pairs =
+          fact?.vocabulary?.extensible === true
+            ? await hcn.listModels?.(harness).catch(() => undefined)
+            : undefined;
         return [harness, fact, pairs] as const;
       }),
     );
