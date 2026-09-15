@@ -43,7 +43,12 @@ commit `000381b`; its current contract is in [the design reference](../design.md
 Current reading-view design is listed in the
 [documentation index](../README.md#browser-design).
 
-The highest allocated RFC number is **28**. The next RFC is **29**.
+RFC 29 is implemented in main (`fix(pi): live installed model list in
+settings`). Its proposal and v1 review are preserved in the merge; current
+contracts live in [drivers](../drivers.md) for the store source and
+served choices.
+
+The highest allocated RFC number is **29**. The next RFC is **30**.
 RFC 24 was allocated to Claude startup compatibility; RFC 25 is allocated to
 automatic recovery in concurrent work. Their numbers remain reserved.
 Never reset numbering because completed files have been removed. Before
