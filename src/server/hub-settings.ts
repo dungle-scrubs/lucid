@@ -179,12 +179,32 @@ export function createHubSettings(
       }
       const defaults = readUserConfig(configLocation).defaults;
       const harness = saved?.harness ?? actual.harness ?? defaults.harness;
-      const compatible = actual.harness === harness ? actual : {};
+      const compatible: Partial<Settings> =
+        actual.harness === harness
+          ? {
+              harness: actual.harness,
+              ...(typeof actual.model === "string" && actual.model.trim() !== ""
+                ? { model: actual.model }
+                : {}),
+              ...(actual.effort !== undefined ? { effort: actual.effort } : {}),
+              ...(actual.profile !== undefined ? { profile: actual.profile } : {}),
+              ...(actual.provider !== undefined ? { provider: actual.provider } : {}),
+            }
+          : {};
       const model =
         saved?.model ??
         compatible.model ??
         (defaults.harness === harness ? defaults.model : undefined);
-      if (!model) throw new HubError("Choose a model for the saved harness.", "E-HUB-03");
+      if (!model) {
+        const whose =
+          saved?.harness !== undefined && saved.harness === harness
+            ? "your saved choice"
+            : "this conversation";
+        throw new HubError(
+          `${harness} does not report a model for ${whose}. Choose one.`,
+          "E-HUB-03",
+        );
+      }
       const vocabulary = (await choices()).vocabulary[harness];
       const matchingActual =
         compatible.model && vocabulary?.aliases?.[model] === compatible.model

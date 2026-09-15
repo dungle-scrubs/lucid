@@ -80,7 +80,8 @@ test("fitting context preserves the exact full prompt and native occupancy", asy
   const result = await prepare({ context, render, route });
   expect(result.prompt).toBe(render(context));
   expect(result.summary).toBeNull();
-  expect(result.accounting.totalTokens).toBe(9000);
+  expect(result.accounting).not.toBeNull();
+  expect(result.accounting?.totalTokens).toBe(9000);
   expect(counts).toEqual([{ ...route, prompt: result.prompt }]);
 });
 
@@ -142,7 +143,10 @@ test.each(["message", "tool"] as const)(
     expect(result.prompt).toContain(context.pending.text);
     expect(result.prompt).toContain(context.mandatory[0]?.text ?? "missing");
     expect(result.prompt).toContain("Full source: external offered copy");
-    expect(result.accounting.totalTokens).toBeLessThanOrEqual(result.accounting.inputLimitTokens);
+    expect(result.accounting).not.toBeNull();
+    expect(result.accounting?.totalTokens).toBeLessThanOrEqual(
+      result.accounting?.inputLimitTokens ?? 0,
+    );
     expect(captured.history).toEqual(history);
     expect(existsSync(launches[0]?.cwd ?? "")).toBe(false);
   },
@@ -204,7 +208,8 @@ test.each([false, true])(
     expect(launched.some((prompt) => prompt.includes("Derived first pass"))).toBe(true);
     expect(result.prompt).toContain("original-43");
     expect(result.prompt).toContain(context.pending.text);
-    expect(result.accounting.totalTokens).toBeLessThanOrEqual(7000);
+    expect(result.accounting).not.toBeNull();
+    expect(result.accounting?.totalTokens).toBeLessThanOrEqual(7000);
   },
 );
 
@@ -322,7 +327,8 @@ test("an explicit full-request transport limit can use measured mandatory contex
   });
   const result = await prepare({ context: { ...context, history, through: 20 }, render, route });
   expect(result.summary).not.toBeNull();
-  expect(result.accounting.totalTokens).toBeLessThanOrEqual(6000);
+  expect(result.accounting).not.toBeNull();
+  expect(result.accounting?.totalTokens).toBeLessThanOrEqual(6000);
   expect(result.prompt).toContain(context.pending.text);
 });
 
@@ -577,4 +583,16 @@ test("sparse message history can summarize older tool output while retaining rec
   const result = await prepare({ context: { ...context, history, through: 30 }, render, route });
   expect(result.prompt).toContain("Recent answer remains complete");
   expect(result.summary).toMatchObject({ from: 0, through: 21 });
+});
+test("a route with no probe sends the prompt unmeasured", async () => {
+  const counts: ContextCountOptions[] = [];
+  const result = await createContextPreparer(fakeRunner(counts))({
+    context,
+    render,
+    route: { ...route, harness: "pi" },
+  });
+  expect(counts).toHaveLength(0);
+  expect(result.accounting).toBeNull();
+  expect(result.summary).toBeNull();
+  expect(result.prompt).toBe(render(context));
 });

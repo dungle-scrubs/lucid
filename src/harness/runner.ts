@@ -76,12 +76,22 @@ export interface HarnessFacts {
 /** The choosing vocabulary hcn's descriptor dump reports for a harness
  * (RFC-12). One source: `hcn inspect <harness> --json`, projected here, so
  * lucid mirrors nothing about a harness's models. */
+/** One installed provider/model pair (RFC-27): the unit the live list
+ * carries, because one model id can exist under two providers. */
+export interface HarnessModelPair {
+  readonly provider: string;
+  readonly model: string;
+}
 export interface HarnessVocabulary {
   /** `vocabulary.models`, aliases resolved: hcn's list is already the
    * canonical ids, and `vocabulary.aliases` maps pet names onto it, so the
    * list is served as it stands. */
   readonly aliases?: Readonly<Record<string, string>>;
   readonly models: readonly string[];
+  /** Installed provider/model pairs, where hcn reports them (pi only
+   * today). Served ahead of `models`; absent means the harness reports
+   * no live list, never an empty installed population. */
+  readonly installed?: readonly HarnessModelPair[];
   /** `vocabulary.efforts`, the harness's ladder in the dump's own order. */
   readonly efforts: readonly string[];
   /** `vocabulary.extensible`: the model list is open (pi registers models
@@ -229,6 +239,11 @@ export interface HarnessRunner {
   /** `hcn run <h> --json`. HCN refusals arrive as failure/done events.
    * Local admission and transport failures can throw; iteration owns cleanup. */
   streamTurn(opts: StreamTurnOptions): AsyncIterable<HarnessEvent>;
+  /** `hcn inspect <h> --models --json`, projected to installed pairs.
+   * Absent where the harness reports no live list. Optional so a runner
+   * predating the mode still satisfies the seam; callers degrade to the
+   * curated list. */
+  listModels?(harness: HarnessName): Promise<readonly HarnessModelPair[]>;
   /** `hcn inspect <h> --json`, projected to what lucid reads. No spawn. */
   inspect(
     harness: HarnessName,

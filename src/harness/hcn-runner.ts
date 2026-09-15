@@ -694,6 +694,29 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
     openSession,
     streamTurn,
     inspect,
+    listModels: async (harness) => {
+      // The mode does not exist before the hcn release carrying ticket
+      // 01; until then every call degrades to no live list, and the
+      // served choices keep the curated baseline.
+      const { out, code } = await runToCompletion(["inspect", harness, "--models", "--json"]);
+      if (code !== 0) return [];
+      try {
+        const parsed = JSON.parse(out.join("\n")) as { models?: unknown };
+        if (!Array.isArray(parsed.models)) return [];
+        return parsed.models.flatMap((entry) => {
+          if (entry === null || typeof entry !== "object") return [];
+          const { provider, model } = entry as Record<string, unknown>;
+          return typeof provider === "string" &&
+            provider !== "" &&
+            typeof model === "string" &&
+            model !== ""
+            ? [{ provider, model }]
+            : [];
+        });
+      } catch {
+        return [];
+      }
+    },
     capabilities,
     countContext: (options) => countContext(deps, options),
   };

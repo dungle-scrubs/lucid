@@ -25,6 +25,7 @@ import { createHcnRunner } from "../harness/hcn-runner.js";
 import { nodeHarnessDeps } from "../harness/node-deps.js";
 import type {
   HarnessFacts,
+  HarnessModelPair,
   HarnessName,
   HarnessRunner,
   HarnessVocabulary,
@@ -43,16 +44,35 @@ export interface DriverChoices {
   readonly vocabulary: Readonly<Partial<Record<HarnessName, HarnessVocabulary>>>;
 }
 
-/** The projection of inspect facts into the served lists. Pure, so a test
- * drives it with facts instead of a binary. */
+/** The projection of inspect facts plus installed pairs into the served
+ * lists. Pure, so a test drives it with facts and pairs instead of a
+ * binary. Pairs come first; baseline ids absent from the pairs follow.
+ * A harness with no pairs keeps its baseline list unchanged. */
 export const driverChoicesFromFacts = (
   facts: Readonly<Partial<Record<HarnessName, HarnessFacts>>>,
+  installed: Readonly<Partial<Record<HarnessName, readonly HarnessModelPair[]>>> = {},
 ): DriverChoices => ({
   harnesses: HARNESS_NAMES,
   vocabulary: Object.fromEntries(
     HARNESS_NAMES.flatMap((harness) => {
       const vocabulary = facts[harness]?.vocabulary;
-      return vocabulary === undefined ? [] : [[harness, vocabulary] as const];
+      if (vocabulary === undefined) return [];
+      const pairs = installed[harness] ?? [];
+      if (pairs.length === 0) return [[harness, vocabulary] as const];
+      const installedModels = new Set(pairs.map((pair) => pair.model));
+      return [
+        [
+          harness,
+          {
+            ...vocabulary,
+            installed: pairs,
+            models: [
+              ...pairs.map((pair) => pair.model),
+              ...vocabulary.models.filter((m) => !installedModels.has(m)),
+            ],
+          },
+        ] as const,
+      ];
     }),
   ),
 });
@@ -77,10 +97,27 @@ export const driverChoices = (runner?: HarnessRunner): Promise<DriverChoices> =>
     const facts = await Promise.all(
       HARNESS_NAMES.map(async (harness) => {
         const fact = await hcn.inspect(harness).catch(() => undefined);
-        return [harness, fact] as const;
+        // The live list is best-effort and opt-in per harness: only an
+        // extensible vocabulary can have installed pairs, so only that
+        // spawns a second inspection. A runner predating the mode, or
+        // an hcn without it, degrades to the curated baseline. This
+        // also keeps record reads free of harness spawns where no
+        // vocabulary exists at all.
+        const pairs =
+          fact?.vocabulary?.extensible === true
+            ? await hcn.listModels?.(harness).catch(() => undefined)
+            : undefined;
+        return [harness, fact, pairs] as const;
       }),
     );
-    return driverChoicesFromFacts(Object.fromEntries(facts));
+    return driverChoicesFromFacts(
+      Object.fromEntries(facts.map(([harness, fact]) => [harness, fact] as const)),
+      Object.fromEntries(
+        facts.flatMap(([harness, , pairs]) =>
+          pairs === undefined || pairs.length === 0 ? [] : [[harness, pairs] as const],
+        ),
+      ),
+    );
   };
   const pending = read();
   if (runner === undefined) memoized = pending;
