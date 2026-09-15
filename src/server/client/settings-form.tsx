@@ -116,17 +116,98 @@ export function SettingsForm(props: {
                     : name === "effort"
                       ? (vocabulary?.efforts ?? [])
                       : [...PROFILES];
+              // Installed pairs (RFC-27) carry the provider with the
+              // model, because one id can exist under two providers.
+              // The row label splits on pick into the model plus
+              // provider fields; a bare id keeps whatever provider
+              // stands. A custom row holds a typed id the lists do
+              // not carry, so free entry survives inside the menu.
+              const installed = name === "model" ? (vocabulary?.installed ?? []) : [];
+              const qualified = (pair: { provider: string; model: string }): string =>
+                `${pair.provider}/${pair.model}`;
+              const modelRows =
+                name === "model"
+                  ? [
+                      ...installed.map((pair) => ({
+                        key: qualified(pair),
+                        label: qualified(pair),
+                        model: pair.model,
+                        provider: pair.provider,
+                      })),
+                      ...options
+                        .filter((option) => !installed.some((pair) => pair.model === option))
+                        .map((option) => ({
+                          key: option,
+                          label: option,
+                          model: option,
+                          provider: undefined as string | undefined,
+                        })),
+                    ]
+                  : [];
+              // The select's value is the row label: a qualified
+              // provider/model pair where one exists, else the bare id.
+              // A saved id that rows carry selects its own row; a saved
+              // custom id selects its own custom row plus the typing box.
+              const selectedKey =
+                name === "model"
+                  ? (modelRows.find((row) => row.model === field.state.value)?.key ??
+                    field.state.value)
+                  : field.state.value;
+              const customRow =
+                name === "model" &&
+                field.state.value !== "" &&
+                !modelRows.some((row) => row.model === field.state.value) ? (
+                  <option value={field.state.value}>{field.state.value} (custom)</option>
+                ) : null;
+              const showCustomInput =
+                name === "model" &&
+                field.state.value !== "" &&
+                !modelRows.some((row) => row.model === field.state.value);
               return (
                 <label htmlFor={`${formId}-${name}`}>
                   {name === "profile" ? "Mode" : name.charAt(0).toUpperCase() + name.slice(1)}
                   {name === "model" && vocabulary?.extensible ? (
-                    <input
-                      id={`${formId}-${name}`}
-                      data-slot="input"
-                      required
-                      value={field.state.value}
-                      onChange={(e) => field.handleChange(e.target.value)}
-                    />
+                    <>
+                      <select
+                        id={`${formId}-${name}`}
+                        data-slot="native-select"
+                        value={selectedKey}
+                        required
+                        onChange={(e) => {
+                          const picked = e.target.value;
+                          if (picked === "custom:new") return;
+                          const hit = modelRows.find((row) => row.key === picked);
+                          if (hit === undefined) {
+                            field.handleChange(picked);
+                            return;
+                          }
+                          field.handleChange(hit.model);
+                          if (hit.provider !== undefined)
+                            form.setFieldValue("provider", hit.provider);
+                        }}
+                      >
+                        {field.state.value === "" ? <option value="">Choose…</option> : null}
+                        {modelRows.map((row) => (
+                          <option key={row.key} value={row.key}>
+                            {row.label}
+                          </option>
+                        ))}
+                        {customRow}
+                        <option value="custom:new">Type another id…</option>
+                      </select>
+                      {showCustomInput ? (
+                        <input
+                          id={`${formId}-${name}-custom`}
+                          data-slot="input"
+                          value={field.state.value}
+                          onChange={(e) => field.handleChange(e.target.value)}
+                          autoComplete="off"
+                          spellCheck={false}
+                          placeholder="Type a model id…"
+                          aria-label="Another model id"
+                        />
+                      ) : null}
+                    </>
                   ) : (
                     <select
                       id={`${formId}-${name}`}

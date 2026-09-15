@@ -17,13 +17,21 @@
  *   were values in the old harness's vocabulary.
  */
 
+/** One installed provider/model pair (RFC-27), as the page receives it. */
+export interface DriverModelPair {
+  readonly provider: string;
+  readonly model: string;
+}
 /** The wire shape of one harness's entry in `driverChoices`. `provider` is
- * present only where the harness expresses the dimension. */
+ * present only where the harness expresses the dimension. `installed`
+ * carries the live pairs where hcn reports them; absent means no live
+ * list, never an empty installed population. */
 export interface DriverVocabulary {
   readonly models: readonly string[];
   readonly efforts: readonly string[];
   readonly extensible: boolean;
   readonly provider?: true;
+  readonly installed?: readonly DriverModelPair[];
 }
 
 /** The wire shape of `driverChoices`, as the poll delivers it. */

@@ -114,11 +114,17 @@ The conversation projection keeps these separate:
 - `driver`: what runs now, from the log.
 - `driverPreference`: what the person chose, or null.
 - `driverChoices`: model and effort vocabularies from hcn inspect, aliases
-  resolved, plus extensibility and provider support. These may be cached
-  for the server process. Do not create a second vocabulary registry.
+  resolved, plus extensibility and provider support. For pi, hcn also
+  reads the installed stores (`models.json` plus `models-store.json`
+  under `PI_CODING_AGENT_DIR`) and serves the provider/model pairs ahead
+  of the curated baseline. These are cached for the server process. Do
+  not create a second vocabulary registry.
 
 A dimension the harness cannot express is absent from its controls. An
-extensible model vocabulary permits free entry. Changing the browser
+extensible model vocabulary permits free entry. For pi the Model control
+shows provider-qualified labels (`lmstudio/qwen3.6-...`); picking one
+splits it into the model plus provider fields. Save-time validation is
+shape-only - only the native spawn decides availability. Changing the browser
 preference never changes a running interactive process or starts a driver.
 The full settings editor can select an interactive profile for a human-owned
 terminal session. A headless command refuses that selection rather than
@@ -304,14 +310,7 @@ existing delivery path; they are not prepared queued dispatches.
 
 Managed headless turns may use native context management when hcn declares
 `nativeContextManagement: { kind: "auto-compaction", modes: ["headless-turn"] }`
-for the requested mode. The narrower declaration
-`{ kind: "native-session-auto-compaction", modes: ["headless-turn"] }`
-selects this route only when the locked capture contains no history to transfer.
-Its mode list must contain exactly one headless-turn entry. A fresh prompt or
-a resume with confirmed native coverage can qualify. Unconfirmed history from
-queued notes, earlier holds, failed attempts, or another harness uses bounded
-preparation instead. The existing auto-compaction declaration keeps its mode
-superset behavior. This route
+for the requested mode. This route
 renders the complete captured context, keeps the offered source copy, and
 records accounting as null. It does not run a local count or summary. HCN decides which harnesses declare this capability.
 Native resume and the prepared-execution fence still apply. Selected model flags
@@ -346,11 +345,7 @@ its dispatch snapshot. This module does not authorize or launch the pending
 task. Unknown budgets, unavailable isolation, incomplete summaries, changed
 executables/models, and oversized mandatory content hold preparation.
 Unsupported or unverified adapters use E-HUB-03 settings remedies; other
-preparation failures use E-HUB-06. These holds preserve the original input.
-An old E-HUB-03 hold can be retried after repairing the failed operation;
-E-HUB-06 requires explicit Retry. Installing a new binary or reloading the page
-does not dispatch held work. A full native session with unconfirmed history
-can remain held on repeated attempts; this route adds no new recovery action.
+preparation failures use E-HUB-06.
 The offered full context copy remains canonical for retrieval; summaries do
 not alter the record. The browser records a notice when a turn uses a summary.
 
@@ -383,34 +378,6 @@ its accounting. Cleanup failures retain owned copies for a later cleanup
 attempt and do not prevent cleanup of the other copies.
 
 ## Managed hub workers
-
-### Native permission records
-
-Native permission requests have a separate durable lifecycle. HCN supplies the
-complete request text and offered choices; Lucid does not interpret native
-permission schemas. Only the executor for the current managed attempt can
-record requests and claim a write intent. Generic agent events cannot create
-answerable requests. Unknown request fields are refused, not discarded.
-
-The authenticated browser decision endpoint accepts only a decision ID, request
-ID and offered choice ID. It saves the choice under the append lock. Identical
-retries return the saved result. A new choice requires a live executor. Saving
-a choice does not establish that it reached the agent. Write intent is claimed
-once, and a missing acknowledgement never authorizes replay.
-
-The browser distinguishes saved, sending, sent, cleared and unavailable requests.
-It displays the complete request as plain text and offers no default choice.
-Process loss and executor replacement retain decision history. Approval details
-stay out of model context. Reads and browser reloads never dispatch a decision.
-Read responses carry an opaque `approvalRevision`; a client returning that
-revision receives approval history only if its contents or executor availability
-changed. Omitting the revision returns the full view.
-
-These facts use execution log payload version 3. Older readers refuse this
-payload instead of ignoring its authority. Native process delivery and activation
-remain governed by the active RFC 27 integration work.
-
-### Execution lifecycle
 
 Managed execution uses the existing driven-conversation runtime with saved
 settings and the exact recorded working folder. The launch request names

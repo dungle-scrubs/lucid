@@ -37,6 +37,122 @@ describe("the projection from inspect facts", () => {
     expect(served.vocabulary.claude).toBeUndefined();
   });
 
+  test("installed pairs come first, baseline ids absent from the pairs follow", () => {
+    const served = driverChoicesFromFacts(
+      {
+        pi: facts({
+          vocabulary: { models: ["zai/glm-5.2"], efforts: ["medium"], extensible: true },
+        }),
+      },
+      {
+        pi: [
+          { provider: "lmstudio", model: "qwen3.6-35b-a3b-ud-mlx" },
+          { provider: "zai", model: "zai/glm-5.2" },
+        ],
+      },
+    );
+    expect(served.vocabulary.pi?.installed).toEqual([
+      { provider: "lmstudio", model: "qwen3.6-35b-a3b-ud-mlx" },
+      { provider: "zai", model: "zai/glm-5.2" },
+    ]);
+    expect(served.vocabulary.pi?.models).toEqual(["qwen3.6-35b-a3b-ud-mlx", "zai/glm-5.2"]);
+    expect(served.vocabulary.pi?.extensible).toBe(true);
+  });
+
+  test("no pairs keeps the baseline list unchanged, with no installed key", () => {
+    const served = driverChoicesFromFacts(
+      {
+        pi: facts({
+          vocabulary: { models: ["zai/glm-5.2"], efforts: ["medium"], extensible: true },
+        }),
+      },
+      { pi: [] },
+    );
+    expect(served.vocabulary.pi?.models).toEqual(["zai/glm-5.2"]);
+    expect(served.vocabulary.pi?.installed).toBeUndefined();
+  });
+
+  test("a failing pair read degrades to the baseline, not a refusal", async () => {
+    const runner = {
+      openSession: () => {
+        throw new Error("unused");
+      },
+      streamTurn: () => {
+        throw new Error("unused");
+      },
+      inspect: (h: HarnessName) =>
+        h === "pi"
+          ? Promise.resolve(
+              facts({
+                vocabulary: { models: ["zai/glm-5.2"], efforts: ["medium"], extensible: true },
+              }),
+            )
+          : Promise.reject(new Error("no descriptor")),
+      listModels: () => Promise.reject(new Error("no such mode")),
+      capabilities: () => {
+        throw new Error("unused");
+      },
+    } as unknown as Parameters<typeof driverChoices>[0];
+    const served = await driverChoices(runner);
+    expect(served.vocabulary.pi?.models).toEqual(["zai/glm-5.2"]);
+    expect(served.vocabulary.pi?.installed).toBeUndefined();
+  });
+
+  test("a served pair list merges ahead of the baseline", async () => {
+    const runner = {
+      openSession: () => {
+        throw new Error("unused");
+      },
+      streamTurn: () => {
+        throw new Error("unused");
+      },
+      inspect: (h: HarnessName) =>
+        h === "pi"
+          ? Promise.resolve(
+              facts({
+                vocabulary: { models: ["zai/glm-5.2"], efforts: ["medium"], extensible: true },
+              }),
+            )
+          : Promise.reject(new Error("no descriptor")),
+      listModels: (h: HarnessName) =>
+        h === "pi"
+          ? Promise.resolve([{ provider: "lmstudio", model: "qwen3.6-35b-a3b-ud-mlx" }])
+          : Promise.resolve([]),
+      capabilities: () => {
+        throw new Error("unused");
+      },
+    } as unknown as Parameters<typeof driverChoices>[0];
+    const served = await driverChoices(runner);
+    expect(served.vocabulary.pi?.models).toEqual(["qwen3.6-35b-a3b-ud-mlx", "zai/glm-5.2"]);
+    expect(served.vocabulary.pi?.installed).toEqual([
+      { provider: "lmstudio", model: "qwen3.6-35b-a3b-ud-mlx" },
+    ]);
+  });
+
+  test("a runner predating the mode still satisfies the seam", async () => {
+    const runner = {
+      openSession: () => {
+        throw new Error("unused");
+      },
+      streamTurn: () => {
+        throw new Error("unused");
+      },
+      inspect: (h: HarnessName) =>
+        h === "pi"
+          ? Promise.resolve(
+              facts({
+                vocabulary: { models: ["zai/glm-5.2"], efforts: ["medium"], extensible: true },
+              }),
+            )
+          : Promise.reject(new Error("no descriptor")),
+      capabilities: () => {
+        throw new Error("unused");
+      },
+    } as unknown as Parameters<typeof driverChoices>[0];
+    const served = await driverChoices(runner);
+    expect(served.vocabulary.pi?.models).toEqual(["zai/glm-5.2"]);
+  });
+
   test("an inspect that fails is a harness with no entry, not a refusal", async () => {
     // The runner answers what the real one would for a harness the dump
     // cannot describe: a thrown refusal.
