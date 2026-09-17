@@ -5,7 +5,9 @@ import { join } from "node:path";
 import type { DispatchDeps } from "../../src/cli/dispatch.js";
 import { dispatch } from "../../src/cli/dispatch.js";
 import { captureClaudeAuthor, runClaudeHook } from "../../src/cli/hooks/claude.js";
+import { claudeContextSlice } from "../../src/cli/native-listening.js";
 import { conversations } from "../../src/cli/record-addressing.js";
+import { prepareNativeFeedback } from "../../src/modes/native-preparation.js";
 import { readProcessOwner } from "../../src/process-owner.js";
 import type { ProcessOwner } from "../../src/protocol/process-owner.js";
 import {
@@ -15,6 +17,7 @@ import {
   writeStopBlocks,
 } from "../../src/store/claude-proposals.js";
 import { readConnection } from "../../src/store/connection-view.js";
+import { readOfferedContext } from "../../src/store/context-offer.js";
 import { openWriter, viewConversation } from "../../src/store/conversation-host.js";
 
 const SESSION = "claude-parent";
@@ -51,7 +54,9 @@ async function commit(root: string, owner: ProcessOwner, stdout: string, extra =
   });
 }
 
-async function claudeFixture(): Promise<ClaudeFixture> {
+async function claudeFixture(
+  documentBytes = "<h1>Exact artifact context</h1>",
+): Promise<ClaudeFixture> {
   const root = mkdtempSync(join(tmpdir(), "lucid-claude-delivery-"));
   try {
     const owner = readProcessOwner(process.pid);
@@ -75,7 +80,7 @@ async function claudeFixture(): Promise<ClaudeFixture> {
       JSON.stringify({
         artifact: {
           artifactId: "flow",
-          bytes: "<h1>Exact artifact context</h1>",
+          bytes: documentBytes,
           contentType: "text/html",
           version: 1,
         },
@@ -423,4 +428,233 @@ test("a Claude Code command without a registered session refuses and keeps the p
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
+});
+
+function acceptFeedback(dir: string, id: string, text: string): void {
+  const host = openWriter(dir);
+  try {
+    expect(host.acceptInput({ id, mode: "queue", text }, { managed: true }).verdict).toBe(
+      "accepted",
+    );
+  } finally {
+    host.close();
+  }
+}
+
+function listening(owner: ProcessOwner) {
+  let now = Date.now();
+  return {
+    elapsed: () => now,
+    options: {
+      listener: {
+        now: () => now,
+        wait: async (ms: number) => {
+          now += ms;
+        },
+      },
+      native: native(owner),
+      signal: new AbortController().signal,
+    },
+  };
+}
+
+test("Claude Code receives a large document by reference and answers only after reading all of it", async () => {
+  const section = (index: number) =>
+    `<section id="s${index}"><p>Paragraph ${index} with Unicode ก🙂 and "quotes".</p></section>\n`;
+  const document = Array.from({ length: 1_200 }, (_, index) => section(index)).join("");
+  expect(Buffer.byteLength(document)).toBeGreaterThan(60_000);
+  const { deps, dir, id, output, owner, root } = await claudeFixture(document);
+  try {
+    const records = conversations(root);
+    const { options } = listening(owner);
+    const stop = { cwd: root, hook_event_name: "Stop", session_id: SESSION };
+    const feedback = "Please tighten the final section.";
+    acceptFeedback(dir, "large", feedback);
+    await dispatch(["connection", "resume-listen", id, "--json"], deps);
+    expect(await commit(root, owner, output.pop() ?? "")).toMatchObject({ kind: "committed" });
+
+    const delivery = await runClaudeHook(records, stop, options);
+    if (delivery.kind !== "offered") throw new Error(`Expected an offer, got ${delivery.kind}`);
+    expect(Buffer.byteLength(delivery.payload)).toBeLessThanOrEqual(19_900);
+    const reason: string = JSON.parse(delivery.payload).reason;
+    expect(reason).toContain(feedback);
+    expect(reason.includes(JSON.stringify(section(600)).slice(1, -1))).toBe(false);
+    const command = reason.match(/lucid context '([^']+)' --offset 0 --bytes (\d+)/);
+    if (!command?.[1]) throw new Error("Missing reading command");
+    expect(Number(command[2])).toBe(24_000);
+    const copy = command[1];
+    const offerId = Object.keys(viewConversation(dir).state.connection?.offers ?? {})[0];
+    if (!offerId) throw new Error("Missing durable offer");
+    const offer = viewConversation(dir).state.connection?.offers[offerId]?.offer;
+    // The same preparation without a size limit renders the inline context the copy must equal.
+    const inlineHost = openWriter(dir);
+    let inlineContext: string;
+    try {
+      const inline = prepareNativeFeedback(inlineHost, "large", {
+        encode: (prompt) => prompt,
+        maxBytes: 10_000_000,
+      });
+      if (inline.kind !== "ready")
+        throw new Error(`Expected inline preparation, got ${inline.kind}`);
+      inline.discard();
+      inlineContext = inline.payload.split("\n\n<lucid-offer>\n\n")[0] ?? "";
+    } finally {
+      inlineHost.close();
+    }
+
+    await dispatch(["connection", "receipt", id, "--offer", offerId, "--json"], deps);
+    await commit(root, owner, output.pop() ?? "");
+    expect(viewConversation(dir).state.connection?.offers[offerId]?.kind).toBe("received");
+
+    const response = join(root, "response.json");
+    writeFileSync(response, JSON.stringify({ kind: "answer", text: "Tightened." }));
+    const respond = async () => {
+      await dispatch(
+        ["connection", "respond", id, "--offer", offerId, "--request", response, "--json"],
+        deps,
+      );
+      return commit(root, owner, output.pop() ?? "");
+    };
+    const early = await respond();
+    if (early.kind !== "committed") throw new Error("Missing refused response");
+    expect(early.context).toContain("Read the offered context in order to its end");
+    expect(viewConversation(dir).state.connection?.offers[offerId]?.kind).toBe("received");
+
+    // Reading follows nextOffset; the copy holds the complete context the inline offer would carry.
+    let offset = 0;
+    let text = "";
+    let reads = 0;
+    while (true) {
+      const slice = readOfferedContext(copy, offset, 24_000);
+      text += slice.text;
+      offset = slice.nextOffset;
+      reads += 1;
+      if (slice.done) break;
+    }
+    expect(reads).toBeGreaterThan(1);
+    // The copy quotes the document as JSON, exactly as the inline context does.
+    expect(text.includes(JSON.stringify(document).slice(1, -1))).toBe(true);
+    expect(text.endsWith(feedback)).toBe(true);
+    // Preparing again after offer-started advances the recorded sequence number only.
+    const sequenceFree = (value: string) => value.replaceAll(/"seq":\d+/g, '"seq":0');
+    expect(sequenceFree(text) === sequenceFree(inlineContext)).toBe(true);
+    expect(offer?.delivery).toEqual({ bytes: Buffer.byteLength(text), kind: "reference" });
+
+    expect(await respond()).toMatchObject({ kind: "committed" });
+    expect(viewConversation(dir).state.connection?.offers[offerId]).toMatchObject({
+      kind: "finished",
+      outcome: { kind: "answer", text: "Tightened." },
+    });
+    // Accepting the response removes the copy; replaying the log still shows the answer.
+    expect(() => readOfferedContext(copy, 0, 16)).toThrow();
+    expect(viewConversation(dir).state.connection?.offers[offerId]?.kind).toBe("finished");
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("a reference offer whose copy is lost refuses an answer and still records a failure", async () => {
+  const document = `<main>${"<p>Large paragraph of recorded document text.</p>\n".repeat(900)}</main>`;
+  const { deps, dir, id, output, owner, root } = await claudeFixture(document);
+  try {
+    const records = conversations(root);
+    const { options } = listening(owner);
+    acceptFeedback(dir, "lost", "Review this document.");
+    await dispatch(["connection", "resume-listen", id, "--json"], deps);
+    await commit(root, owner, output.pop() ?? "");
+    const delivery = await runClaudeHook(
+      records,
+      { cwd: root, hook_event_name: "Stop", session_id: SESSION },
+      options,
+    );
+    if (delivery.kind !== "offered") throw new Error("Missing offer");
+    const copy = JSON.parse(delivery.payload).reason.match(/lucid context '([^']+)'/)?.[1];
+    if (!copy) throw new Error("Missing copy path");
+    const offerId = Object.keys(viewConversation(dir).state.connection?.offers ?? {})[0] ?? "";
+    await dispatch(["connection", "receipt", id, "--offer", offerId, "--json"], deps);
+    await commit(root, owner, output.pop() ?? "");
+    rmSync(copy, { force: true, recursive: true });
+
+    const response = join(root, "response.json");
+    const respond = async (body: unknown) => {
+      writeFileSync(response, JSON.stringify(body));
+      await dispatch(
+        ["connection", "respond", id, "--offer", offerId, "--request", response, "--json"],
+        deps,
+      );
+      return commit(root, owner, output.pop() ?? "");
+    };
+    // A malformed answer is invalid before any copy check runs.
+    const malformed = await respond({ kind: "answer", text: 42 });
+    if (malformed.kind !== "committed") throw new Error("Missing malformed refusal");
+    expect(malformed.context).not.toContain("no longer available");
+    expect(viewConversation(dir).state.connection?.offers[offerId]?.kind).toBe("received");
+    const answer = await respond({ kind: "answer", text: "Answered without the document." });
+    if (answer.kind !== "committed") throw new Error("Missing refused answer");
+    expect(answer.context).toContain("no longer available");
+    expect(viewConversation(dir).state.connection?.offers[offerId]?.kind).toBe("received");
+    expect(await respond({ kind: "failure", text: "The context copy was lost." })).toMatchObject({
+      kind: "committed",
+    });
+    expect(viewConversation(dir).state.connection?.offers[offerId]).toMatchObject({
+      kind: "finished",
+      outcome: { kind: "failure" },
+    });
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("a listen that expires with feedback held tells the person; an interrupted one does not", async () => {
+  const { deps, dir, id, output, owner, root } = await claudeFixture();
+  try {
+    const records = conversations(root);
+    const stop = { cwd: root, hook_event_name: "Stop", session_id: SESSION };
+    // Feedback text alone above the transport limit cannot be sent by reference either.
+    acceptFeedback(dir, "oversized", `Oversized feedback ${"x".repeat(25_000)}`);
+    await dispatch(["connection", "resume-listen", id, "--json"], deps);
+    await commit(root, owner, output.pop() ?? "");
+    const { options } = listening(owner);
+    const result = await runClaudeHook(records, stop, options);
+    expect(result).toMatchObject({ kind: "notice" });
+    if (result.kind !== "notice") throw new Error("Missing notice");
+    expect(result.message).toContain("could not send 1 saved feedback item");
+    expect(result.message).toContain("The feedback text exceeds this native transport's limit");
+    expect(viewConversation(dir).state.connection?.heldInputs.oversized?.reason).toBe(
+      "context-too-large",
+    );
+    const leftover = readdirSync(tmpdir()).filter((name) =>
+      name.startsWith(`lucid-context-offer-${process.pid}-`),
+    );
+    expect(leftover).toEqual([]);
+
+    // The next explicit listen retries the hold; an interrupt then ends it without a notice.
+    await dispatch(["connection", "resume-listen", id, "--json"], deps);
+    await commit(root, owner, output.pop() ?? "");
+    const controller = new AbortController();
+    let now = Date.now();
+    const interrupted = await runClaudeHook(records, stop, {
+      listener: {
+        now: () => now,
+        wait: async (ms: number) => {
+          now += ms;
+          controller.abort();
+        },
+      },
+      native: native(owner),
+      signal: controller.signal,
+    });
+    expect(interrupted).toEqual({ kind: "stopped", reason: "interrupted" });
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("Claude Code's Bash output limit sets the context slice", () => {
+  expect(claudeContextSlice({})).toBe(24_000);
+  expect(claudeContextSlice({ BASH_MAX_OUTPUT_LENGTH: "" })).toBe(24_000);
+  expect(claudeContextSlice({ BASH_MAX_OUTPUT_LENGTH: "10000" })).toBe(8_000);
+  expect(claudeContextSlice({ BASH_MAX_OUTPUT_LENGTH: "150000" })).toBe(24_000);
+  expect(claudeContextSlice({ BASH_MAX_OUTPUT_LENGTH: "5000" })).toBeUndefined();
+  expect(claudeContextSlice({ BASH_MAX_OUTPUT_LENGTH: "30k" })).toBeUndefined();
 });

@@ -308,5 +308,13 @@ export async function runClaudeHook(
   const result = await listenAtNativeStop(records, registration, authority, options);
   if (result.kind === "offered")
     writeStopBlocks(records.rootDir, registration.registrationId, blocks + 1);
+  const [first] = result.kind === "stopped" ? (result.held ?? []) : [];
+  if (result.kind === "stopped" && result.reason === "expired" && first) {
+    const count = result.held?.length ?? 1;
+    return {
+      kind: "notice",
+      message: `Lucid could not send ${count === 1 ? "1 saved feedback item" : `${count} saved feedback items`}: ${first.message} Listening has ended; run lucid connection resume-listen after resolving it.`,
+    };
+  }
   return result;
 }

@@ -51,7 +51,12 @@ export interface NativeListenerDeps {
 
 export type NativeListenerResult =
   | { readonly kind: "offered"; readonly offerId: string; readonly payload: string }
-  | { readonly kind: "stopped"; readonly reason: Exclude<ListenerDisabledReason, "owner-lost"> }
+  | {
+      readonly kind: "stopped";
+      /** Feedback this listen held, in order. Reported only when the listen expired. */
+      readonly held?: readonly NativeHeldFeedback[];
+      readonly reason: Exclude<ListenerDisabledReason, "owner-lost">;
+    }
   | {
       readonly kind: "held";
       readonly message: string;
@@ -64,6 +69,11 @@ export type NativeListenerResult =
         | "executor-busy"
         | "listener-failed";
     };
+
+export interface NativeHeldFeedback {
+  readonly inputId: string;
+  readonly message: string;
+}
 
 export const heldNativeFeedback = (
   reason: Extract<NativeListenerResult, { kind: "held" }>["reason"],
@@ -221,6 +231,7 @@ export async function listenNativeFeedback(
       source,
     });
     if (enabled) return enabled;
+    const held: NativeHeldFeedback[] = [];
     while (!signal.aborted && deps.now() < participation.expiresAt) {
       const verified = withNativeRegistration(
         root,
@@ -253,6 +264,7 @@ export async function listenNativeFeedback(
           break;
         }
         if (prepared.kind === "held") {
+          held.push({ inputId, message: prepared.message });
           const refusal = write({
             actionId: crypto.randomUUID(),
             kind: "input-held",
@@ -281,7 +293,12 @@ export async function listenNativeFeedback(
       await deps.wait(Math.min(DEFAULT_POLL_MS, participation.expiresAt - deps.now()), signal);
     }
     const reason = signal.aborted ? "interrupted" : "expired";
-    return disable(reason) ?? { kind: "stopped", reason };
+    return (
+      disable(reason) ??
+      (reason === "expired" && held.length > 0
+        ? { held, kind: "stopped", reason }
+        : { kind: "stopped", reason })
+    );
   } catch (cause) {
     return heldNativeFeedback(
       cause instanceof LockError && cause.code === "lock-timeout"

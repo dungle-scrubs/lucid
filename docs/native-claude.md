@@ -70,9 +70,26 @@ Listening ends and needs another `resume-listen` when:
   limit, because Claude Code would not deliver an offer past it, and shows a
   notice.
 
-Feedback delivered in one Stop continuation is capped at 19,900 encoded
-bytes. Larger feedback, and feedback with attached files, stays saved and
-held.
+A Stop continuation holds at most 19,900 encoded bytes. When the
+conversation history, current documents and feedback fit, they arrive in
+the continuation itself. When they do not, Lucid writes the complete
+context to a private copy and the continuation carries the feedback text
+and a `lucid context` command. The session reads the copy in 24,000-byte
+slices, following `nextOffset` until `done` is true. A slice that size
+reaches the model intact; Claude Code replaces Bash output above its
+`BASH_MAX_OUTPUT_LENGTH` (30,000 by default) with a preview, so a lower
+setting lowers the slice.
+
+Lucid refuses an answer or question with `context-unread` until the copy
+has been read in order to its end, and with `context-missing` when the copy
+is gone. A refusal or failure response is always recorded. The copy is
+removed when the response is recorded.
+
+Feedback stays saved and held when its own text exceeds the limit, or when
+the conversation includes attached files. If a listen ends with feedback
+held, the Stop hook shows why in the terminal. An offer the session
+received but never answered blocks later delivery for that conversation
+until the same session records a response.
 
 If the Claude Code session is closed, resume it in its working folder with
 `claude --resume SESSION_ID`, then run `resume-listen` in it. The browser

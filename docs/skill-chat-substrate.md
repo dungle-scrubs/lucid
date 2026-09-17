@@ -250,6 +250,10 @@ repeat of a recorded receipt returns that receipt without another append.
 receipt. It does not infer delivery from the response text.
 `input-already-dispatched` refuses cancellation after dispatch began. It
 preserves the offer and never stops the human-owned native session.
+`context-unread` refuses an answer or question for an offer whose complete
+context is in a private copy until that copy is read in order to its end.
+`context-missing` refuses it when that copy is gone or changed. Both leave
+the offer received; a refusal or failure response is always recorded.
 
 `lucid connection receipt CONVERSATION --offer OFFER [--json]` records a
 receipt. `lucid connection respond CONVERSATION --offer OFFER --request FILE

@@ -33,9 +33,26 @@ const CODEX_FEEDBACK_BYTES = 7_900;
 // native contract probe; cap the entire encoded response below that bound.
 const CLAUDE_FEEDBACK_BYTES = 19_900;
 
+// Claude Code 2.1.274 returned `lucid context` output intact at 29,085 characters and replaced
+// it with a preview at 29,771 (artifacts/evidence/claude-cli-native/slice-probe.mjs). A byte
+// slice never prints more characters than bytes, so 24,000 keeps a 5,000-character margin.
+const CLAUDE_CONTEXT_SLICE = 24_000;
+const CONTEXT_SLICE_MIN = 4_096;
+
+/** Claude Code lowers its Bash output limit through BASH_MAX_OUTPUT_LENGTH; hooks inherit it. */
+export function claudeContextSlice(env: NodeJS.ProcessEnv): number | undefined {
+  const raw = env.BASH_MAX_OUTPUT_LENGTH;
+  if (raw === undefined || raw === "") return CLAUDE_CONTEXT_SLICE;
+  const limit = /^[0-9]+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(limit)) return undefined;
+  const slice = Math.min(CLAUDE_CONTEXT_SLICE, Math.floor(limit * 0.8));
+  return slice >= CONTEXT_SLICE_MIN ? slice : undefined;
+}
+
 /** Interfaces whose Stop continuation passed native acceptance. Others keep feedback saved. */
 const STOP_TRANSPORTS: Partial<Record<NativeInterface, NativeFeedbackTransport>> = {
   "claude-cli": {
+    contextSlice: claudeContextSlice(process.env),
     encode: (prompt) => JSON.stringify({ decision: "block", reason: prompt }),
     instructions:
       "Run each Lucid command in its own foreground Bash call. Lucid records receipt and response when that Bash call finishes and reports the result in the tool output.",

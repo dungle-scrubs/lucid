@@ -202,9 +202,17 @@ export interface ListenerParticipation {
   readonly registration: NativeBinding;
 }
 
+/** Present when the complete context is in a private offered copy instead of the continuation.
+ * `bytes` is the context text length after the copy's header. Absent means inline. */
+export interface NativeOfferDelivery {
+  readonly bytes: number;
+  readonly kind: "reference";
+}
+
 export interface NativeOffer {
   readonly attempt: number;
   readonly context: ContextBoundary;
+  readonly delivery?: NativeOfferDelivery;
   readonly epoch: number;
   readonly id: string;
   readonly inputId: string;
@@ -881,8 +889,10 @@ export function parseConnectionFact(value: unknown): ConnectionFact | null {
   if (value.kind === "offer-started" && object(value.offer)) {
     const o = value.offer;
     const context = parseContextBoundary(o.context);
+    const delivery = o.delivery === undefined ? undefined : parseOfferDelivery(o.delivery);
     if (
       !context ||
+      delivery === null ||
       !connectionId(o.id) ||
       !connectionId(o.participationId) ||
       typeof o.inputId !== "string" ||
@@ -900,6 +910,7 @@ export function parseConnectionFact(value: unknown): ConnectionFact | null {
       offer: {
         attempt: o.attempt,
         context,
+        ...(delivery ? { delivery } : {}),
         epoch: o.epoch,
         id: o.id,
         inputId: o.inputId,
@@ -910,6 +921,13 @@ export function parseConnectionFact(value: unknown): ConnectionFact | null {
     };
   }
   return null;
+}
+
+function parseOfferDelivery(value: unknown): NativeOfferDelivery | null {
+  if (!object(value) || Object.keys(value).length !== 2 || value.kind !== "reference") return null;
+  return typeof value.bytes === "number" && Number.isSafeInteger(value.bytes) && value.bytes > 0
+    ? { bytes: value.bytes, kind: "reference" }
+    : null;
 }
 
 export function refuseConnection(

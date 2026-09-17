@@ -61,6 +61,10 @@ function refusalMessage(reason: string): string {
       return "Run this command from the native session that received the offer. Its registration and process must be verified.";
     case "connection-conflict":
       return "This command conflicts with a recorded result. The recorded receipt or response was kept.";
+    case "context-unread":
+      return "Read the offered context in order to its end with the lucid context command before recording an answer or question. Follow nextOffset until done is true.";
+    case "context-missing":
+      return "The offered context copy is no longer available. Record a failure response; the person can send the feedback again.";
     case "invalid-connection":
       return "The offer reference or response is invalid or exceeds the event limit.";
     default:

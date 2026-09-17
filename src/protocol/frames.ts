@@ -125,6 +125,8 @@ export const REFUSAL_ISSUES = [
   "receipt-stale",
   "receipt-required",
   "input-already-dispatched",
+  "context-unread",
+  "context-missing",
 ] as const;
 export type RefusalIssue = (typeof REFUSAL_ISSUES)[number];
 
