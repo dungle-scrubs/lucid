@@ -9,10 +9,11 @@ Lucid is in beta. It serves one person on one machine. Product scope and terms l
 
 ## Run it
 
-Install Bun 1.3 or later and Node 24 or later, then install the beta:
+Lucid is in beta; versions below 1.0 can change without notice. Install Bun
+1.3 or later and Node 24 or later, then install it:
 
 ```sh
-npm install -g @dungle-scrubs/lucid@beta
+npm install -g @dungle-scrubs/lucid
 lucid serve
 ```
 
