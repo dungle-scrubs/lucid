@@ -1,17 +1,10 @@
 import { nativeOwner } from "../../harness/native-owner.js";
-import type { NativeListenerDeps, NativeListenerResult } from "../../modes/native-listener.js";
+import type { NativeListenerResult } from "../../modes/native-listener.js";
 import type { NativeBinding } from "../../protocol/connection.js";
-import {
-  continuationListener,
-  currentListener,
-  sameNativeBinding,
-} from "../../protocol/connection.js";
 import type { ProcessOwner } from "../../protocol/process-owner.js";
 import { sameProcessOwner } from "../../protocol/process-owner.js";
-import { openWriter, viewConversation } from "../../store/conversation-host.js";
 import type {
   NativeCapture,
-  NativeListenRequest,
   RegistrationAuthority,
   RegistrationFailure,
 } from "../../store/native-registration.js";
@@ -20,10 +13,10 @@ import {
   registerNativeSession,
   withNativeRegistration,
 } from "../../store/native-registration.js";
-import { listenCodexFeedback } from "../codex-listener.js";
 import { NATIVE_ROLE_ENV } from "../invocation.js";
+import type { NativeStopOptions } from "../native-lifecycle.js";
+import { interruptNativeListening, listenAtNativeStop } from "../native-lifecycle.js";
 import type { Conversations } from "../record-addressing.js";
-import { commandRecordDir } from "../record-addressing.js";
 
 export interface CodexHookDeps {
   readonly owner: () => Promise<ProcessOwner | undefined>;
@@ -123,20 +116,9 @@ export function codexCallbackAuthority(capture: NativeCapture): RegistrationAuth
   );
 }
 
-interface CodexHookOptions {
-  readonly signal: AbortSignal;
+interface CodexHookOptions extends NativeStopOptions {
   readonly native?: CodexHookDeps;
-  readonly listener?: Pick<NativeListenerDeps, "now" | "wait">;
 }
-
-type HookDecision =
-  | NativeListenerResult
-  | { readonly kind: "skipped" }
-  | {
-      readonly kind: "listen";
-      readonly request: NativeListenRequest;
-      readonly source: "explicit" | "continuation";
-    };
 
 /** Stop consumes one exact request, then continues only matching completed deliveries. */
 export async function runCodexHook(
@@ -151,71 +133,8 @@ export async function runCodexHook(
     (payload as Record<string, unknown>).hook_event_name === "SessionStart"
   )
     return { kind: "skipped" };
-  const interrupted = (payload as Record<string, unknown>).hook_event_name === "Interrupt";
   const authority = codexCallbackAuthority(captured.registration);
-  const selected = withNativeRegistration(
-    records.rootDir,
-    captured.registration.registrationId,
-    (registration, access): HookDecision => {
-      const requested = access.readListenRequest();
-      if (!requested.ok)
-        return { kind: "held", reason: requested.reason, message: requested.message };
-      const request = requested.value;
-      if (!request) return { kind: "skipped" };
-      if (interrupted) {
-        // Clear pending intent before looking up the record: a missing record must
-        // not leave a request that restarts on a later unrelated turn.
-        const cleared = access.writeListenRequest(null);
-        if (!cleared.ok) return { kind: "held", reason: cleared.reason, message: cleared.message };
-        const host = openWriter(commandRecordDir(records, request.conversationId), {
-          connectionAuthority: () => registration,
-          expectedConversationId: request.conversationId,
-          ownerPresence: authority.ownerPresence,
-        });
-        try {
-          const listener = currentListener(host.state().connection);
-          if (!listener || !sameNativeBinding(listener.registration, registration))
-            return { kind: "skipped" };
-          const written = host.writeConnection({
-            actionId: crypto.randomUUID(),
-            epoch: listener.epoch,
-            kind: "listener-disabled",
-            participationId: listener.id,
-            reason: "interrupted",
-          });
-          return written.verdict === "accepted"
-            ? { kind: "stopped", reason: "interrupted" }
-            : {
-                kind: "held",
-                reason: written.issue,
-                message:
-                  "Lucid could not record the native interruption. Check connection status before resuming.",
-              };
-        } finally {
-          host.close();
-        }
-      }
-      const connection = viewConversation(commandRecordDir(records, request.conversationId)).state
-        .connection;
-      if (!connection) return { kind: "skipped" };
-      if (!Object.hasOwn(connection.actions, request.actionId))
-        return { kind: "listen", request, source: "explicit" };
-      const listener = continuationListener(connection);
-      return sameNativeBinding(listener?.registration, registration)
-        ? { kind: "listen", request, source: "continuation" }
-        : { kind: "skipped" };
-    },
-    authority,
-  );
-  if (!selected.ok) return { kind: "held", reason: selected.reason, message: selected.message };
-  if (selected.value.kind !== "listen") return selected.value;
-  return listenCodexFeedback(
-    records,
-    selected.value.request.conversationId,
-    { request: selected.value.request, signal: options.signal, source: selected.value.source },
-    {
-      ...options.listener,
-      authority,
-    },
-  );
+  return (payload as Record<string, unknown>).hook_event_name === "Interrupt"
+    ? interruptNativeListening(records, captured.registration, authority)
+    : listenAtNativeStop(records, captured.registration, authority, options);
 }

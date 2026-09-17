@@ -391,9 +391,15 @@ function connectionActions(
     return status.state === "setup-required" ? ["setup-instructions"] : [];
   if (status.state === "owner-unknown" || status.state === "owner-conflict")
     return ["retry-detection"];
-  if (state.connection?.binding.interface !== "codex-cli") return [];
+  const nativeInterface = state.connection?.binding.interface;
+  if (nativeInterface !== "codex-cli" && nativeInterface !== "claude-cli") return [];
   if (status.state === "not-listening") return ["resume-listening-instructions"];
+  // Claude Code has no protected reconnect yet; the person resumes the session, then listens.
+  if (nativeInterface === "claude-cli" && status.state === "closed")
+    return ["resume-listening-instructions"];
   if (
+    // Terminal reconnect and headless continuation are verified for Codex CLI only.
+    nativeInterface === "codex-cli" &&
     !currentReconnect(state.connection) &&
     ["closed", "headless-starting", "headless-running", "cleanup"].includes(status.state)
   )

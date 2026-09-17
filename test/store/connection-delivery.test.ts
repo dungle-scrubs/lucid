@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { requestCodexListening } from "../../src/cli/codex-listener.js";
 import { dispatch } from "../../src/cli/dispatch.js";
+import { requestNativeListening } from "../../src/cli/native-listening.js";
 import { conversations } from "../../src/cli/record-addressing.js";
 import { listenNativeFeedback } from "../../src/modes/native-listener.js";
 import { prepareNativeFeedback } from "../../src/modes/native-preparation.js";
@@ -4284,7 +4284,7 @@ test("the verified reconnect child can select its reserved conversation after th
     };
     expect(registerNativeSession(child.workingDirectory, child, authority).ok).toBe(true);
     expect(
-      requestCodexListening(conversations(child.workingDirectory), "feedback", authority),
+      requestNativeListening(conversations(child.workingDirectory), "feedback", authority),
     ).toMatchObject({ kind: "held", reason: "execution-blocked" });
     expect(
       f.host.recordReconnectStarted({
@@ -4296,11 +4296,11 @@ test("the verified reconnect child can select its reserved conversation after th
       }).verdict,
     ).toBe("accepted");
     expect(
-      requestCodexListening(conversations(child.workingDirectory), "feedback", authority),
+      requestNativeListening(conversations(child.workingDirectory), "feedback", authority),
     ).toMatchObject({ kind: "held", reason: "executor-busy" });
     admission.lease.release();
     expect(
-      requestCodexListening(conversations(child.workingDirectory), "feedback", authority),
+      requestNativeListening(conversations(child.workingDirectory), "feedback", authority),
     ).toMatchObject({ kind: "requested", conversationId: "feedback" });
     expect(
       withNativeRegistration(
@@ -4336,7 +4336,7 @@ test("the verified reconnect child can select its reserved conversation after th
       authority,
     );
     expect(
-      requestCodexListening(conversations(child.workingDirectory), "another-return", authority),
+      requestNativeListening(conversations(child.workingDirectory), "another-return", authority),
     ).toMatchObject({ kind: "held", reason: "execution-blocked" });
     expect(
       withNativeRegistration(
@@ -4353,7 +4353,7 @@ test("the verified reconnect child can select its reserved conversation after th
       }).verdict,
     ).toBe("accepted");
     expect(
-      requestCodexListening(conversations(child.workingDirectory), "feedback", authority),
+      requestNativeListening(conversations(child.workingDirectory), "feedback", authority),
     ).toMatchObject({ kind: "held", reason: "execution-blocked" });
     expect(
       withNativeRegistration(

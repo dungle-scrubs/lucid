@@ -6,8 +6,9 @@ description: >
   diagrams, specs, walkthroughs, and other structured answers the user may
   want to annotate at an element or phrase. Requires the lucid artifact
   protocol marker supplied by `lucid chat` or `lucid run`, or a native
-  Codex CLI session using Lucid publication and connection commands.
-compatibility: Requires lucid; native listening requires the Codex CLI integration.
+  Codex CLI or Claude Code session using Lucid publication and connection
+  commands.
+compatibility: Requires lucid; native listening requires the Codex CLI or Claude Code integration.
 ---
 
 # Lucid artifact authoring
@@ -23,7 +24,10 @@ For feedback containing `<lucid-offer>`, follow the native flow in
 [Native Codex authoring](../../docs/native-codex.md#author-and-revise).
 Record receipt before work, publish revisions into its exact conversation,
 then record a response. A native offer takes precedence over an artifact
-protocol marker included in its context.
+protocol marker included in its context. In Claude Code, also follow
+[Native Claude Code](../../docs/native-claude.md#why-commands-finish-in-a-hook):
+run each Lucid command in its own foreground Bash call from the main
+conversation, never a subagent, and read the result reported after it.
 
 Otherwise, when the prompt contains `[lucid artifact protocol]`, use the
 artifact fences below. The Lucid host captures them into its conversation.
@@ -33,6 +37,12 @@ In a native Codex CLI session without either marker, use
 publish through the CLI, retain the returned conversation ID, and request
 listening. A failed connection does not undo publication or justify creating
 another record. Setup and publication alone do not establish listening.
+
+In a Claude Code CLI session without either marker, do the same with the
+differences in [Native Claude Code](../../docs/native-claude.md). If
+publication reports `registration-missing`, keep the conversation and tell
+the person the Claude Code integration is not set up in this session; do
+not claim notes will arrive.
 
 Other ordinary native interfaces have no enabled authoring integration yet.
 Answer normally and explain that browser review requires a conversation

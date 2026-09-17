@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { appendFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { connectionControls } from "../../src/server/connection-controls.js";
 import { readConnection } from "../../src/store/connection-view.js";
 import { createConversationHost, openWriter } from "../../src/store/conversation-host.js";
 import { createConversationRecord, viewConversation } from "../../src/store/store.js";
@@ -126,6 +127,50 @@ test("connection status refreshes native ownership without writing or treating u
       state: "closed",
     });
     expect(readFileSync(paths.logPath)).toEqual(before);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a Claude Code binding offers resume listening but never the Codex terminal reconnect", () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-connection-claude-"));
+  try {
+    const { paths } = createConversationRecord(root, "artifact", { workingDirectory: root });
+    const binding = {
+      generation: crypto.randomUUID(),
+      harness: "claude" as const,
+      interface: "claude-cli" as const,
+      nativeSessionId: "claude-one",
+      owner: { executable: "/native/claude", pid: 123, startedAt: "123:456" },
+      registrationId: crypto.randomUUID(),
+      workingDirectory: root,
+    };
+    const host = createConversationHost(paths.dir, {
+      connectionAuthority: () => binding,
+      executorLease: () => false,
+      now: () => 1000,
+      onEffect: () => {},
+      onRecord: () => {},
+      ownerPresence: () => true,
+      presence: () => undefined,
+    });
+    expect(
+      host.writeConnection({ actionId: crypto.randomUUID(), binding, kind: "bound" }).verdict,
+    ).toBe("accepted");
+    host.close();
+    let presence: boolean | undefined = true;
+    const deps = { now: () => 2000, ownerPresence: () => presence };
+    expect(readConnection(paths.dir, deps)).toMatchObject({
+      actions: ["resume-listening-instructions"],
+      interface: "claude-cli",
+      state: "not-listening",
+    });
+    presence = false;
+    const closed = readConnection(paths.dir, deps);
+    expect(closed).toMatchObject({ actions: ["resume-listening-instructions"], state: "closed" });
+    const [instruction] = connectionControls(closed, root).instructions;
+    expect(instruction?.text).toContain("claude --resume claude-one");
+    expect(instruction?.command).toContain("resume-listen");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

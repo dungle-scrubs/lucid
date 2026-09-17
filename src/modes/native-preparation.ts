@@ -17,6 +17,8 @@ export interface NativeFeedbackTransport {
   readonly encode: (prompt: string) => string;
   /** Set only after the native session can read private local attachment copies. */
   readonly files?: "local";
+  /** Interface-specific command guidance, placed with the receipt and response commands. */
+  readonly instructions?: string;
   readonly maxBytes: number;
 }
 
@@ -165,6 +167,7 @@ export function prepareNativeFeedback(
       "After answering, asking a question, refusing, or failing, write a temporary JSON file with kind (answer, question, refusal, or failure) and plain-text text. Record that response with the command below, replacing RESPONSE_FILE with its path:",
       `lucid connection respond '${conversationId}' --offer '${offerId}' --request RESPONSE_FILE --json`,
       "Artifact writes alone do not record the response outcome. A refused receipt or response leaves this offer held; inspect the reported reason before continuing.",
+      ...(transport.instructions ? [transport.instructions] : []),
       "</lucid-offer>",
     ].join("\n\n");
   } catch {

@@ -1,6 +1,8 @@
 import type { NativeListenerDeps, NativeListenerResult } from "../modes/native-listener.js";
 import { heldNativeFeedback, listenNativeFeedback } from "../modes/native-listener.js";
+import type { NativeFeedbackTransport } from "../modes/native-preparation.js";
 import { terminalPresence } from "../process-owner.js";
+import type { NativeInterface } from "../protocol/connection.js";
 import {
   currentReconnect,
   hasUnsettledNativeExecution,
@@ -18,7 +20,7 @@ import { nativeCommandAuthority } from "./native-context.js";
 import type { Conversations } from "./record-addressing.js";
 import { commandRecordDir } from "./record-addressing.js";
 
-interface CodexListenOptions {
+interface NativeListenOptions {
   readonly request: NativeListenRequest;
   readonly signal: AbortSignal;
   readonly source: "explicit" | "continuation";
@@ -27,6 +29,23 @@ interface CodexListenOptions {
 // Stop continuations retain Codex's default spill limit. Native acceptance established
 // complete delivery at 7,948 bytes; cap the entire encoded response below that bound.
 const CODEX_FEEDBACK_BYTES = 7_900;
+// Claude Code 2.1.274 delivered a 20,030-character Stop block reason intact in the isolated
+// native contract probe; cap the entire encoded response below that bound.
+const CLAUDE_FEEDBACK_BYTES = 19_900;
+
+/** Interfaces whose Stop continuation passed native acceptance. Others keep feedback saved. */
+const STOP_TRANSPORTS: Partial<Record<NativeInterface, NativeFeedbackTransport>> = {
+  "claude-cli": {
+    encode: (prompt) => JSON.stringify({ decision: "block", reason: prompt }),
+    instructions:
+      "Run each Lucid command in its own foreground Bash call. Lucid records receipt and response when that Bash call finishes and reports the result in the tool output.",
+    maxBytes: CLAUDE_FEEDBACK_BYTES,
+  },
+  "codex-cli": {
+    encode: (prompt) => JSON.stringify({ decision: "block", reason: prompt }),
+    maxBytes: CODEX_FEEDBACK_BYTES,
+  },
+};
 const UNVERIFIED_TRANSPORT = heldNativeFeedback(
   "transport-unverified",
   "This native interface has no verified feedback transport. Feedback remains saved.",
@@ -37,7 +56,7 @@ type ListenRequestResult =
   | Extract<NativeListenerResult, { kind: "held" }>;
 
 /** Select a record for the next Stop. This command neither waits nor grants readiness. */
-export function requestCodexListening(
+export function requestNativeListening(
   records: Conversations,
   conversationId: string,
   authority: RegistrationAuthority = nativeCommandAuthority(),
@@ -47,7 +66,7 @@ export function requestCodexListening(
     records.rootDir,
     undefined,
     (registration, access): ListenRequestResult => {
-      if (registration.interface !== "codex-cli") return UNVERIFIED_TRANSPORT;
+      if (!STOP_TRANSPORTS[registration.interface]) return UNVERIFIED_TRANSPORT;
       const state = viewConversation(dir).state;
       const binding = state.connection?.binding;
       if (!sameNativeTarget(binding, registration))
@@ -119,10 +138,10 @@ export function requestCodexListening(
   return result.ok ? result.value : heldNativeFeedback(result.reason, result.message);
 }
 
-export async function listenCodexFeedback(
+export async function listenStopFeedback(
   records: Conversations,
   conversationId: string,
-  options: CodexListenOptions,
+  options: NativeListenOptions,
   overrides: Partial<NativeListenerDeps> = {},
 ): Promise<NativeListenerResult> {
   const recordDir = commandRecordDir(records, conversationId);
@@ -134,7 +153,8 @@ export async function listenCodexFeedback(
     authority,
   );
   if (!verified.ok) return heldNativeFeedback(verified.reason, verified.message);
-  if (verified.value !== "codex-cli") return UNVERIFIED_TRANSPORT;
+  const transport = STOP_TRANSPORTS[verified.value];
+  if (!transport) return UNVERIFIED_TRANSPORT;
   return listenNativeFeedback(
     {
       recordDir,
@@ -142,10 +162,7 @@ export async function listenCodexFeedback(
       root: records.rootDir,
       signal: options.signal,
       source: options.source,
-      transport: {
-        encode: (prompt) => JSON.stringify({ decision: "block", reason: prompt }),
-        maxBytes: CODEX_FEEDBACK_BYTES,
-      },
+      transport,
     },
     { ...overrides, authority },
   );

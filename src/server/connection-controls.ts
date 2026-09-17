@@ -20,7 +20,10 @@ export function connectionControls(
               action,
               command: listeningCommand(root, connection.conversationId),
               label: "Resume listening instructions",
-              text: "Tell the already-open native session to run this command once, then finish its turn so its Stop hook can listen. A requested result is not yet a listening connection. Report a held result without retrying.",
+              text:
+                connection.interface === "claude-cli"
+                  ? `${connection.state === "closed" ? `No Claude Code session is open for this conversation. In its working folder, run claude --resume ${connection.nativeSessionId ?? ""} first. Then tell` : "Tell"} the Claude Code session to run this command once in its main conversation, not a subagent, then finish its turn so its Stop hook can listen. Lucid records the request when that Bash call finishes. A requested result is not yet a listening connection. Report a held result without retrying.`
+                  : "Tell the already-open native session to run this command once, then finish its turn so its Stop hook can listen. A requested result is not yet a listening connection. Report a held result without retrying.",
             },
           ];
         case "reconnect-instructions":
@@ -50,7 +53,10 @@ export function connectionControls(
               action,
               command: lucidCommand(root, ["connection", "setup", "--help"]),
               label: "Connection setup instructions",
-              text: "Read the retained reason above. Review the Codex hooks configuration source and trusted Lucid hooks. This help command makes no changes. Repair does not retry the held request or prove that a session is listening.",
+              text:
+                connection.interface === "claude-cli"
+                  ? "Read the retained reason above. Review the Claude Code settings file that holds the Lucid hooks and the project's workspace trust. This help command makes no changes. Repair does not retry the held request or prove that a session is listening."
+                  : "Read the retained reason above. Review the Codex hooks configuration source and trusted Lucid hooks. This help command makes no changes. Repair does not retry the held request or prove that a session is listening.",
             },
           ];
         default:

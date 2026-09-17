@@ -15,12 +15,15 @@ import { withNativeRegistration } from "../store/native-registration.js";
 import { presenceHeld } from "../store/presence.js";
 import { WorkingFolderError } from "../store/project-directory.js";
 import { nativeCommandAuthority } from "./native-context.js";
+import type { Conversations } from "./record-addressing.js";
 import { commandRecordDir, conversations, validConversationId } from "./record-addressing.js";
 
-interface PublicationConnection extends ConnectionStatus {
+export interface PublicationConnection extends ConnectionStatus {
   readonly attempt?: { readonly message: string; readonly reason: string };
   readonly persistence: "saved" | "unverified";
   readonly nativeSessionId?: string;
+  /** Claude Code commits the connection from the parent callback that reports this marker. */
+  readonly proposal?: string;
 }
 
 export interface PublicationResult {
@@ -57,11 +60,17 @@ export async function readPublicationRequest(path: string): Promise<unknown> {
   }
 }
 
+export type PublicationConnector = (
+  records: Conversations,
+  conversationId: string,
+) => PublicationConnection;
+
 /** Publication and connection have separate results. A connection failure cannot undo a document. */
 export async function publishArtifact(
   value: unknown,
   rootDir?: string,
   authority: RegistrationAuthority = nativeCommandAuthority(),
+  connector?: PublicationConnector,
 ): Promise<PublicationResult> {
   if (!object(value) || !object(value.artifact))
     throw new HubError("Expected a publication request with an artifact.", "E-HUB-03");
@@ -103,6 +112,10 @@ export async function publishArtifact(
       "E-HUB-03",
     );
   const records = conversations(rootDir);
+  const connect: PublicationConnector =
+    connector ??
+    ((target, conversationId) =>
+      connectPublication(target, conversationId, value.registration, authority));
   let id: string;
   if (typeof conversationId === "string") {
     id = conversationId;
@@ -131,12 +144,11 @@ export async function publishArtifact(
       throw cause;
     }
   }
-  let registration: NativeBinding | undefined;
   const host = openWriter(commandRecordDir(records, id), {
-    connectionAuthority: () =>
-      registration && authority.callerOwns(registration) === true ? registration : undefined,
+    connectionAuthority: () => undefined,
     ownerPresence: authority.ownerPresence,
   });
+  let closed = false;
   try {
     const requirement = host.recordNativePublication();
     if (requirement.verdict === "refused")
@@ -159,9 +171,37 @@ export async function publishArtifact(
       )
         throw new HubError(`Artifact publication refused: ${result.issue}.`, "E-HUB-03", 409);
     }
+    host.close();
+    closed = true;
+    const connection = connect(records, id);
+    return {
+      artifactUrl: `${url.origin}/c/${encodeURIComponent(id)}/${encodeURIComponent(params.artifactId)}`,
+      connection,
+      conversationId: id,
+      publication: { status: "published", version: params.version },
+    };
+  } finally {
+    if (!closed) host.close();
+  }
+}
+
+/** Bind a published conversation to the verified native registration and save any failure. */
+export function connectPublication(
+  records: Conversations,
+  conversationId: string,
+  reference: unknown,
+  authority: RegistrationAuthority,
+): PublicationConnection {
+  let registration: NativeBinding | undefined;
+  const host = openWriter(commandRecordDir(records, conversationId), {
+    connectionAuthority: () =>
+      registration && authority.callerOwns(registration) === true ? registration : undefined,
+    ownerPresence: authority.ownerPresence,
+  });
+  try {
     const connection = withNativeRegistration(
       records.rootDir,
-      value.registration,
+      reference,
       (binding) => {
         registration = binding;
         try {
@@ -186,38 +226,58 @@ export async function publishArtifact(
             now: Date.now(),
             ownerPresence: authority.ownerPresence,
           });
-    let publicationConnection: PublicationConnection = {
+    const publicationConnection: PublicationConnection = {
       ...status,
       persistence: "saved",
       ...(binding ? { nativeSessionId: binding.nativeSessionId } : {}),
     };
-    if (!connection.ok || connection.value.verdict === "refused") {
-      const attempt = {
-        message: status.message.slice(0, PUBLICATION_MESSAGE_MAX),
-        reason: status.reason ?? "connection-setup-required",
-      };
-      let saved = false;
-      try {
-        saved = host.recordNativePublication(attempt).verdict === "accepted";
-      } catch {
-        /* Artifact success is independent of diagnostic persistence. */
-      }
-      if (!saved)
-        publicationConnection = {
-          attempt,
-          message:
-            "The artifact was saved, but the connection result could not be recorded. Saved feedback remains held.",
-          persistence: "unverified",
-          reason: "connection-result-unrecorded",
-          state: "setup-required",
-        };
-    }
-    return {
-      artifactUrl: `${url.origin}/c/${encodeURIComponent(id)}/${encodeURIComponent(params.artifactId)}`,
-      connection: publicationConnection,
-      conversationId: id,
-      publication: { status: "published", version: params.version },
-    };
+    return !connection.ok || connection.value.verdict === "refused"
+      ? saveConnectionFailure(host, publicationConnection)
+      : publicationConnection;
+  } finally {
+    host.close();
+  }
+}
+
+/** A connection failure is saved beside the published document; saving it cannot undo publication. */
+function saveConnectionFailure(
+  host: ReturnType<typeof openWriter>,
+  status: PublicationConnection,
+): PublicationConnection {
+  const attempt = {
+    message: status.message.slice(0, PUBLICATION_MESSAGE_MAX),
+    reason: status.reason ?? "connection-setup-required",
+  };
+  try {
+    if (host.recordNativePublication(attempt).verdict === "accepted") return status;
+  } catch {
+    /* Artifact success is independent of diagnostic persistence. */
+  }
+  return {
+    attempt,
+    message:
+      "The artifact was saved, but the connection result could not be recorded. Saved feedback remains held.",
+    persistence: "unverified",
+    reason: "connection-result-unrecorded",
+    state: "setup-required",
+  };
+}
+
+/** Save a connection refusal found before binding was attempted. */
+export function refusePublicationConnection(
+  records: Conversations,
+  conversationId: string,
+  reason: string,
+  message: string,
+): PublicationConnection {
+  const host = openWriter(commandRecordDir(records, conversationId), {
+    connectionAuthority: () => undefined,
+  });
+  try {
+    return saveConnectionFailure(host, {
+      ...connectionFailure(reason, message),
+      persistence: "saved",
+    });
   } finally {
     host.close();
   }
