@@ -407,6 +407,14 @@ body {
   content: ".";
 }
 
+/* Kept before the dead-document mark rule, which is more specific. */
+.marks-pill .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent-400);
+}
+
 .doc-mark .word {
   font: 600 18px / 1 var(--font-heading);
   letter-spacing: -0.01em;
@@ -1088,13 +1096,6 @@ body {
   font: 400 12px / 1 var(--font-body);
   white-space: nowrap;
   cursor: pointer;
-}
-
-.marks-pill .dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--color-accent-400);
 }
 
 /* The guidance line, under the sheet on the ground. */
