@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdtempSync,
@@ -16,8 +17,10 @@ import { encodeAnnotationBatch } from "../../src/protocol/annotations.js";
 import { putBlob } from "../../src/store/blobs.js";
 import {
   closeNativeContextOffers,
+  nativeContextReadIssue,
   offerContext,
   offerProjectedContext,
+  readContextProgress,
   readOfferedContext,
 } from "../../src/store/context-offer.js";
 import { projectConversationContext } from "../../src/store/conversation-context.js";
@@ -301,6 +304,64 @@ test("settling one native offer preserves another offer and a different process 
   } finally {
     first.close();
     second.close();
+    rmSync(record, { force: true, recursive: true });
+  }
+});
+
+test("in-order reads record contiguous progress and doubtful progress counts as unread", () => {
+  const record = mkdtempSync(join(tmpdir(), "lucid-context-progress-"));
+  const owner = readProcessOwner(process.pid);
+  if (!owner) throw new Error("current process owner is unavailable");
+  const offerId = crypto.randomUUID();
+  const offered = offerContext(record, "0123456789", { offerId, owner });
+  try {
+    expect(nativeContextReadIssue(owner, offerId, 10)).toEqual({
+      kind: "context-unread",
+      nextOffset: 0,
+    });
+    // A read beyond the contiguous prefix is served but does not count.
+    expect(readOfferedContext(offered.path, 6, 4).text).toBe("6789");
+    expect(readContextProgress(offered.path)).toBe(0);
+    readOfferedContext(offered.path, 0, 4);
+    readOfferedContext(offered.path, 0, 4);
+    expect(readContextProgress(offered.path)).toBe(4);
+    readOfferedContext(offered.path, 4, 4);
+    expect(nativeContextReadIssue(owner, offerId, 10)).toEqual({
+      kind: "context-unread",
+      nextOffset: 8,
+    });
+    readOfferedContext(offered.path, 8, 4);
+    expect(nativeContextReadIssue(owner, offerId, 10)).toBeUndefined();
+    expect(nativeContextReadIssue(owner, offerId, 11)).toEqual({ kind: "context-missing" });
+    const context = join(offered.path, "context.txt");
+    const original = readFileSync(context);
+    writeFileSync(
+      context,
+      Buffer.concat([Buffer.from("LUCID_CONTEXT_V0\n"), original.subarray(17)]),
+    );
+    expect(nativeContextReadIssue(owner, offerId, 10)).toEqual({ kind: "context-missing" });
+    writeFileSync(context, original);
+    expect(nativeContextReadIssue(owner, crypto.randomUUID(), 10)).toEqual({
+      kind: "context-missing",
+    });
+
+    const progress = join(offered.path, "progress.json");
+    chmodSync(progress, 0o644);
+    expect(readContextProgress(offered.path)).toBe(0);
+    rmSync(progress);
+    writeFileSync(progress, "not json", { mode: 0o600 });
+    expect(readContextProgress(offered.path)).toBe(0);
+    rmSync(progress);
+    const elsewhere = join(record, "forged.json");
+    writeFileSync(elsewhere, JSON.stringify({ contiguous: 10 }), { mode: 0o600 });
+    symlinkSync(elsewhere, progress);
+    expect(readContextProgress(offered.path)).toBe(0);
+    expect(nativeContextReadIssue(owner, offerId, 10)).toEqual({
+      kind: "context-unread",
+      nextOffset: 0,
+    });
+  } finally {
+    offered.close();
     rmSync(record, { force: true, recursive: true });
   }
 });

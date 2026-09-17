@@ -1,6 +1,8 @@
 import type { NativeListenerDeps, NativeListenerResult } from "../modes/native-listener.js";
 import { heldNativeFeedback, listenNativeFeedback } from "../modes/native-listener.js";
+import type { NativeFeedbackTransport } from "../modes/native-preparation.js";
 import { terminalPresence } from "../process-owner.js";
+import type { NativeInterface } from "../protocol/connection.js";
 import {
   currentReconnect,
   hasUnsettledNativeExecution,
@@ -18,7 +20,7 @@ import { nativeCommandAuthority } from "./native-context.js";
 import type { Conversations } from "./record-addressing.js";
 import { commandRecordDir } from "./record-addressing.js";
 
-interface CodexListenOptions {
+interface NativeListenOptions {
   readonly request: NativeListenRequest;
   readonly signal: AbortSignal;
   readonly source: "explicit" | "continuation";
@@ -27,6 +29,40 @@ interface CodexListenOptions {
 // Stop continuations retain Codex's default spill limit. Native acceptance established
 // complete delivery at 7,948 bytes; cap the entire encoded response below that bound.
 const CODEX_FEEDBACK_BYTES = 7_900;
+// Claude Code 2.1.274 delivered a 20,030-character Stop block reason intact in the isolated
+// native contract probe; cap the entire encoded response below that bound.
+const CLAUDE_FEEDBACK_BYTES = 19_900;
+
+// Claude Code 2.1.274 returned `lucid context` output intact at 29,085 characters and replaced
+// it with a preview at 29,771 (artifacts/evidence/claude-cli-native/slice-probe.mjs). A byte
+// slice never prints more characters than bytes, so 24,000 keeps a 5,000-character margin.
+const CLAUDE_CONTEXT_SLICE = 24_000;
+const CONTEXT_SLICE_MIN = 4_096;
+
+/** Claude Code lowers its Bash output limit through BASH_MAX_OUTPUT_LENGTH; hooks inherit it. */
+export function claudeContextSlice(env: NodeJS.ProcessEnv): number | undefined {
+  const raw = env.BASH_MAX_OUTPUT_LENGTH;
+  if (raw === undefined || raw === "") return CLAUDE_CONTEXT_SLICE;
+  const limit = /^[0-9]+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(limit)) return undefined;
+  const slice = Math.min(CLAUDE_CONTEXT_SLICE, Math.floor(limit * 0.8));
+  return slice >= CONTEXT_SLICE_MIN ? slice : undefined;
+}
+
+/** Interfaces whose Stop continuation passed native acceptance. Others keep feedback saved. */
+const STOP_TRANSPORTS: Partial<Record<NativeInterface, NativeFeedbackTransport>> = {
+  "claude-cli": {
+    contextSlice: claudeContextSlice(process.env),
+    encode: (prompt) => JSON.stringify({ decision: "block", reason: prompt }),
+    instructions:
+      "Run each Lucid command in its own foreground Bash call. Lucid records receipt and response when that Bash call finishes and reports the result in the tool output.",
+    maxBytes: CLAUDE_FEEDBACK_BYTES,
+  },
+  "codex-cli": {
+    encode: (prompt) => JSON.stringify({ decision: "block", reason: prompt }),
+    maxBytes: CODEX_FEEDBACK_BYTES,
+  },
+};
 const UNVERIFIED_TRANSPORT = heldNativeFeedback(
   "transport-unverified",
   "This native interface has no verified feedback transport. Feedback remains saved.",
@@ -37,7 +73,7 @@ type ListenRequestResult =
   | Extract<NativeListenerResult, { kind: "held" }>;
 
 /** Select a record for the next Stop. This command neither waits nor grants readiness. */
-export function requestCodexListening(
+export function requestNativeListening(
   records: Conversations,
   conversationId: string,
   authority: RegistrationAuthority = nativeCommandAuthority(),
@@ -47,7 +83,7 @@ export function requestCodexListening(
     records.rootDir,
     undefined,
     (registration, access): ListenRequestResult => {
-      if (registration.interface !== "codex-cli") return UNVERIFIED_TRANSPORT;
+      if (!STOP_TRANSPORTS[registration.interface]) return UNVERIFIED_TRANSPORT;
       const state = viewConversation(dir).state;
       const binding = state.connection?.binding;
       if (!sameNativeTarget(binding, registration))
@@ -119,10 +155,10 @@ export function requestCodexListening(
   return result.ok ? result.value : heldNativeFeedback(result.reason, result.message);
 }
 
-export async function listenCodexFeedback(
+export async function listenStopFeedback(
   records: Conversations,
   conversationId: string,
-  options: CodexListenOptions,
+  options: NativeListenOptions,
   overrides: Partial<NativeListenerDeps> = {},
 ): Promise<NativeListenerResult> {
   const recordDir = commandRecordDir(records, conversationId);
@@ -134,7 +170,8 @@ export async function listenCodexFeedback(
     authority,
   );
   if (!verified.ok) return heldNativeFeedback(verified.reason, verified.message);
-  if (verified.value !== "codex-cli") return UNVERIFIED_TRANSPORT;
+  const transport = STOP_TRANSPORTS[verified.value];
+  if (!transport) return UNVERIFIED_TRANSPORT;
   return listenNativeFeedback(
     {
       recordDir,
@@ -142,10 +179,7 @@ export async function listenCodexFeedback(
       root: records.rootDir,
       signal: options.signal,
       source: options.source,
-      transport: {
-        encode: (prompt) => JSON.stringify({ decision: "block", reason: prompt }),
-        maxBytes: CODEX_FEEDBACK_BYTES,
-      },
+      transport,
     },
     { ...overrides, authority },
   );

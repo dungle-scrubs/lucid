@@ -12,6 +12,7 @@ not beside the instructions for current work.
 | Explain agent installation warnings or refusals | [Compatibility feedback](compatibility.md) |
 | Change harness selection or session recall | [Drivers](drivers.md) |
 | Publish and listen from an existing Codex CLI session | [Native Codex](native-codex.md) |
+| Publish and listen from an existing Claude Code session | [Native Claude Code](native-claude.md) |
 | Change documents, annotations, saves, or attachments | [Artifacts](artifacts.md) |
 | Understand a lasting tradeoff | [Architecture decisions](adr/README.md) |
 | Verify a change | [AGENTS](../AGENTS.md) and [smoke verification](smoke-seven.md) |

@@ -1,5 +1,8 @@
 # Active RFCs
 
+RFC 30 defines [native feedback context by reference](30_native-feedback-context-by-reference.rfc.md).
+It is accepted for implementation after two Muse review passes and amends RFC 26's transport-limit rule. Claude Code is measured and enabled; Codex keeps inline-only delivery until its own slice is measured.
+
 RFC 28 drafts the [Pi native extension bridge and strict session locators](28_pi-native-extension-bridge-and-strict-session-locators.rfc.md). It is parked with unresolved protocol review and a demonstrated native lookup/open race. Pi stays unavailable; the verified Codex lane continues independently.
 
 RFC 27 defines [native approvals during headless continuation](27_native-approvals-during-headless-continuation.rfc.md).
@@ -48,7 +51,7 @@ settings`). Its proposal and v1 review are preserved in the merge; current
 contracts live in [drivers](../drivers.md) for the store source and
 served choices.
 
-The highest allocated RFC number is **29**. The next RFC is **30**.
+The highest allocated RFC number is **30**. The next RFC is **31**.
 RFC 24 was allocated to Claude startup compatibility; RFC 25 is allocated to
 automatic recovery in concurrent work. Their numbers remain reserved.
 Never reset numbering because completed files have been removed. Before

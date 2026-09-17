@@ -2,11 +2,11 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { requestCodexListening } from "../../src/cli/codex-listener.js";
 import type { DispatchDeps } from "../../src/cli/dispatch.js";
 import { dispatch } from "../../src/cli/dispatch.js";
 import { captureCodexAuthor, runCodexHook } from "../../src/cli/hooks/codex.js";
 import { nativeCommandAuthority } from "../../src/cli/native-context.js";
+import { requestNativeListening } from "../../src/cli/native-listening.js";
 import { conversations } from "../../src/cli/record-addressing.js";
 import { readProcessOwner } from "../../src/process-owner.js";
 import type { ProcessOwner } from "../../src/protocol/process-owner.js";
@@ -145,7 +145,7 @@ test("a listening request checks other owners of the same native session across 
     }
     for (const present of [true, undefined]) {
       expect(
-        requestCodexListening(conversations(root), id, {
+        requestNativeListening(conversations(root), id, {
           callerOwns: deps.nativeAuthority.callerOwns,
           ownerPresence: (owner) => (owner.pid === 43210 ? present : true),
         }),
@@ -155,7 +155,7 @@ test("a listening request checks other owners of the same native session across 
       });
     }
     expect(
-      requestCodexListening(conversations(root), id, {
+      requestNativeListening(conversations(root), id, {
         callerOwns: deps.nativeAuthority.callerOwns,
         ownerPresence: (owner) => owner.pid !== 43210,
       }),

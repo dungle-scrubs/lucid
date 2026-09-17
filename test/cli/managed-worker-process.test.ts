@@ -164,7 +164,8 @@ test("worker death terminates its child and leaves one uncertain attempt without
   const child = Bun.spawn(f.argv, { env: f.env, stdout: "ignore", stderr: "ignore" });
   let nativePid: number | undefined;
   try {
-    for (let n = 0; n < 300; n++) {
+    // The worker spawns synthetic hcn processes before launch, which takes over a second.
+    for (const deadline = Date.now() + 10_000; Date.now() < deadline; ) {
       try {
         nativePid = JSON.parse(readFileSync(f.launches, "utf8").trim()).pid;
         break;
@@ -193,4 +194,4 @@ test("worker death terminates its child and leaves one uncertain attempt without
     if (nativePid !== undefined && alive(nativePid)) process.kill(nativePid, "SIGKILL");
     rmSync(f.root, { recursive: true, force: true });
   }
-});
+}, 20000);

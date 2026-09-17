@@ -1,6 +1,10 @@
 import { ARTIFACT_BYTES_MAX } from "../protocol/frames.js";
 import type { InteractiveResult } from "../protocol/native-interactive.js";
-import { closeFinishedNativeContextOffers, closeNativeContextOffers } from "./context-offer.js";
+import {
+  closeFinishedNativeContextOffers,
+  closeNativeContextOffers,
+  nativeContextReadIssue,
+} from "./context-offer.js";
 import { completeLegacyPreference, type DriverChoice } from "./driver-preference.js";
 import type { PresenceHandle } from "./presence.js";
 /**
@@ -1374,16 +1378,31 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
         else if (control.kind === "respond" && pending.kind === "finished")
           actionId = pending.outcomeActionId;
         else actionId = crypto.randomUUID();
-        return {
-          fact: {
-            actionId,
-            epoch: pending.offer.epoch,
-            kind: control.kind === "receipt" ? "receipt-confirmed" : "offer-outcome",
-            offerId: control.offerId,
-            participationId: pending.offer.participationId,
-            ...(control.kind === "respond" ? { outcome: control.outcome } : {}),
-          },
+        const fact = {
+          actionId,
+          epoch: pending.offer.epoch,
+          kind: control.kind === "receipt" ? "receipt-confirmed" : "offer-outcome",
+          offerId: control.offerId,
+          participationId: pending.offer.participationId,
+          ...(control.kind === "respond" ? { outcome: control.outcome } : {}),
         };
+        const delivery = pending.offer.delivery;
+        const parsed = delivery && pending.kind === "received" ? parseConnectionFact(fact) : null;
+        if (
+          delivery &&
+          parsed?.kind === "offer-outcome" &&
+          (parsed.outcome.kind === "answer" || parsed.outcome.kind === "question")
+        ) {
+          // Live guard only: answers and questions follow a complete in-order read of the
+          // offered copy. Refusal and failure always close the offer. Replay never reads copies.
+          const owner =
+            state.connection?.participations[pending.offer.participationId]?.registration.owner;
+          const issue = owner
+            ? nativeContextReadIssue(owner, control.offerId, delivery.bytes)
+            : ({ kind: "context-missing" } as const);
+          if (issue) return { issue: issue.kind };
+        }
+        return { fact };
       }),
     acquireExecutor: (request, acquire) => {
       if (nativeExecutor?.lease.held() || reconnectExecutor?.lease.held())

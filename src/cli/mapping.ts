@@ -16,7 +16,13 @@ import { validConversationId } from "../store/errors.js";
 export type MappedCommand =
   | { readonly kind: "reconnect"; readonly conversationId: string }
   | { readonly kind: "codex-hook"; readonly root?: string }
-  | { readonly kind: "connection-setup"; readonly hooksFile: string; readonly json: boolean }
+  | { readonly kind: "claude-hook"; readonly root?: string }
+  | {
+      readonly kind: "connection-setup";
+      readonly hooksFile: string;
+      readonly interface: "claude-cli" | "codex-cli";
+      readonly json: boolean;
+    }
   | { readonly kind: "connection-listen"; readonly conversationId: string; readonly json: boolean }
   | {
       readonly kind: "connection-control";
@@ -102,29 +108,50 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
               message:
                 "The Codex hook reads its native callback from stdin; --root selects its configured record root.",
             };
+    case "_claude-hook":
+      return rest.length === 0
+        ? { kind: "claude-hook" }
+        : rest.length === 2 && rest[0] === "--root" && rest[1]
+          ? { kind: "claude-hook", root: rest[1] }
+          : {
+              kind: "help",
+              message:
+                "The Claude Code hook reads its native callback from stdin; --root selects its configured record root.",
+            };
     case "connection": {
       const help = {
         kind: "help",
         message:
-          "usage: lucid connection setup --interface codex-cli --hooks-file FILE [--json]\nConfigure hooks in an explicit source file; native trust and listening are separate steps.\nlucid connection status CONVERSATION [--json]\nRead current native connection and ownership evidence.\nlucid connection resume-listen CONVERSATION [--json]\nRequest listening in the verified Codex CLI session and return immediately. Finish the native turn; its Stop hook waits up to 45 seconds for complete saved feedback. This acknowledgement does not mean listening has started. Expiry or interruption requires explicit resume-listen.\nlucid connection receipt CONVERSATION --offer OFFER [--json]\nRecord receipt from the verified native session that received the offer.\nlucid connection respond CONVERSATION --offer OFFER --request FILE [--json]\nRecord one answer, question, refusal, or failure after receipt. FILE contains {kind,text}. Repeating the same result is safe. lucid connection cancel-input CONVERSATION --input INPUT [--json]\nCancel saved feedback only before dispatch begins.\nThese commands do not start a native process.",
+          "usage: lucid connection setup --interface codex-cli --hooks-file FILE [--json]\nlucid connection setup --interface claude-cli --settings-file FILE [--json]\nConfigure hooks in an explicit source file; native trust and listening are separate steps.\nlucid connection status CONVERSATION [--json]\nRead current native connection and ownership evidence.\nlucid connection resume-listen CONVERSATION [--json]\nRequest listening in the verified Codex CLI or Claude Code session and return immediately. Finish the native turn; its Stop hook waits up to 45 seconds for complete saved feedback. This acknowledgement does not mean listening has started. Expiry or interruption requires explicit resume-listen.\nlucid connection receipt CONVERSATION --offer OFFER [--json]\nRecord receipt from the verified native session that received the offer.\nlucid connection respond CONVERSATION --offer OFFER --request FILE [--json]\nRecord one answer, question, refusal, or failure after receipt. FILE contains {kind,text}. Repeating the same result is safe. lucid connection cancel-input CONVERSATION --input INPUT [--json]\nCancel saved feedback only before dispatch begins.\nThese commands do not start a native process.",
       } as const;
       const id = rest[1];
       if (rest[0] === "setup") {
         const setupHelp = {
           kind: "help" as const,
           message:
-            "usage: lucid connection setup --interface codex-cli --hooks-file FILE [--json]\nConfigure Lucid in an explicit Codex hooks.json source file, preserving unrelated hooks. Review and trust changed hooks in Codex /hooks; a later SessionStart registers the native session. This command does not start a native process or establish listening readiness.",
+            "usage: lucid connection setup --interface codex-cli --hooks-file FILE [--json]\nConfigure Lucid in an explicit Codex hooks.json source file, preserving unrelated hooks. Review and trust changed hooks in Codex /hooks; a later SessionStart registers the native session.\nlucid connection setup --interface claude-cli --settings-file FILE [--json]\nConfigure Lucid in an explicit Claude Code settings.json source file, preserving unrelated settings and hooks. Accept workspace trust, then start a new session or run /clear so SessionStart registers it.\nThese commands do not start a native process or establish listening readiness.",
         };
+        const fileFlag =
+          rest[2] === "codex-cli"
+            ? "--hooks-file"
+            : rest[2] === "claude-cli"
+              ? "--settings-file"
+              : null;
         if (
           rest[1] !== "--interface" ||
-          rest[2] !== "codex-cli" ||
-          rest[3] !== "--hooks-file" ||
+          fileFlag === null ||
+          rest[3] !== fileFlag ||
           !rest[4] ||
           rest[4].startsWith("--") ||
           (rest.length !== 5 && !(rest.length === 6 && rest[5] === "--json"))
         )
           return setupHelp;
-        return { kind: "connection-setup", hooksFile: rest[4], json: rest[5] === "--json" };
+        return {
+          kind: "connection-setup",
+          hooksFile: rest[4],
+          interface: rest[2] as "claude-cli" | "codex-cli",
+          json: rest[5] === "--json",
+        };
       }
       if (rest[0] === "resume-listen") {
         if (

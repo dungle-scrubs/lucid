@@ -237,7 +237,11 @@ accounting before dispatch.
 An offered copy lives in a private temporary directory outside the record.
 `lucid context <offered-directory> [--offset BYTE] [--bytes COUNT] [--json]`
 reads that copy directly, without HTTP or record access. Each read returns at
-most 65,536 bytes on UTF-8 boundaries, with nextOffset and done. Keep the copy
+most 65,536 bytes on UTF-8 boundaries, with nextOffset and done. Each read that starts
+within the prefix already read in order extends that prefix in a private
+`progress.json`; other reads are served and do not count. A native
+reference offer uses this record to refuse an answer before its copy was
+read to the end. Keep the copy
 for the active execution and remove it when that execution closes.
 Use its attachmentsDir with the existing attachment delivery operation so
 both copies share one lifetime. Copies carry process provenance in their

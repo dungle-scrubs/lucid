@@ -72,6 +72,10 @@ export interface DispatchDeps {
   readonly serveFn?: (opts: ServeOpts) => Promise<void>;
   readonly announceFn?: (stdin: string) => Promise<AnnounceResult>;
   readonly codexHookFn?: typeof import("./hooks/codex.js").runCodexHook;
+  readonly claudeHookFn?: typeof import("./hooks/claude.js").runClaudeHook;
+  /** Claude Code session reported to a tool command; null disables detection. Defaults to the
+   * environment unless a test injects `nativeAuthority`. */
+  readonly claudeSession?: string | null;
   readonly injectFn?: (stdin: string) => Promise<InjectResult>;
   readonly readStdinFn?: () => Promise<string>;
   /** Sink for help / confirmation lines — defaults to `console.log` in `runCli`. */
@@ -101,9 +105,10 @@ export type DispatchResult =
       readonly exitCode: number;
     }
   | { readonly kind: "codex-hook" }
-  | { readonly kind: "connection-listen"; readonly verdict: "requested" | "held" }
+  | { readonly kind: "claude-hook" }
+  | { readonly kind: "connection-listen"; readonly verdict: "requested" | "held" | "pending" }
   | { readonly kind: "connection-setup"; readonly verdict: "installed" | "unchanged" | "refused" }
-  | { readonly kind: "connection-control"; readonly verdict: "accepted" | "refused" }
+  | { readonly kind: "connection-control"; readonly verdict: "accepted" | "refused" | "pending" }
   | { readonly kind: "connection-status" }
   | { readonly kind: "artifact-publish" }
   | { readonly kind: "hcn-supervisor" }
@@ -172,9 +177,11 @@ export const dispatch = async (
     };
   }
   if (mapped.kind === "connection-setup") {
-    const { setupCodexHooks } = await import("./codex-setup.js");
     const records = (deps.conversationsFactory ?? conversations)(deps.rootDir);
-    const result = setupCodexHooks(records.rootDir, mapped.hooksFile);
+    const result =
+      mapped.interface === "claude-cli"
+        ? (await import("./claude-setup.js")).setupClaudeHooks(records.rootDir, mapped.hooksFile)
+        : (await import("./codex-setup.js")).setupCodexHooks(records.rootDir, mapped.hooksFile);
     (deps.onOutput ?? console.log)(mapped.json ? JSON.stringify(result) : result.message);
     return { kind: "connection-setup", verdict: result.status };
   }
@@ -197,10 +204,50 @@ export const dispatch = async (
       );
     return { kind: "codex-hook" };
   }
+  if (mapped.kind === "claude-hook") {
+    const { runClaudeHook } = await import("./hooks/claude.js");
+    const records = (deps.conversationsFactory ?? conversations)(mapped.root ?? deps.rootDir);
+    let payload: unknown;
+    try {
+      payload = JSON.parse(await (deps.readStdinFn ?? readStdin)());
+    } catch {
+      payload = null;
+    }
+    const result = await (deps.claudeHookFn ?? runClaudeHook)(records, payload, {
+      signal: deps.signal ?? new AbortController().signal,
+    });
+    const output = deps.onOutput ?? console.log;
+    if (result.kind === "offered") output(result.payload);
+    if (result.kind === "committed")
+      output(
+        JSON.stringify({
+          hookSpecificOutput: { additionalContext: result.context, hookEventName: "PostToolUse" },
+        }),
+      );
+    if (result.kind === "notice") output(JSON.stringify({ systemMessage: result.message }));
+    if (result.kind === "held")
+      (deps.onStderr ?? ((line: string) => process.stderr.write(line)))(
+        `${result.reason}: ${result.message}\n`,
+      );
+    return { kind: "claude-hook" };
+  }
   if (mapped.kind === "connection-listen") {
-    const { requestCodexListening } = await import("./codex-listener.js");
+    const claudeSession = await commandClaudeSession(deps);
     const records = (deps.conversationsFactory ?? conversations)(deps.rootDir);
-    const result = requestCodexListening(records, mapped.conversationId, deps.nativeAuthority);
+    if (claudeSession) {
+      const { proposeClaudeOperation } = await import("./claude-commands.js");
+      const result = proposeClaudeOperation(records, claudeSession, {
+        conversationId: mapped.conversationId,
+        kind: "listen",
+      });
+      (deps.onOutput ?? console.log)(proposalOutput(result, mapped.json));
+      return {
+        kind: "connection-listen",
+        verdict: result.verdict === "pending" ? "pending" : "held",
+      };
+    }
+    const { requestNativeListening } = await import("./native-listening.js");
+    const result = requestNativeListening(records, mapped.conversationId, deps.nativeAuthority);
     (deps.onOutput ?? console.log)(mapped.json ? JSON.stringify(result) : result.message);
     return { kind: "connection-listen", verdict: result.kind };
   }
@@ -223,6 +270,27 @@ export const dispatch = async (
         };
         break;
     }
+    const claudeSession = control.kind === "cancel-input" ? null : await commandClaudeSession(deps);
+    if (claudeSession && control.kind !== "cancel-input") {
+      const { proposeClaudeOperation } = await import("./claude-commands.js");
+      const result = proposeClaudeOperation(
+        records,
+        claudeSession,
+        control.kind === "receipt"
+          ? { conversationId: mapped.conversationId, kind: "receipt", offerId: control.offerId }
+          : {
+              conversationId: mapped.conversationId,
+              kind: "respond",
+              offerId: control.offerId,
+              outcome: control.outcome,
+            },
+      );
+      (deps.onOutput ?? console.log)(proposalOutput(result, mapped.json));
+      return {
+        kind: "connection-control",
+        verdict: result.verdict === "pending" ? "pending" : "refused",
+      };
+    }
     const result = runConnectionControl(
       records,
       mapped.conversationId,
@@ -241,13 +309,21 @@ export const dispatch = async (
   }
   if (mapped.kind === "artifact-publish") {
     const { publishArtifact, readPublicationRequest } = await import("./artifact-publish.js");
+    const claudeSession = await commandClaudeSession(deps);
     const result = await publishArtifact(
       await readPublicationRequest(mapped.request),
       deps.rootDir,
       deps.nativeAuthority,
+      claudeSession
+        ? (await import("./claude-commands.js")).claudePublicationConnector(claudeSession)
+        : undefined,
     );
     (deps.onOutput ?? console.log)(
-      mapped.json ? JSON.stringify(result) : `${result.artifactUrl}\n${result.connection.message}`,
+      mapped.json
+        ? JSON.stringify(result)
+        : [result.artifactUrl, result.connection.message, result.connection.proposal]
+            .filter(Boolean)
+            .join("\n"),
     );
     return { kind: "artifact-publish" };
   }
@@ -439,3 +515,19 @@ export const runCli = async (
   else if (result.kind === "await") out(result.resumeInstruction);
   return result;
 };
+
+/** The proposal marker must reach stdout: the parent PostToolUse callback commits what it names. */
+function proposalOutput(
+  result: import("./claude-commands.js").ClaudeProposalResult,
+  json: boolean,
+): string {
+  if (json) return JSON.stringify(result);
+  return result.verdict === "pending" ? `${result.message}\n${result.proposal}` : result.message;
+}
+
+/** Only native authoring commands resolve a Claude Code session; other commands never load it. */
+async function commandClaudeSession(deps: DispatchDeps): Promise<string | null | undefined> {
+  if (deps.claudeSession !== undefined) return deps.claudeSession;
+  if (deps.nativeAuthority) return null;
+  return (await import("./claude-commands.js")).claudeCommandSession();
+}

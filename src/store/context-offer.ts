@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   openSync,
   readdirSync,
+  readFileSync,
   readSync,
   realpathSync,
   rmSync,
@@ -18,6 +19,7 @@ import { ownerPresence, readProcessOwner } from "../process-owner.js";
 import { detectAnnotationBatch, filesOf } from "../protocol/annotations.js";
 import type { ConnectionState } from "../protocol/connection.js";
 import type { ProcessOwner } from "../protocol/process-owner.js";
+import { atomicSidecar } from "./atomic-file.js";
 import { hashBlob } from "./blobs.js";
 import type { ConversationContext } from "./conversation-context.js";
 import { ContextPreparationError, renderConversationContext } from "./conversation-context.js";
@@ -256,9 +258,9 @@ export function readOfferedContext(
   )
     throw new ContextPreparationError("Invalid offered context range or directory");
   const directory = lstatSync(path);
-  if (!isPrivateDirectory(directory))
+  if (!isPrivateDirectory(directory) || directory.uid !== process.getuid?.())
     throw new ContextPreparationError(
-      "The context directory must be a private, ordinary directory",
+      "The context directory must be a private, ordinary directory owned by this user",
     );
   const canonical = realpathSync(path);
   const file = join(canonical, FILE);
@@ -270,6 +272,7 @@ export function readOfferedContext(
       !stat.isFile() ||
       stat.nlink !== 1 ||
       (stat.mode & 0o077) !== 0 ||
+      stat.uid !== process.getuid?.() ||
       realpathSync(resolve(path)) !== canonical ||
       currentDirectory.dev !== directory.dev ||
       currentDirectory.ino !== directory.ino
@@ -290,6 +293,7 @@ export function readOfferedContext(
           buffer.subarray(0, bytes - trim),
         );
         const nextOffset = offset + bytes - trim;
+        recordReadProgress(canonical, offset, nextOffset);
         return { done: nextOffset === stat.size - HEADER.length, nextOffset, text };
       } catch {
         /* A trailing character may need the next slice. */
@@ -299,4 +303,103 @@ export function readOfferedContext(
   } finally {
     closeSync(fd);
   }
+}
+
+const PROGRESS = "progress.json";
+const PROGRESS_BYTES_MAX = 256;
+
+/** Bytes of context text read in order from offset 0. Any doubtful progress file counts as 0. */
+export function readContextProgress(path: string): number {
+  let fd: number;
+  try {
+    const directory = lstatSync(path);
+    if (!isPrivateDirectory(directory) || directory.uid !== process.getuid?.()) return 0;
+    fd = openSync(join(path, PROGRESS), constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch {
+    return 0;
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (
+      !stat.isFile() ||
+      stat.nlink !== 1 ||
+      (stat.mode & 0o777) !== 0o600 ||
+      stat.uid !== process.getuid?.() ||
+      stat.size > PROGRESS_BYTES_MAX
+    )
+      return 0;
+    const raw: unknown = JSON.parse(readFileSync(fd, "utf8"));
+    const contiguous =
+      raw !== null && typeof raw === "object" ? (raw as { contiguous?: unknown }).contiguous : null;
+    return typeof contiguous === "number" && Number.isSafeInteger(contiguous) && contiguous >= 0
+      ? contiguous
+      : 0;
+  } catch {
+    return 0;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** A read that starts beyond the contiguous prefix is served but does not extend it. */
+function recordReadProgress(path: string, offset: number, nextOffset: number): void {
+  const contiguous = readContextProgress(path);
+  if (offset > contiguous || nextOffset <= contiguous) return;
+  try {
+    atomicSidecar(join(path, PROGRESS), { contiguous: nextOffset });
+  } catch {
+    process.emitWarning("Offered context read progress could not be recorded", {
+      code: "LUCID_CONTEXT_PROGRESS",
+    });
+  }
+}
+
+export type NativeContextReadIssue =
+  | { readonly kind: "context-missing" }
+  | { readonly kind: "context-unread"; readonly nextOffset: number };
+
+/** Live check for a reference offer: its one copy exists, has the offered size, and was read in order. */
+export function nativeContextReadIssue(
+  owner: ProcessOwner,
+  offerId: string,
+  bytes: number,
+): NativeContextReadIssue | undefined {
+  const missing = { kind: "context-missing" } as const;
+  let root: string;
+  let names: string[];
+  try {
+    root = realpathSync(tmpdir());
+    const prefix = `lucid-context-offer-${contextScope(owner, offerId)}-`;
+    names = readdirSync(root).filter((name) => name.startsWith(prefix));
+  } catch {
+    return missing;
+  }
+  const [name] = names;
+  if (names.length !== 1 || name === undefined) return missing;
+  const path = join(root, name);
+  try {
+    const directory = lstatSync(path);
+    if (!isPrivateDirectory(directory) || directory.uid !== process.getuid?.()) return missing;
+    const file = lstatSync(join(path, FILE));
+    if (
+      !file.isFile() ||
+      file.nlink !== 1 ||
+      (file.mode & 0o077) !== 0 ||
+      file.uid !== process.getuid?.() ||
+      file.size - HEADER.length !== bytes
+    )
+      return missing;
+    const fd = openSync(join(path, FILE), constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const header = Buffer.alloc(HEADER.length);
+      if (readSync(fd, header, 0, header.length, 0) !== header.length || !header.equals(HEADER))
+        return missing;
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return missing;
+  }
+  const contiguous = readContextProgress(path);
+  return contiguous >= bytes ? undefined : { kind: "context-unread", nextOffset: contiguous };
 }
