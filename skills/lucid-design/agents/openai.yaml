@@ -1,0 +1,5 @@
+interface:
+  display_name: "Lucid Design"
+  short_description: "Design the content, navigation, and visuals of a Lucid artifact"
+policy:
+  allow_implicit_invocation: true

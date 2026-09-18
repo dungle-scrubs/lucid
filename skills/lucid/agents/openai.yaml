@@ -1,0 +1,5 @@
+interface:
+  display_name: "Lucid"
+  short_description: "Publish a response as a reviewable HTML artifact in a Lucid conversation"
+policy:
+  allow_implicit_invocation: true
