@@ -1,4 +1,4 @@
-{"kind":"identity","sessionId":"ba249f9b-7f8f-45d7-b64a-dd29c466fede","authority":"harness-minted","capabilities":{"vision":true,"images":true,"streaming":"token","session":true,"source":"curated","confidence":"medium","escalation":{"supported":true,"source":"runtime-verified","confidence":"high","observedOn":{"harness":"claude","model":"sonnet","version":"2.1.274","date":"2026-09-17"}}}}
+{"kind":"identity","sessionId":"d53db26e-6348-4ff6-90b0-6b3789f50936","authority":"harness-minted","capabilities":{"vision":true,"images":true,"streaming":"token","session":true,"source":"curated","confidence":"medium","escalation":{"supported":true,"source":"runtime-verified","confidence":"high","observedOn":{"harness":"claude","model":"sonnet","version":"2.1.274","date":"2026-09-17"}}}}
 {"kind":"progress","label":"hook_started"}
 {"kind":"progress","label":"hook_started"}
 {"kind":"progress","label":"hook_started"}
