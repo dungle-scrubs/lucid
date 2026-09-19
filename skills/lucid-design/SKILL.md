@@ -32,7 +32,7 @@ For emission and revision syntax, read the sibling `lucid/SKILL.md`.
 8. Make new reading artifacts adaptive by default. Use the
    [verified example](examples/adaptive-reading.html) for both palettes and
    serialization-safe SVG/canvas colors. Follow the
-   [runtime appearance contract](../../docs/artifacts.md#application-and-artifact-appearance)
+   [runtime appearance contract](https://github.com/dungle-scrubs/lucid/blob/main/docs/artifacts.md#application-and-artifact-appearance)
    for declarations, native media-query selection, and saved-content rules.
    Explicit user or subject-design requirements can select a fixed theme.
    Your colors and typography remain the document's design.
