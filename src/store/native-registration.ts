@@ -285,8 +285,7 @@ export function withNativeRegistration<TValue>(
       if (owns === undefined) unknown = true;
       if (owns === true) matches.push(registration);
     }
-    if (unknown)
-      // An unverified registration cannot be proved unrelated to the caller.
+    if (unknown && matches.length === 0)
       return failure("owner-unknown", "The calling native session could not be verified.");
     if (matches.length > 1)
       return failure(

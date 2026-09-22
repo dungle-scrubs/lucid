@@ -224,6 +224,33 @@ test("native registration requires positive session proof and returns the exact 
   }
 });
 
+test("a verified match binds when an unrelated registration cannot be verified", () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-registration-unknown-unrelated-"));
+  try {
+    for (const pid of [123, 456]) {
+      const registered = registerNativeSession(
+        root,
+        {
+          harness: "codex",
+          interface: "codex-cli",
+          nativeSessionId: `native-${pid}`,
+          owner: { executable: "/native/codex", pid, startedAt: `${pid}:1` },
+          workingDirectory: root,
+        },
+        { callerOwns: () => true, ownerPresence: () => true },
+      );
+      expect(registered.ok).toBe(true);
+    }
+    const result = withNativeRegistration(root, undefined, (binding) => binding.nativeSessionId, {
+      callerOwns: (capture) => (capture.owner.pid === 456 ? true : undefined),
+      ownerPresence: () => true,
+    });
+    expect(result).toEqual({ ok: true, value: "native-456" });
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test("connection distinguishes registration contention from a failed record operation", () => {
   const root = mkdtempSync(join(tmpdir(), "lucid-registration-errors-"));
   const authority = { callerOwns: () => true, ownerPresence: () => true };
