@@ -111,6 +111,7 @@ import { NativeInputControlsProvider } from "./native-input-controls.js";
 import { NativeInputDelivery } from "./native-input-delivery.js";
 import { NoteAnchorHelp } from "./note-anchor-help.js";
 import { NotePopover } from "./note-popover.js";
+import { pastedFilesFromData } from "./paste-files.js";
 import {
   readingPlaceKey,
   readReadingPlace,
@@ -690,6 +691,9 @@ const Message = (): React.ReactElement => {
  *
  * `ScrollToBottom` is its affordance for getting back, and it hides itself
  * when you are already there. */
+const pastedFiles = (e: React.ClipboardEvent): File[] =>
+  pastedFilesFromData(e.clipboardData ?? null);
+
 /** A file attached to the message being written. Stored already - the hash
  * is the record's, not the page's - so the page holds a reference and a URL
  * to show it by, never a second copy of the bytes. */
@@ -916,6 +920,7 @@ const Thread = ({
   uploading,
   refusals,
   onAttach,
+  onAttachFiles,
   onRemoveAttachment,
   onDismissRefusal,
   driver,
@@ -957,6 +962,7 @@ const Thread = ({
   uploading: readonly Uploading[];
   refusals: readonly Refusal[];
   onAttach: (files: FileList) => void;
+  onAttachFiles: (files: readonly File[]) => void;
   onRemoveAttachment: (hash: string) => void;
   onDismissRefusal: (id: string) => void;
   /** What is driving, for the driver line docked under the composer
@@ -1199,7 +1205,16 @@ const Thread = ({
             }
             rows={2}
             aria-label={interactive ? "Interject" : "Message"}
-            title="Enter to send; Shift+Enter for a new line"
+            title="Enter to send; Shift+Enter for a new line. Paste images or files to attach them"
+            onPaste={(e) => {
+              // assistant-ui's own paste path needs an attachments adapter
+              // the external store does not provide, so lucid handles the
+              // files itself.
+              const files = pastedFiles(e);
+              if (files.length === 0) return;
+              e.preventDefault();
+              onAttachFiles(files);
+            }}
           />
           <div className="composer-toolbar">
             {interactive ? null : (
@@ -3069,14 +3084,14 @@ const App = (): React.ReactElement => {
    * bytes have landed. */
   const storeFiles = React.useCallback(
     async (
-      files: FileList,
+      files: FileList | readonly File[],
       onRefusal: (name: string | null, reason: string) => void,
       onSettled: (at: number) => void,
     ): Promise<readonly Attached[]> => {
       if (token === null || conversationId === "") return [];
       const out: Attached[] = [];
       for (let at = 0; at < files.length; at += 1) {
-        const file = files.item(at);
+        const file = files instanceof FileList ? files.item(at) : (files[at] ?? null);
         if (file === null) continue;
         try {
           const res = await fetch(
@@ -3132,7 +3147,7 @@ const App = (): React.ReactElement => {
   );
 
   const attachToNote = React.useCallback(
-    async (files: FileList): Promise<void> => {
+    async (files: FileList | readonly File[]): Promise<void> => {
       const chips = Array.from(files).map((f, i) => ({ id: `n${i}`, name: f.name, bytes: f.size }));
       setNoteUploading((prev) => [...prev, ...chips]);
       const stored = await storeFiles(files, addNoteRefusal, (at) => {
@@ -3156,7 +3171,7 @@ const App = (): React.ReactElement => {
   }, []);
 
   const attachFiles = React.useCallback(
-    async (files: FileList): Promise<void> => {
+    async (files: FileList | readonly File[]): Promise<void> => {
       const chips = Array.from(files).map((f, i) => ({ id: `u${i}`, name: f.name, bytes: f.size }));
       setUploading((prev) => [...prev, ...chips]);
       const stored = await storeFiles(files, addRefusal, (at) => {
@@ -4191,7 +4206,13 @@ const App = (): React.ReactElement => {
                                     void addNote();
                                   }
                                 }}
-                                placeholder={`What about ${selection.length === 1 ? "this" : `these ${selection.length}`}? (⌘⏎ to add)`}
+                                onPaste={(e) => {
+                                  const files = pastedFiles(e);
+                                  if (files.length === 0) return;
+                                  e.preventDefault();
+                                  void attachToNote(files);
+                                }}
+                                placeholder={`What about ${selection.length === 1 ? "this" : `these ${selection.length}`}? (⌘⏎ to add. Paste images or files to attach them)`}
                                 rows={3}
                               />
                               {noteFiles.length + noteUploading.length + noteRefusals.length ===
@@ -4379,6 +4400,7 @@ const App = (): React.ReactElement => {
                         uploading={uploading}
                         refusals={refusals}
                         onAttach={(files) => void attachFiles(files)}
+                        onAttachFiles={(files) => void attachFiles(files)}
                         onRemoveAttachment={removeAttachment}
                         onDismissRefusal={(id) =>
                           setRefusals((prev) => prev.filter((r) => r.id !== id))
