@@ -146,6 +146,17 @@ const eventText = (event: Record<string, unknown>): string => {
   if ((kind === EventKind.error || kind === EventKind.limit) && typeof event.message === "string")
     return `${kind === EventKind.error ? "✗" : "!"} ${event.message}`;
   if (kind === EventKind.progress && typeof event.label === "string") return `… ${event.label}`;
+  if (kind === EventKind.compaction && typeof event.state === "string") {
+    // The harness replaced earlier turns with a summary. A reader who sees
+    // only a pause cannot tell that from a slow model, so name the state and
+    // carry the token counts when the harness reported them.
+    const c = event as { state?: unknown; tokensBefore?: unknown; tokensAfter?: unknown };
+    const counts =
+      typeof c.tokensBefore === "number" && typeof c.tokensAfter === "number"
+        ? ` ${c.tokensBefore} → ${c.tokensAfter} tokens`
+        : "";
+    return `⇄ compaction ${String(c.state)}${counts}`;
+  }
   if (kind === EventKind.failure) {
     // The harness naming what went wrong. The message carries the reason;
     // when a limit lifts, that is the one fact a reader can act on - until

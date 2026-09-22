@@ -105,6 +105,7 @@ const eventEntry = (row: TranscriptEvent): ContextEntry | null => {
     e.kind === EventKind.identity ||
     e.kind === EventKind.done ||
     e.kind === EventKind.context ||
+    e.kind === EventKind.compaction ||
     e.kind === EventKind.progress
   )
     return null;

@@ -303,3 +303,34 @@ test("historical HCN refusal prose is replaced at presentation without rewriting
   expect(JSON.stringify(view)).not.toContain("synthetic-private-stderr");
   expect(JSON.stringify(transcript)).toBe(before);
 });
+
+describe("compaction (hcn ADR 0009)", () => {
+  test("a compaction event renders a readable line carrying the harness's own token counts", () => {
+    const view = buildView({
+      transcript: {
+        aborted: [],
+        inputs: [],
+        events: [
+          { seq: 1, epoch: 1, turnId: "t", event: { kind: "compaction", state: "started" } },
+          {
+            seq: 2,
+            epoch: 1,
+            turnId: "t",
+            event: {
+              kind: "compaction",
+              state: "compacted",
+              trigger: "auto",
+              tokensBefore: 42375,
+              tokensAfter: 1793,
+            },
+          },
+        ],
+      } as unknown as Parameters<typeof buildView>[0]["transcript"],
+      status: { state: "attached" } as unknown as Parameters<typeof buildView>[0]["status"],
+      rung: "hooks",
+      draft: "",
+    });
+    const texts = view.lines.filter((l) => l.event === "compaction").map((l) => l.text);
+    expect(texts).toEqual(["⇄ compaction started", "⇄ compaction compacted 42375 → 1793 tokens"]);
+  });
+});

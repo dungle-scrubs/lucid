@@ -46,3 +46,11 @@ describe("event classes + coalescing (M4.3)", () => {
     expect(pending).toEqual([{ turnId: "t-2", event: { kind: "token", text: "x" } }]);
   });
 });
+
+describe("compaction (hcn ADR 0009)", () => {
+  test("compaction is lossless, so backpressure never drops a boundary", () => {
+    expect(classOfEventKind(EventKind.compaction)).toBe("lossless");
+    expect(LOSSLESS_KINDS).toContain(EventKind.compaction);
+    expect(DROPPABLE_KINDS).not.toContain(EventKind.compaction);
+  });
+});
