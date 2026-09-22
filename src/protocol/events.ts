@@ -51,6 +51,12 @@ export const EventKind = {
    * conversation that stops - and it was already treated that way, because
    * an unknown kind defaults to lossless. */
   question: "question",
+  /** The harness compacted its own context: a state, and the token counts
+   * and trigger the harness itself reported. hcn ADR 0009. Lossless - the
+   * boundary cannot be rebuilt from anything else on the stream, and a
+   * caller that missed it does not know its earlier turns were replaced by
+   * a summary. */
+  compaction: "compaction",
   /** The harness naming what went wrong with a turn: class, reason, and
    * when a limit lifts. Lossless - a failure nobody sees reads as the
    * agent going quiet. */
@@ -66,6 +72,7 @@ export const EVENT_CLASS = {
   "approval-cleared": "lossless",
   "approval-disposition": "lossless",
   "approval-request": "lossless",
+  compaction: "lossless",
   context: "droppable",
   done: "lossless",
   error: "lossless",

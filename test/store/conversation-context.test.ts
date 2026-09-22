@@ -194,3 +194,55 @@ test("a fresh continuation retains interrupted output and failure evidence witho
   expect(JSON.stringify(context)).toContain("Worker lost");
   expect(JSON.stringify(context)).toContain("E_CHILD");
 });
+
+test("a compaction event is not conversation content, and never fails context preparation", () => {
+  // hcn ADR 0009 added the `compaction` kind. Before lucid listed it, this
+  // projector threw on it, so an hcn release emitting it broke context
+  // preparation on exactly the harnesses lucid drives. The kind reports that
+  // the harness replaced earlier turns with a summary; it carries no text a
+  // reader contributed, so it projects to nothing.
+  const context = projectConversationContext({
+    artifacts: [],
+    from: 0,
+    through: 5,
+    pendingInputId: "now",
+    transcript: {
+      aborted: [],
+      inputs: [{ seq: 1, id: "now", text: "Carry on", mode: "queue", status: "outstanding" }],
+      events: [
+        {
+          seq: 2,
+          epoch: 1,
+          turnId: "t",
+          event: { kind: "compaction", state: "started" },
+        },
+        {
+          seq: 3,
+          epoch: 1,
+          turnId: "t",
+          event: {
+            kind: "compaction",
+            state: "compacted",
+            trigger: "auto",
+            tokensBefore: 42375,
+            tokensAfter: 1793,
+            durationMs: 25052,
+            detail: "never-project-me",
+          },
+        },
+        {
+          seq: 4,
+          epoch: 1,
+          turnId: "t",
+          event: { kind: "message", role: "assistant", text: "Still here" },
+        },
+      ],
+    },
+  });
+  // Only the assistant message survives: both compaction events project to
+  // nothing. The pending input is not history, it is the request being made.
+  expect(context.history.map((entry) => entry.id)).toEqual(["event:4"]);
+  expect(context.pending).toMatchObject({ id: "input:now", text: "Carry on" });
+  expect(JSON.stringify(context)).not.toContain("never-project-me");
+  expect(JSON.stringify(context)).not.toContain("compaction");
+});

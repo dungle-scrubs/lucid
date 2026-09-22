@@ -45,6 +45,15 @@ export type HarnessEvent =
   | { readonly kind: typeof EventKind.progress; readonly label: string }
   | { readonly kind: typeof EventKind.tool; readonly name: string; readonly input?: unknown }
   | { readonly kind: typeof EventKind.context; readonly usedPct: number }
+  | {
+      readonly kind: typeof EventKind.compaction;
+      readonly state: string;
+      readonly trigger?: string;
+      readonly tokensBefore?: number;
+      readonly tokensAfter?: number;
+      readonly durationMs?: number;
+      readonly detail?: string;
+    }
   | { readonly kind: typeof EventKind.limit; readonly code: string; readonly message: string }
   | { readonly kind: typeof EventKind.error; readonly message: string; readonly terminal?: boolean }
   | ({ readonly kind: typeof EventKind.failure } & HarnessFailure)
