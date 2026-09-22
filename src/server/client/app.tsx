@@ -61,6 +61,8 @@ import {
 } from "./anchor.js";
 import { ARTIFACT_SANDBOX } from "./artifact-links.js";
 import { useArtifactWidth } from "./artifact-width-control.js";
+import { ClosedChatConnection } from "./closed-chat-connection.js";
+import { closedChatCorner } from "./closed-chat-status.js";
 import type { ComparisonDraft } from "./comparison-draft.js";
 import { comparisonDraftText, restoreComparisonDraft } from "./comparison-draft.js";
 import { CompatibilityNotice, useRuntimeCompatibility } from "./compatibility-notice.js";
@@ -4511,31 +4513,83 @@ const App = (): React.ReactElement => {
                 </div>
               </div>
 
-              {conversationPanel.open || notes.length === 0 ? null : (
-                <button
-                  type="button"
-                  className="floating-note-send"
-                  onClick={() => void sendNotes()}
-                  disabled={
-                    sending ||
-                    dead ||
-                    damaged ||
-                    token === null ||
-                    recoveryLocked ||
-                    submissionBusy ||
-                    submission.current().status !== "idle"
-                  }
-                  aria-busy={sending}
-                  title="Send the queued notes without opening chat (⌘⏎)"
-                >
-                  <PaperPlaneTiltDuotone size={20} />
-                  <span>
-                    {sending
-                      ? "Sending…"
-                      : `Send ${notes.length} note${notes.length === 1 ? "" : "s"}`}
-                  </span>
-                </button>
-              )}
+              {(() => {
+                const corner = closedChatCorner({
+                  panelOpen: conversationPanel.open,
+                  queuedNotes: notes.length,
+                  dead,
+                  damaged,
+                  connected: token !== null,
+                  sending,
+                  submissionBusy,
+                  workBusy: report.busy,
+                  nativeConnectionRequired: activity.nativeConnectionRequired === true,
+                });
+                if (corner === "send")
+                  return (
+                    <button
+                      type="button"
+                      className="floating-note-send"
+                      onClick={() => void sendNotes()}
+                      disabled={
+                        sending ||
+                        dead ||
+                        damaged ||
+                        token === null ||
+                        recoveryLocked ||
+                        submissionBusy ||
+                        submission.current().status !== "idle"
+                      }
+                      aria-busy={sending}
+                      title="Send the queued notes without opening chat (⌘⏎)"
+                    >
+                      <PaperPlaneTiltDuotone size={20} />
+                      <span>
+                        {sending
+                          ? "Sending…"
+                          : `Send ${notes.length} note${notes.length === 1 ? "" : "s"}`}
+                      </span>
+                    </button>
+                  );
+                // The queue emptied because the notes left, and the working
+                // line stays inside the hidden panel. The same corner then
+                // holds the same report chat shows: label and elapsed from
+                // `report`, clearing when the turn lands. Nothing new is
+                // claimed - "Sending" covers the request itself, before
+                // the poll has seen the turn.
+                if (corner === "status")
+                  return (
+                    <div className="floating-status" role="status">
+                      <span>
+                        {report.busy ? report.label : "Sending"}
+                        {report.busy && (report.disconnected || report.stalled) ? null : (
+                          <span aria-hidden="true" className="working-dots" />
+                        )}
+                      </span>
+                      {report.busy && report.elapsed !== null ? (
+                        <span> · {report.elapsed}</span>
+                      ) : null}
+                    </div>
+                  );
+                // Native-owned: the connection card is the status on this
+                // record, and with chat closed it is unreachable. The same
+                // query chat reads, in one line with its retry, until the
+                // record stops needing it.
+                if (corner === "connection")
+                  return (
+                    <ClosedChatConnection
+                      conversationId={conversationId}
+                      enabled={!dead && !damaged && token !== null}
+                      request={(signal) =>
+                        fetch(
+                          `/api/conversations/${encodeURIComponent(conversationId)}/connection`,
+                          { headers: { [TOKEN_HEADER]: token ?? "" }, signal },
+                        )
+                      }
+                    />
+                  );
+                return null;
+              })()}
 
               {/* 6c: discard confirms, and the G5 restore confirm in the same
               shell. The only dialogs, because discard is the only control

@@ -2321,6 +2321,78 @@ button.note-card-target,
   line-height: 1.55;
 }
 
+/* Closed-chat connection: the native card's stand-in while chat is shut.
+   The head names what it is, the message says what is happening, the
+   session identity rides below, and the one action that matters stays
+   reachable. Paper card, quiet ink, accent head - status, not refusal. */
+.floating-connection {
+  position: fixed;
+  inset-inline-end: max(20px, env(safe-area-inset-right));
+  /* Above the marks pill: the sheet's bottom edge carries the "N notes
+     below" pill centered, ~28px tall, and this card is wide enough to
+     reach it. 84px clears the pill plus the sheet's own bottom inset. */
+  inset-block-end: max(84px, calc(env(safe-area-inset-bottom) + 64px));
+  z-index: 101;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-inline-size: min(320px, calc(100% - 40px));
+  padding: 12px 16px 14px;
+  border: 1px solid var(--edge-2);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--color-text);
+  font: 400 12.5px / 1.45 var(--font-body);
+  overflow-wrap: anywhere;
+}
+
+.floating-connection-head,
+.floating-connection-message,
+.floating-connection-identity {
+  margin: 0;
+}
+
+.floating-connection-head {
+  font: 600 12.5px / 1.3 var(--font-heading);
+  color: var(--color-accent-700);
+}
+
+.floating-connection-identity {
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
+  font-size: 12px;
+}
+
+.floating-connection-identity code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+}
+
+.floating-connection button {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+/* Closed-chat activity: the same label chat shows above the composer, in the
+   corner the send button vacated once the queue emptied. Quiet ink on
+   paper, never the send fill - it reports work, it does not start it. */
+.floating-status {
+  position: fixed;
+  inset-inline-end: max(20px, env(safe-area-inset-right));
+  inset-block-end: max(20px, env(safe-area-inset-bottom));
+  z-index: 101;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  max-inline-size: calc(100% - 40px);
+  padding: 10px 16px;
+  border: 1px solid var(--edge-2);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--color-accent-700);
+  font: 400 12.5px / 1.4 var(--font-body);
+}
+
 /* Closed-chat send stays outside the clipped panes, above the reading controls. */
 .floating-note-send {
   position: fixed;

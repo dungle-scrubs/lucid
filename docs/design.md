@@ -206,6 +206,14 @@ With chat closed and notes queued for the displayed version, a filled
 "Send 1 note" or "Send N notes" button stays fixed at the bottom right,
 above the reading controls. It sends the batch without opening chat and
 uses the existing send guards. Sending shows "Sending…" and prevents another
-click. Opening chat or emptying the queue removes the floating button;
-the queue's send action remains in chat. The old note-count guidance beneath
-the document is removed. Other document guidance and refusals remain.
+click. Once the queue empties with work still in flight, the same corner
+holds the same activity report chat shows above the composer - label and
+elapsed from `describeActivity`, plus "Sending" while the request itself
+is on its way - until nothing is running. A native-owned record docks its
+connection there instead: the "Current connection" card's message, session
+identity, and retry control, since the full card lives at the top of
+hidden chat. Opening chat, emptying the queue with nothing running, losing
+the connection, or the record leaving native ownership removes the floating
+element; the queue's send action remains in chat. The old note-count
+guidance beneath the document is removed. Other document guidance and
+refusals remain.
