@@ -77,7 +77,48 @@ const verifyTailwindCompiled = async () => {
 
 await verifyTailwindCompiled();
 
+/** Ad-hoc sign the binary on macOS.
+ *
+ * This is the second silent failure the script exists to prevent, and it is
+ * the reason the plugin requirement above costs more than it looks like it
+ * costs. `bun build --compile` signs its macOS output. `Bun.build`'s compile
+ * API does not, so the binary keeps the signature of the Bun runtime it was
+ * appended to, and that signature no longer matches the bytes.
+ *
+ * On arm64 the kernel refuses to exec a Mach-O whose signature is invalid. It
+ * sends SIGKILL before any code runs: exit 137, no stderr, no crash report.
+ * A caller that reads exit codes reports "failed with no output", which points
+ * at the caller rather than at the binary. Agent harnesses run `lucid` as a
+ * hook, so an unsigned build reads there as a broken hook on every tool call.
+ */
+const signBinary = () => {
+  if (process.platform !== "darwin") return;
+  const sign = Bun.spawnSync(["codesign", "--force", "--sign", "-", OUTFILE]);
+  if (!sign.success) {
+    throw new Error(
+      `codesign failed on ${OUTFILE}: ${sign.stderr.toString().trim()}\nAn unsigned arm64 binary is SIGKILLed on exec.`,
+    );
+  }
+  const verify = Bun.spawnSync(["codesign", "--verify", OUTFILE]);
+  if (!verify.success) {
+    throw new Error(
+      `${OUTFILE} still carries an invalid signature after codesign: ${verify.stderr.toString().trim()}`,
+    );
+  }
+};
+
+signBinary();
+
+/** Exec the binary once. The signature checks above prove the kernel will
+ * load it; this proves the embedded bundle actually starts. */
+const version = Bun.spawnSync([OUTFILE, "--version"]);
+if (!version.success) {
+  throw new Error(
+    `${OUTFILE} does not run: exit ${version.exitCode}, stderr ${version.stderr.toString().trim() || "(empty)"}`,
+  );
+}
+
 // `--compile` leaves a scratch file beside the entrypoint.
 for (const f of new Bun.Glob(".*.bun-build").scanSync(".")) rmSync(f, { force: true });
 
-console.log(`built ${OUTFILE}`);
+console.log(`built ${OUTFILE} (${version.stdout.toString().trim()})`);
