@@ -40,6 +40,9 @@ export interface Msg {
   /** A batch that was sent, drawn where it was sent rather than as a line
    * of stripped text. */
   readonly sentBatch?: SentBatch;
+  /** Agent chat references carried beside this line, resolved client-side
+   * against the version on screen. Unmatched quotes render as prose. */
+  readonly refs?: readonly import("../../protocol/chat-references.js").ChatReferenceBlock[];
 }
 
 /** The pinned assistant-ui repository does not recompute a node's depth

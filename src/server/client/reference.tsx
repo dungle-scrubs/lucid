@@ -295,6 +295,24 @@ const Messages = (): React.ReactElement => (
         </div>
       </div>
     </Case>
+    <Case
+      name="The agent, pointing at the document"
+      classes=".msg.agent .chat-ref"
+      note="A quoted passage resolved against the version on screen. Clicking travels to that block through the same rule as a note card; an unmatched quote renders as plain prose."
+    >
+      <div className="msg agent">
+        <span className="who">agent</span>
+        <div className="body">
+          <p>
+            See the{" "}
+            <button type="button" className="chat-ref">
+              Next survey section
+            </button>{" "}
+            for the revised plan.
+          </p>
+        </div>
+      </div>
+    </Case>
     <Case name="A tool" classes=".msg.tool" note="A tool the agent used.">
       <div className="msg tool">
         <span className="tool-mark" />

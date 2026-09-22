@@ -105,6 +105,36 @@ describe("TUI view-model (M6.1)", () => {
     expect(view2.lines.find((l) => l.text === "nope")).toMatchObject({ mark: "✗" });
   });
 
+  test("an agent message carrying a chat-reference fence renders the label inline with no JSON", () => {
+    const r = rig();
+    r.send(attach({ conversationId: "conv-1", secret: r.secret, profile: "headless-session" }));
+    r.send(
+      event({
+        epoch: 1,
+        n: 1,
+        turnId: "t-1",
+        event: {
+          kind: "message",
+          text: `See the [Next survey section].\n\`\`\`lucid-references\n${JSON.stringify({
+            artifactId: "doc-1",
+            version: 2,
+            refs: [{ quote: "Next survey", label: "Next survey section" }],
+          })}\n\`\`\``,
+        },
+      }),
+    );
+    const view = buildView({
+      transcript: r.host.transcript(),
+      status: r.host.status(),
+      rung: "n/a",
+      draft: "",
+    });
+    const line = view.lines.find((l) => l.kind === "agent");
+    expect(line?.text).toContain("See the [Next survey section].");
+    expect(line?.text).not.toContain("lucid-references");
+    expect(line?.text).not.toContain('Next survey",');
+  });
+
   test("a turn's token deltas collapse once its message arrives - the text renders once, never token + message both", () => {
     const r = rig();
     r.send(attach({ conversationId: "conv-1", secret: r.secret, profile: "headless-session" }));

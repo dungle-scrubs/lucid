@@ -33,6 +33,7 @@ import { compatibilityMessage, parseCompatibilityDiagnostic } from "../protocol/
 
 import { stripAnnotationBatch } from "../protocol/annotations.js";
 import { stripArtifactBlocks } from "../protocol/artifacts.js";
+import { stripChatReferences } from "../protocol/chat-references.js";
 import { EventKind, type HarnessEventKind } from "../protocol/events.js";
 import type { ChannelStatus } from "../protocol/index.js";
 import type { Transcript, TranscriptInput } from "../store/store.js";
@@ -92,11 +93,12 @@ const stripQuestionBlock = (text: string): string =>
     .trim();
 
 const stripMessageBlocks = (text: string): string => {
-  // Artifact and question are both protocol fences carried in message text.
-  // The log keeps the raw text; the view drops the fence and shows the
-  // structured meaning. Artifact placeholder is named reference, never bytes.
+  // Protocol fences ride in message text; the log keeps them raw and the
+  // view strips them. A chat-reference fence strips to nothing: the agent
+  // prose already brackets the label.
   const withoutArtifact = stripArtifactBlocks(text);
-  return stripQuestionBlock(withoutArtifact);
+  const withoutRefs = stripChatReferences(withoutArtifact);
+  return stripQuestionBlock(withoutRefs);
 };
 
 const eventText = (event: Record<string, unknown>): string => {
