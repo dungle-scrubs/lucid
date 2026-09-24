@@ -111,6 +111,7 @@ export type DispatchResult =
   | { readonly kind: "connection-control"; readonly verdict: "accepted" | "refused" | "pending" }
   | { readonly kind: "connection-status" }
   | { readonly kind: "artifact-publish" }
+  | { readonly kind: "handoff" }
   | { readonly kind: "hcn-supervisor" }
   | { readonly kind: "context" }
   | { readonly kind: "name-titles" }
@@ -326,6 +327,25 @@ export const dispatch = async (
             .join("\n"),
     );
     return { kind: "artifact-publish" };
+  }
+  if (mapped.kind === "handoff") {
+    const { runHandoff } = await import("./handoff.js");
+    const { parseHandoffRequest, readHandoffRequest } = await import("./handoff-request.js");
+    const result = await runHandoff(
+      parseHandoffRequest(await readHandoffRequest(mapped.request)),
+      deps.rootDir,
+    );
+    (deps.onOutput ?? console.log)(
+      mapped.json
+        ? JSON.stringify(result)
+        : [
+            result.artifactUrl,
+            result.continuation.idempotent
+              ? `continuation ${result.continuation.inputId} already present`
+              : `continuation ${result.continuation.inputId} queued`,
+          ].join("\n"),
+    );
+    return { kind: "handoff" };
   }
   if (mapped.kind === "context") {
     const { readOfferedContext } = await import("../store/context-offer.js");
