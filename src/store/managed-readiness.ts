@@ -35,8 +35,7 @@ export function managedCandidates(
   // Native publications require same-session admission before any executor may start.
   if (requiresNativeConnection(state)) return [];
   // An explicit detach ends the hold: the still-queued continuation must not
-  // dispatch to a new worker. Only a later accepted input reopens the record
-  // (RFC 32 DETACHED -> RUNNING), and that input creates a new execution entry.
+  // dispatch to a new worker. Only a later accepted input reopens the record.
   if (state.holdRelease !== null) return [];
   if (
     Object.values(state.executions).some(
