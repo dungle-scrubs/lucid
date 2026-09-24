@@ -65,6 +65,13 @@ export type PublicationConnector = (
   conversationId: string,
 ) => PublicationConnection;
 
+/** The flag supplies the marker only when the field is absent. An invalid
+ * field value stays invalid; the flag MUST NOT conceal it. */
+export function withUnmanagedMarker(value: unknown, allow: boolean): unknown {
+  if (!allow || !object(value) || value.theme !== undefined) return value;
+  return { ...value, theme: "unmanaged" };
+}
+
 /** Publication and connection have separate results. A connection failure cannot undo a document. */
 export async function publishArtifact(
   value: unknown,

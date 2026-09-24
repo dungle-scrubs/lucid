@@ -1,0 +1,99 @@
+{
+  "excluded": [
+    {
+      "route": "glm-5.3@pi",
+      "reason": "family glm excluded by query"
+    },
+    {
+      "route": "muse-spark-1.3-contributor@muse",
+      "reason": "missing capability: skills"
+    }
+  ],
+  "fallbacks": [
+    {
+      "capabilities": ["browser", "desktop", "fast", "repo-access", "skills", "subagent"],
+      "cost": 5,
+      "effort": "high",
+      "family": "claude",
+      "harness": "claude",
+      "hosted": true,
+      "intelligence": 9,
+      "model": "opus-5.5",
+      "modelId": "claude-opus-5-5",
+      "notes": "Default Claude-lane reviewer for plans and implementations, and the default at high stakes; succeeds opus-5 at about half the per-task cost. Coding facet rests on Terminal-Bench 4.0 alone (DeepSWE has no opus-5-5 row). Pass the model explicitly when spawning - subagents otherwise inherit the session model.",
+      "provider": null,
+      "rateLimitRpm": null,
+      "responseSeconds": 29.08,
+      "route": "opus-5.5@claude",
+      "score": 9,
+      "scoredBy": "intelligence",
+      "taste": 8
+    },
+    {
+      "capabilities": ["browser", "desktop", "fast", "repo-access", "skills", "subagent"],
+      "cost": 4,
+      "effort": "high",
+      "family": "claude",
+      "harness": "claude",
+      "hosted": true,
+      "intelligence": 9,
+      "model": "opus-5",
+      "modelId": "claude-opus-5",
+      "notes": "Superseded by opus-5.5 as the Claude-lane default (same tier, about half the per-task cost). Keep the route for explicit use and for callers pinned to it.",
+      "provider": null,
+      "rateLimitRpm": null,
+      "responseSeconds": 14.65,
+      "route": "opus-5@claude",
+      "score": 9,
+      "scoredBy": "intelligence",
+      "taste": 8
+    },
+    {
+      "capabilities": ["browser", "desktop", "fast", "repo-access", "skills", "subagent"],
+      "cost": 2,
+      "effort": "high",
+      "family": "claude",
+      "harness": "claude",
+      "hosted": true,
+      "intelligence": 9,
+      "model": "fable-5",
+      "modelId": "claude-fable-5",
+      "notes": "Session model in Claude Code; subagents inherit it unless a model is passed explicitly. Reserve it for the taste-9 gate, not for raw intelligence: opus-5.5 is the cheaper default at the same tier.",
+      "provider": null,
+      "rateLimitRpm": null,
+      "responseSeconds": null,
+      "route": "fable-5@claude",
+      "score": 9,
+      "scoredBy": "intelligence",
+      "taste": 9
+    }
+  ],
+  "query": {
+    "excludeFamilies": ["glm"],
+    "needs": ["skills"],
+    "prefer": "cost",
+    "privacy": "normal",
+    "stakes": "normal",
+    "task": "code-review"
+  },
+  "selection": {
+    "capabilities": ["desktop", "fast", "repo-access", "skills"],
+    "cost": 6,
+    "effort": "high",
+    "family": "openai",
+    "harness": "codex",
+    "hosted": true,
+    "intelligence": 9,
+    "model": "gpt-6-astra",
+    "modelId": "gpt-6-astra",
+    "notes": "OpenAI's frontier model: top of this registry on DeepSWE (0.73), Omniscience (43.7) and AutomationBench (0.67) at its high cap, at about half opus-5's cost per task. Opus-5.5 leads it on Terminal-Bench 4.0 (0.57 against 0.54). Slowest to answer of the three GPT routes (47 s total response at high). Shares the Codex usage limit with gpt-5.6-sol and gpt-5.6-luna. Codex usage limit: a rate-limit failure advances to the next route; do not retry this route in the same turn. Measured on macOS: the Codex sandbox denies Mach port registration, so this route cannot launch a browser (browser-tools ledger E47); browser-dependent work must not route here.",
+    "provider": null,
+    "rateLimitRpm": null,
+    "responseSeconds": 16.52,
+    "route": "gpt-6-astra@codex",
+    "score": 9,
+    "scoredBy": "intelligence",
+    "taste": 8
+  },
+  "warnings": []
+}

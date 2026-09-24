@@ -1,0 +1,40 @@
+{
+  "actual": null,
+  "attempts": [
+    {
+      "argv": [
+        "run",
+        "pi",
+        "--json",
+        "--model",
+        "zai/glm-5.3",
+        "--effort",
+        "high",
+        "--access",
+        "read",
+        "--timeout",
+        "1200",
+        "--cwd",
+        "/Users/kevin/dev/lucid",
+        "--skills",
+        "no-comments",
+        "--prompt-file",
+        ".scratch/rfc32-t2nocomments/brief.md"
+      ],
+      "failure": {
+        "class": "usage-limit",
+        "message": "Usage limit reached (pi turn ended with stopReason error: 429: {\"code\":\"1308\",\"message\":\"Usage limit reached for 5 hour. Your limit will reset at 2026-09-24 14:04:29\"}) - wait for reset or route to another provider",
+        "retryable": true
+      },
+      "notes": [],
+      "outcome": "advanced",
+      "route": "glm-5.3@pi"
+    }
+  ],
+  "harness": null,
+  "intended": "glm-5.3@pi",
+  "question": null,
+  "result": null,
+  "sessionId": null,
+  "status": "exhausted"
+}

@@ -1,0 +1,16 @@
+{
+  "task": "code-review",
+  "stakes": "high",
+  "privacy": "normal",
+  "needs": ["skills"],
+  "excludeFamilies": ["glm"],
+  "selection": {
+    "route": "glm-5.3@pi",
+    "harness": "pi",
+    "modelId": "zai/glm-5.3",
+    "effort": "xhigh",
+    "provider": null,
+    "hosted": true
+  },
+  "fallbacks": []
+}

@@ -1,0 +1,2154 @@
+bun test v1.3.14 (0d9b296a)
+
+test/skill-doc.test.ts:
+(pass) milestone-1 skill doc (M6.2) > every issue the code can raise (refusal AND decode) is documented, and the doc invents no issue the code lacks [0.40ms]
+(pass) milestone-1 skill doc (M6.2) > the skill documents the load-bearing frame kinds and the single-writer/epoch rule [0.12ms]
+
+test/smoke.test.ts:
+(pass) smoke [0.02ms]
+
+test/oracle-sweep.test.ts:
+(pass) oracle sweep (M7.1): credit-starvation classes > EVERY droppable kind is credit-gated (refused no-credit when starved) and EVERY lossless kind is never gated [0.65ms]
+(pass) oracle sweep (M7.1): credit-starvation classes > under a bounded credit budget the droppable classes drain the budget and then starve, while lossless keeps flowing [0.07ms]
+(pass) oracle sweep (M7.1): identity collisions > two conversations minted independently get DISTINCT secrets; neither secret authenticates the other; killing one disturbs no other [3.52ms]
+(pass) oracle sweep (M7.1): identity collisions > within one conversation, a colliding turnId or input id is refused - identity is unique per conversation [0.04ms]
+
+test/live-delivery.test.ts:
+(pass) live delivery — a running conversation answers an input sent by another process (RFC-04) > two hosts on one record, injected clock, fake harness — sending to a live conversation produces a reply, with nothing restarted [24.21ms]
+(pass) live delivery — a running conversation answers an input sent by another process (RFC-04) > two processes neither corrupt the other's view of the record [6.66ms]
+(pass) live delivery — a running conversation answers an input sent by another process (RFC-04) > killing the driver mid-delivery and restarting repeats at most the batch that was in flight, and a repeat causes no duplicate work [6.35ms]
+(pass) live delivery — a running conversation answers an input sent by another process (RFC-04) > a second driver starting while one is live does not take over silently — it waits or reports and does not strand a lock it cannot use [58.17ms]
+(pass) live delivery — a running conversation answers an input sent by another process (RFC-04) > losing the lease stops further work before the next effect — work already handed to a harness cannot be recalled [7.40ms]
+(pass) live delivery — a running conversation answers an input sent by another process (RFC-04) > the viewer shows the exchange as it happens — tailer peek follows growth and transcript reflects it [28.75ms]
+(pass) live delivery — a running conversation answers an input sent by another process (RFC-04) > an idle conversation does not grow its log - the cursor records dispatch, not looking [462.50ms]
+
+test/gate-5-6.test.ts:
+(pass) Gate 5→6: end-to-end fake-harness conversation across all three modes > interactive -> headless-session -> headless-turn, two handoffs, exactly-once ordered render throughout [3.49ms]
+
+test/idle-redelivery.test.ts:
+(pass) an idle driver still receives what is sent to it > an input written after the lease lapsed is delivered, not left outstanding [19.68ms]
+
+test/modes/honor.test.ts:
+(pass) RFC-12: the driver honors a changed preference (session profile) > a changed model re-spawns the session before the next turn, and the argv carries it [53.73ms]
+(pass) RFC-12: the driver honors a changed preference (session profile) > an input queued mid-turn is not lost to the switch: it runs on the new spawn [50.88ms]
+(pass) RFC-12: the driver honors a changed preference (session profile) > a new harness is named on the attach and the old session id is not carried across [51.65ms]
+(pass) RFC-12: the driver honors a changed preference (session profile) > a changed effort re-spawns the session before the next turn, and the argv carries it [51.72ms]
+(pass) RFC 15: a refused change preserves the selection and prompt > a refused session spawn stops without returning to the previous driver [66.57ms]
+(pass) RFC 15: a refused change preserves the selection and prompt > a refused turn spawn keeps the input pending and the requested model selected [36.12ms]
+(pass) RFC-12: the turn profile honors model and effort > a changed model and effort re-spawn the next turn with the new flags [34.90ms]
+(pass) RFC-12: the pin and the startup fold > a harness named at spawn is pinned for the process's life: the preference cannot switch it [18.28ms]
+(pass) RFC-12: the pin and the startup fold > a preference already in the record names the first spawn's model [18.67ms]
+(pass) credit arriving during a driver switch reaches the replacement [1.55ms]
+(pass) credit arriving after a late refusal does not revive an ended driver [16.51ms]
+(pass) shutdown during replacement inspection waits for cleanup and cannot leave a source open [30.83ms]
+(pass) shutdown during replacement created waits for cleanup and cannot leave a source open [30.63ms]
+(pass) a failed startup observer closes its created source before open rejects [15.53ms]
+
+test/modes/second-driver.test.ts:
+(pass) a record driven twice > the second driver's answers reach the record [334.54ms]
+(pass) a record driven twice > a third and a fourth too [665.25ms]
+(pass) a record driven twice > no turn id is used twice across drivers [333.75ms]
+
+test/modes/managed-execution.test.ts:
+(pass) a completed managed turn confirms coverage and settles once after its stream drains [138.13ms]
+(pass) one managed attempt owns its approval channel until cleanup, with no replacement channel [134.01ms]
+(pass) managed rejected outcome keeps context unconfirmed and preserves the input [131.97ms]
+(pass) managed failed outcome keeps context unconfirmed and preserves the input [128.52ms]
+(pass) managed lost outcome keeps context unconfirmed and preserves the input [125.27ms]
+(pass) managed partial-rejected outcome keeps context unconfirmed and preserves the input [135.41ms]
+(pass) managed approval-rejected outcome keeps context unconfirmed and preserves the input [151.66ms]
+(pass) lost executor authority refuses settlement and leaves durable recovery evidence [144.16ms]
+
+test/modes/comparison-delivery.test.ts:
+(pass) comparison admission at the shared append boundary > fresh provenance and reviewed head are checked on every admission; accepted replay precedes both [4.61ms]
+(pass) comparison admission at the shared append boundary > source outside a refreshed pair remains valid, arbitrary element and hash claims do not [2.12ms]
+(pass) comparison admission at the shared append boundary > legacy inputs and unknown extension fields remain readable; known malformed extensions are refused [1.40ms]
+(pass) bounded preparation > every failure cause holds with guidance, and only a newer head or a new participation retries [0.25ms]
+(pass) bounded preparation > busy, hash mismatch, older context and transport limits never substitute or truncate [0.18ms]
+(pass) session: held note is skipped, ordinary input keeps its identity, a newer head releases the original note [109.45ms]
+(pass) turn: held note is skipped, ordinary input keeps its identity, a newer head releases the original note [106.79ms]
+(pass) session: explicit reattachment retries a repaired same head once and preserves acceptance order [62.68ms]
+(pass) turn: explicit reattachment retries a repaired same head once and preserves acceptance order [59.40ms]
+(pass) turn resume refusal preserves comparison input without an automatic fresh spawn [26.40ms]
+(pass) hooks: durable holds survive hook processes, newer content releases full context, new attachment permits same-head repair [7.04ms]
+
+test/modes/managed-approvals.test.ts:
+(pass) the current channel claims a durable write before answering a browser choice, exactly once [2.91ms]
+(pass) exceeding the pending request bound cancels the whole channel and settles every request after cleanup [14.91ms]
+
+test/modes/interactive.test.ts:
+(pass) interactive adapter ladder - rung 1 logic (M5.3) > rung degradation is strict order: hooks when isolated, else observe-only while the A-003 gate is closed (rungs 2-3 deferred) [0.10ms]
+(pass) interactive adapter ladder - rung 1 logic (M5.3) > injection chunking holds every chunk at or under the cap and preserves the message exactly [0.69ms]
+(pass) interactive adapter ladder - rung 1 logic (M5.3) > capabilities query is answered by hcn, curated for a known model and unknown otherwise (D-008) [0.43ms]
+(pass) interactive adapter ladder - rung 1 logic (M5.3) > SessionStart announce parses into lucid's attach intent - identity + transcript path, with zero agent cooperation (A-002) [0.12ms]
+(pass) interactive adapter ladder - rung 1 logic (M5.3) > forbidden path: a headless resume while presence holds is refused by the host - the adapter never appends behind a live human [0.89ms]
+(pass) hook delivery reports a typed lock-timeout without matching error prose [1.05ms]
+(pass) hook delivery reports a typed lock-unavailable without matching error prose [1.09ms]
+
+test/modes/demotion.test.ts:
+(pass) demotion (RFC-05 Error Handling) > an answer is delivered through harness answer path, not send [36.81ms]
+(pass) demotion (RFC-05 Error Handling) > a refused answer is retried once as ordinary input with same words, single outcome, not armed for redelivery, error in transcript, question cleared [59.77ms]
+
+test/modes/controller.test.ts:
+(pass) conversation controller + handoff (M5.4) > the mode-selection state machine maps every channel state to its PLAN 4.6 action [0.03ms]
+(pass) conversation controller + handoff (M5.4) > attached -> unattached is the heartbeat clock (presence alive), unattached -> gone is presence, gone -> headless takeover epoch++ [1.06ms]
+(pass) conversation controller + handoff (M5.4) > interactive reattach increments the epoch and fences the stale writer [0.81ms]
+(pass) conversation controller + handoff (M5.4) > boundary-only handoff enforced: a mid-LEASE takeover is refused; a handoff is legal only after a clean detach or lease expiry (which aborts the in-flight turn) [0.91ms]
+(pass) conversation controller + handoff (M5.4) > D-020 exactly-once handoff oracle: an event IN the replay window at handoff time - headless->interactive, resumeFrom scopes it exactly, survives reopen [1.68ms]
+(pass) conversation controller + handoff (M5.4) > D-020 the other direction: interactive->headless mid-turn, exactly-once holds and the aborted turn is reconstructed by fold [1.09ms]
+
+test/modes/headless.test.ts:
+(pass) the turn source carries the prepared native channel without adding browser setting overrides [4.50ms]
+(pass) waiting on a native permission request does not report the harness as silent or wedged [13.28ms]
+(pass) context preparation holds one input without spawning or applying it and allows later eligible work [5.18ms]
+(pass) each turn validates its exact resume ID before another process starts [7.82ms]
+(pass) a persistent session waits for prepared input before opening its process [8.29ms]
+(pass) persistent preparation advances the turn identity at done before the next send [6.51ms]
+(pass) closing the previous persistent turn does not prepare a third input during the second turn [8.74ms]
+(pass) a refused prepared session send preserves its input and reports a startup failure [4.08ms]
+(pass) a first steer prepares context and opens a lazy persistent session [4.03ms]
+(pass) a driver change during held preparation hands off before preparing later work [2.61ms]
+(pass) session records a preparation failure once without starting the task [2.97ms]
+(pass) turn records a preparation failure once without starting the task [2.41ms]
+(pass) a persistent process without a reported native identity cannot be described as fresh again [5.67ms]
+(pass) closing session cancels preparation before any task starts [3.80ms]
+(pass) closing turn cancels preparation before any task starts [3.92ms]
+(pass) a resumed turn records its answer while the native process is still running [6.99ms]
+(pass) every later headless turn resumes the native identity emitted by the preceding turn [9.31ms]
+(pass) headless modes (M5.2) > session mode: attach handshake, one turn mapped event-for-event into the durable log with turnId correlation [6.12ms]
+(pass) headless modes (M5.2) > an input the record was already holding is delivered on attach, not stranded [6.66ms]
+(pass) headless modes (M5.2) > session mode reports what HAPPENED: a steer mid-turn is a send like any other [7.45ms]
+(pass) headless modes (M5.2) > turn mode queues between turns: one process per input, dispositions queued -> applied, never interleaved [6.62ms]
+(pass) headless modes (M5.2) > droppable events coalesce latest-wins under credit starvation and flush when credit arrives; lossless never waits [13.07ms]
+(pass) headless modes (M5.2) > limit/error terminates the turn with a durable record: the classified exit survives fold [6.27ms]
+(pass) headless modes (M5.2) > turn-mode credit flush keeps each delta under its OWN turn - no fabricated turnId, no wedge, and the stream survives [7.68ms]
+(pass) headless modes (M5.2) > session mode: a mid-turn send is applied at once and gets its turn at the boundary, and a dead session answers rejected - never a throw [15.69ms]
+(pass) a session hcn refuses is recorded, not silent > the refusal reason lands in the durable log and the channel is released [4.64ms]
+(pass) RFC 15: failed recall preserves the submitted prompt > a refused resume stays pending without a fresh attempt, and the reason is recorded [5.72ms]
+(pass) session mode: queue mid-turn is held until terminal event, steer is immediate (T22) [11.37ms]
+(pass) session mode: queued input with no turn running is delivered straight away (T22) [4.74ms]
+(pass) session source settlement waits for owned process cleanup [3.70ms]
+(pass) turn source settlement waits for owned process cleanup [4.24ms]
+
+test/modes/publication-dispatch.test.ts:
+(pass) publication winning the final process-start race creates no ordinary HCN child [3.02ms]
+(pass) session startup settles cleanly when publication records its requirement after attachment [1.59ms]
+(pass) a held session send reports connection admission without claiming the process closed [2.28ms]
+
+test/modes/session-prompts.test.ts:
+(pass) a save reaches the agent on the next thing it is told > a version written after the first input is named on the second [85.64ms]
+(pass) a save reaches the agent on the next thing it is told > every later input carries the state too, not just the one after a save [129.00ms]
+(pass) a save reaches the agent on the next thing it is told > the protocol instructions are said once, not every time [84.98ms]
+(pass) a save reaches the agent on the next thing it is told > a batch of notes sent later still says what a batch of notes is [87.97ms]
+(pass) a save reaches the agent on the next thing it is told > with no artifacts, later inputs still carry request guidance without artifact state [83.80ms]
+(pass) a patch that missed gets the document back > its own current version rides on the next prompt, and not before [127.01ms]
+(pass) a patch that missed gets the document back > it is sent once, not on every prompt after [170.09ms]
+(pass) a patch that missed gets the document back > a refusal that is not a missed anchor does not resend anything [128.16ms]
+(pass) a patch that missed gets the document back > a person's save is still sent whether or not anything missed [87.98ms]
+
+test/modes/store-failures.test.ts:
+(pass) an unreadable artifact stops headless-session without appending another event [14.59ms]
+(pass) an unreadable artifact stops headless-turn without appending another event [14.27ms]
+(pass) headless-session: a busy read whose warning fails (refuse) stops after one append attempt [14.79ms]
+(pass) headless-session: a busy read whose warning fails (throw) stops after one append attempt [14.17ms]
+(pass) headless-turn: a busy read whose warning fails (refuse) stops after one append attempt [14.42ms]
+(pass) headless-turn: a busy read whose warning fails (throw) stops after one append attempt [14.31ms]
+(pass) a successfully recorded busy warning omits state and lets the input continue [14.57ms]
+(pass) a busy state read preserves bytes owed after an anchor refusal [65.26ms]
+(pass) headless-session stops when its patch base is unreadable [37.42ms]
+(pass) headless-turn stops when its patch base is unreadable [37.99ms]
+(pass) an artifact write failure keeps its diagnostic classification: %s [26.56ms]
+(pass) an artifact write failure keeps its diagnostic classification: %s [25.98ms]
+
+test/modes/context-preparation.test.ts:
+(pass) fitting context preserves the exact full prompt and native occupancy [0.16ms]
+(pass) long message history is summarized separately while current content and recent entries stay whole [0.95ms]
+(pass) long tool history is summarized separately while current content and recent entries stay whole [0.23ms]
+(pass) history larger than one summary request is reduced in counted passes, transport refusal: %s [0.90ms]
+(pass) history larger than one summary request is reduced in counted passes, transport refusal: %s [0.50ms]
+(pass) summary reuse follows source content and selected model, while every final prompt is recounted [0.65ms]
+(pass) cancellation while accounting finishes cannot return a dispatchable prompt [0.11ms]
+(pass) an explicit full-request transport limit can use measured mandatory context and bounded summaries [0.27ms]
+(pass) unknown-budget holds the unchanged pending input without a truncated start [0.15ms]
+(pass) mandatory-too-large holds the unchanged pending input without a truncated start [0.09ms]
+(pass) isolation-refused holds the unchanged pending input without a truncated start [0.22ms]
+(pass) summary-budget-unknown holds the unchanged pending input without a truncated start [0.24ms]
+(pass) summary-failed holds the unchanged pending input without a truncated start [0.29ms]
+(pass) summary-tool holds the unchanged pending input without a truncated start [0.22ms]
+(pass) summary-empty holds the unchanged pending input without a truncated start [0.17ms]
+(pass) summary-overflow holds the unchanged pending input without a truncated start [0.15ms]
+(pass) model-changed holds the unchanged pending input without a truncated start [0.16ms]
+(pass) summary-never-fits holds the unchanged pending input without a truncated start [0.18ms]
+(pass) a large source entry splits without losing text or breaking Unicode boundaries [0.52ms]
+(pass) a later smaller request reuses the fuller first-pass summary [0.32ms]
+(pass) sparse message history can summarize older tool output while retaining recent messages [0.27ms]
+(pass) a route with no probe sends the prompt unmeasured [0.04ms]
+
+test/modes/stall.test.ts:
+(pass) a harness that answers nothing > held preparation is not reported as a silent harness [83.47ms]
+(pass) a harness that answers nothing > the silence is written into the record [42.23ms]
+(pass) a harness that answers nothing > it is said once, not once per tick [81.82ms]
+(pass) a harness that answers nothing > a harness that is answering says nothing about stalling [82.90ms]
+(pass) a harness that answers nothing > nothing is cancelled: a late answer still lands [82.75ms]
+(pass) a harness that answers nothing > a second input after a stall re-arms the watch [82.16ms]
+(pass) a harness that answers nothing > with nothing handed over there is nothing to report [41.66ms]
+
+test/modes/managed-preparation.test.ts:
+(pass) fresh work trusts HCN operation results despite differing version metadata [138.03ms]
+(pass) managed preparation records the counted context before task dispatch and owns its offered copy [134.87ms]
+(pass) a settings change during accounting holds the original input without consuming an attempt [134.62ms]
+(pass) unknown context accounting persists an actionable hold without dispatch [136.78ms]
+(pass) cancellation during accounting consumes no attempt and removes the offered copy [132.52ms]
+(pass) an unverified native identity cannot become a fresh fallback [2.29ms]
+(pass) an unreadable recorded event becomes a context hold before any accounting [2.14ms]
+(pass) a verified native session is retained, and explicit fresh recovery can replace it [260.87ms]
+Warning: An offered context copy could not be removed; cleanup will retry
+ code: "LUCID_CONTEXT_CLEANUP"
+
+      at release (/Users/kevin/dev/lucid/src/modes/managed-preparation.ts:83:15)
+      at <anonymous> (/Users/kevin/dev/lucid/src/modes/managed-preparation.ts:449:9)
+      at async <anonymous> (/Users/kevin/dev/lucid/test/modes/managed-preparation.test.ts:441:27)
+
+Warning: An offered context copy could not be removed; cleanup will retry
+ code: "LUCID_CONTEXT_CLEANUP"
+
+      at release (/Users/kevin/dev/lucid/src/modes/managed-preparation.ts:83:15)
+      at <anonymous> (/Users/kevin/dev/lucid/src/modes/managed-preparation.ts:449:9)
+      at async <anonymous> (/Users/kevin/dev/lucid/test/modes/managed-preparation.test.ts:441:27)
+
+(pass) cleanup failure retains each owned copy for a later cleanup attempt [266.06ms]
+(pass) summary provenance survives preparation while the full source remains available [140.12ms]
+(pass) resume skips historical events covered by that native session, native management %s [126.71ms]
+(pass) resume skips historical events covered by that native session, native management %s [151.48ms]
+(pass) closing preparation cancels its pending accounting and removes the copy [134.91ms]
+(pass) failed harness inspection is a settings hold, not a lost task [2.58ms]
+(pass) a lost executor lease surfaces the refused hold write [148.45ms]
+(pass) duplicate turn reservations cannot replace an active offered copy [155.52ms]
+(pass) cancellation during the attempt append records that dispatch was not called [142.85ms]
+(pass) managed comparison suppression survives automatic attachment and releases only on newer content or a new explicit intent [141.96ms]
+(pass) Claude native context routing preserves imported history: %s [140.74ms]
+(pass) Claude native context routing preserves imported history: %s [142.88ms]
+(pass) native management skips accounting only in the declared mode: headless-turn auto-compaction [165.88ms]
+(pass) native management skips accounting only in the declared mode: headless-session auto-compaction [141.63ms]
+(pass) native management skips accounting only in the declared mode: headless-turn native-session-auto-compaction [174.19ms]
+(pass) native management skips accounting only in the declared mode: headless-session native-session-auto-compaction [172.74ms]
+(pass) native management retains the dispatch fence: settings-changed auto-compaction [146.97ms]
+(pass) native management retains the dispatch fence: cancelled auto-compaction [1.72ms]
+(pass) native management retains the dispatch fence: settings-changed native-session-auto-compaction [132.84ms]
+(pass) native management retains the dispatch fence: cancelled native-session-auto-compaction [1.70ms]
+(pass) integrating native management retains an existing hold until Retry: unverified-adapter [252.20ms]
+(pass) integrating native management retains an existing hold until Retry: capacity [286.78ms]
+(pass) full native sessions retain unconfirmed queued-note across Retry and later input [570.84ms]
+(pass) full native sessions retain unconfirmed failed-attempt across Retry and later input [570.21ms]
+(pass) full native sessions retain unconfirmed held-input across Retry and later input [538.17ms]
+
+test/modes/native-managed.test.ts:
+(pass) bound preparation records the native settings and one launch notice while keeping browser preferences separate [135.31ms]
+(pass) returning owner after preparation prevents HCN creation and proves no dispatch [136.40ms]
+(pass) reconnect request after preparation prevents HCN creation and proves no dispatch [152.50ms]
+(pass) owned cleanup preserves an uncertain response and blocks later native work [131.24ms]
+(pass) a document change after native preparation prevents dispatch of the stale context [142.14ms]
+(pass) an admitted native source records one approval answer and completes the same-session response [164.49ms]
+(pass) current owned native work projects starting, responding and cleanup as separate states [158.95ms]
+(pass) unknown-owner cannot project a native launch as currently starting [154.96ms]
+(pass) unknown-lock cannot project a native launch as currently starting [126.53ms]
+(pass) native registration stays serialized through the HCN creation callback [142.98ms]
+(pass) a prepared native attempt reserves one HCN channel and cannot start a second process [133.22ms]
+(pass) headless message delivery uses receipt and correlated terminal evidence, not process identity [128.85ms]
+(pass) a headless refusal before execution reports not started and retains its recorded reason [129.41ms]
+(pass) a failed headless response keeps the terminal failure and never becomes response finished [141.48ms]
+
+test/config/user-config.test.ts:
+(pass) new creation defaults follow XDG and explicit root precedence without shell expansion [1.20ms]
+(pass) invalid configuration is reported rather than replaced by defaults [2.12ms]
+
+test/tui/input.test.ts:
+(pass) TUI input driver (M6.1 step 5) > typing accumulates into a draft; backspace removes; submit hands over text and clears [0.45ms]
+(pass) TUI input driver (M6.1 step 5) > backspace on empty draft is a no-op and does not report [0.04ms]
+(pass) TUI input driver (M6.1 step 5) > empty submit is ignored — no handover, no clear [0.03ms]
+(pass) TUI input driver (M6.1 step 5) > the draft is reported to whoever is painting, so it survives a repaint [0.15ms]
+(pass) TUI input driver (M6.1 step 5) > an interrupt is distinguishable from a submit [0.08ms]
+(pass) TUI input driver (M6.1 step 5) > the caller can distinguish an ordinary submit from one that asks to interrupt a running turn [0.10ms]
+(pass) TUI input driver (M6.1 step 5) > driven in tests by a synthetic key source, not a pty — the loop is injectable [0.05ms]
+(pass) TUI input driver (M6.1 step 5) > it refuses to take over a terminal that is not interactive [0.11ms]
+(pass) TUI input driver (M6.1 step 5) > raw mode is restored on every exit path, including a throw [0.34ms]
+(pass) TUI input driver (M6.1 step 5) > surrogate pairs count as one backspace unit [0.03ms]
+(pass) TUI input driver (M6.1 step 5) > arrow-key escape sequences do not inject bytes into the draft [0.04ms]
+(pass) TUI input driver (M6.1 step 5) > runInputLoop stays in raw mode across submits and exits on interrupt [0.05ms]
+(pass) TUI input driver (M6.1 step 5) > runInputLoop refuses non-TTY when no synthetic source is given [0.03ms]
+(pass) TUI input driver (M6.1 step 5) > runInputLoop restores raw mode even when onSubmit throws [0.05ms]
+
+test/tui/view.test.ts:
+(pass) TUI view-model (M6.1) > D-009: the view IS fold(log) - a rebuild from the reopened store's transcript is identical, no separate state [1.38ms]
+(pass) TUI view-model (M6.1) > conversation view interleaves agent output and human input in seq order with per-item disposition marks [1.08ms]
+(pass) TUI view-model (M6.1) > an APPLIED human input stays in the conversation view with ✓, though the reducer trimmed it out of live state [1.24ms]
+(pass) TUI view-model (M6.1) > an agent message carrying a chat-reference fence renders the label inline with no JSON [0.73ms]
+(pass) TUI view-model (M6.1) > a turn's token deltas collapse once its message arrives - the text renders once, never token + message both [1.03ms]
+(pass) TUI view-model (M6.1) > the status line shows channel state + rung + input box, and an aborted-but-not-done turn is flagged while a completed one is not [1.01ms]
+(pass) TUI render (M6.1) > renderLines paints the view-model verbatim - body lines, a rule, the status+rung line, the input box - and paint writes them to the injected sink [0.10ms]
+(pass) TUI render (M6.1) > a question renders as a question, not as a wall of JSON [0.06ms]
+(pass) tool activity retains Codex string commands and accepts absent details [0.90ms]
+(pass) historical HCN refusal prose is replaced at presentation without rewriting the transcript [0.71ms]
+
+test/server/input-submission-recovery.test.tsx:
+(pass) ordinary sends do not flash a recovery card; uncertain sends and retries remain recoverable [1.71ms]
+
+test/server/hotkeys.test.ts:
+(pass) recognising the send key > command-Enter sends [0.03ms]
+(pass) recognising the send key > control-Enter sends too, for a keyboard without a command key
+(pass) recognising the send key > Enter on its own is not it
+(pass) recognising the send key > another modifier means something else
+(pass) recognising the send key > what is queued is not asked here
+(pass) the frame forwards the send key too > its guard matches this one [0.14ms]
+
+test/server/instrument.test.ts:
+(pass) instrumentation is added to the render, not to the document > annotation styles cannot replace authored theme properties [0.10ms]
+(pass) instrumentation is added to the render, not to the document > the document's own bytes survive it unchanged [0.02ms]
+(pass) instrumentation is added to the render, not to the document > it goes inside body, so the document's own scripts have already run [0.02ms]
+(pass) instrumentation is added to the render, not to the document > a document with no body still gets it [0.03ms]
+(pass) instrumentation is added to the render, not to the document > the frame is told which document and version it is rendering [0.04ms]
+(pass) instrumentation is added to the render, not to the document > instrumenting is a function of the bytes, not a mutation of them [0.03ms]
+(pass) the identity is lucid's, not the document's > the script assigns the attribute rather than reading the document's ids [0.05ms]
+(pass) the identity is lucid's, not the document's > the id shape the parent validates against matches what the script assigns [0.02ms]
+(pass) the document's own behaviour is left alone > nothing is stopped, ever [0.08ms]
+(pass) the document's own behaviour is left alone > a click is cancelled only while marking up [0.09ms]
+(pass) the document's own behaviour is left alone > only a real person's events count [0.11ms]
+(pass) the document's own behaviour is left alone > the one listener that is not a user interaction guards on the sender [0.07ms]
+(pass) what lucid added is not part of what gets saved > the snapshot strips lucid's own script, style, and attributes [0.08ms]
+(pass) what lucid added is not part of what gets saved > the count chip's attribute goes back out with the rest of lucid's [0.03ms]
+(pass) what lucid added is not part of what gets saved > a control's state is written out from the property, not the attribute [0.05ms]
+(pass) what lucid added is not part of what gets saved > an edit marks the element as the person's, which is what provenance reads [0.03ms]
+(pass) what lucid added is not part of what gets saved > the document setting its own field values is not an edit by the person [0.06ms]
+(pass) two modes, so one click does one thing > edit mode is where the document starts [0.03ms]
+(pass) two modes, so one click does one thing > text is editable in use mode, and a caret is the browser's job [0.06ms]
+(pass) two modes, so one click does one thing > a code block is editable, and as plain text [0.04ms]
+(pass) two modes, so one click does one thing > a label wrapping a control is never made editable [0.04ms]
+(pass) two modes, so one click does one thing > hover and selection are mark-up mode only [0.03ms]
+(pass) two modes, so one click does one thing > read-only admission clears the selection, releasing Alt does not [0.07ms]
+(pass) a document's canvas belongs to the browser > gets default text without blocking authored body backgrounds [0.08ms]
+(pass) a document's canvas belongs to the browser > default text carries no specificity, so the document wins [0.02ms]
+(pass) what a save reports as control values > only things that carry a value, not everything interactive [0.04ms]
+(pass) what a save reports as control values > the wider selector is still what keeps a control out of editable text [0.02ms]
+(pass) no focus rings > the browser's default ring is turned off in the document [0.03ms]
+(pass) no focus rings > it is a default, not an override [0.02ms]
+(pass) no focus rings > edit focus preserves the authored color pair [0.02ms]
+(pass) no focus rings > lucid's own markers each still draw one mark, in their own channel [0.05ms]
+(pass) selecting text to mark it up > mark-up mode allows a selection at all [0.04ms]
+(pass) selecting text to mark it up > a drag is read on mouseup, and a collapsed selection is not a drag [0.05ms]
+(pass) selecting text to mark it up > the spot is the element the selection starts in [0.02ms]
+(pass) selecting text to mark it up > a drag replaces an element pick rather than adding to it [0.01ms]
+(pass) selecting text to mark it up > the click that ends a drag does not also pick the element under it
+(pass) selecting text to mark it up > the highlight is one box per visual line [0.03ms]
+(pass) selecting text to mark it up > the boxes are lucid's, so a save does not contain them
+(pass) selecting text to mark it up > the note box is placed beside the words, not beside the paragraph
+(pass) selecting text to mark it up > what is captured is the selected text, and it rides as a quote [0.03ms]
+(pass) selecting text to mark it up > a press on prose is not cancelled, so the browser can start a drag [0.02ms]
+(pass) selecting text to mark it up > a press on a control is still cancelled [0.03ms]
+(pass) selecting text to mark it up > a click still reports no quote
+(pass) the mark language > the frame carries the chrome's own tokens, not literals [0.05ms]
+(pass) the mark language > the count chip is drawn from the attribute, never the DOM [0.06ms]
+(pass) the mark language > the chip inverts on a selected block, and nothing else needs to [0.01ms]
+(pass) the mark language > a mark message carries counts, not just presence [0.04ms]
+(pass) the mark language > a lost seam is defined for the later stages, in edge ink
+(pass) the mark language > selection preserves the edit edge without covering the authored ground
+(pass) the stage 3 frame protocol > a seam is inserted before a block index, carries the version it opens, and is lucid's own DOM [0.09ms]
+(pass) the stage 3 frame protocol > a compare message marks one side and clears the other [0.06ms]
+(pass) the stage 3 frame protocol > the diff marks never take magenta - a diff is not a refusal [0.01ms]
+(pass) the stage 3 frame protocol > the focus rule's off-screen half does not scroll - it offers instead (6a) [0.01ms]
+(pass) the stage 3 frame protocol > the pulsed report says which edge each unseen change sat at [0.07ms]
+(pass) the stage 3 frame protocol > the fold count is pushed, not pulled (3g) [0.04ms]
+(pass) the stage 3 frame protocol > the dirty message carries the edit count the discard dialog names (6c)
+
+test/server/attachments.test.ts:
+(pass) attaching a file > stores the bytes and answers with the hash [6.06ms]
+(pass) attaching a file > records that it exists, without the bytes [2.55ms]
+(pass) attaching a file > decides text on the bytes, not the media type [2.49ms]
+(pass) attaching a file > an image is stored and marked not-text [2.49ms]
+(pass) attaching a file > nothing is sent to the agent [12.74ms]
+(pass) what the endpoint refuses > a file over the bound, before the store sees it [14.67ms]
+(pass) what the endpoint refuses > no filename [2.12ms]
+(pass) what the endpoint refuses > an unreasonable filename [3.73ms]
+(pass) what the endpoint refuses > a request without the token [1.83ms]
+(pass) the same file twice > is one blob and two entries [2.80ms]
+(pass) reading an attachment back for a thumbnail > the bytes come back [3.32ms]
+(pass) reading an attachment back for a thumbnail > never with the media type the sender claimed [3.03ms]
+(pass) reading an attachment back for a thumbnail > a name that is not a hash is refused on its shape [2.14ms]
+(pass) reading an attachment back for a thumbnail > an unknown hash is not found, not an error [2.15ms]
+(pass) an empty content type is refused before storing the attachment [1.50ms]
+
+test/server/theme-snapshots.test.ts:
+(pass) real snapshots retain static adaptive graphics and preserve nonconforming script mutations [528.69ms]
+
+test/server/browser-theme.test.tsx:
+(pass) browser controls share state, filter storage areas, restore pages, and retain failed choices [44.05ms]
+
+test/server/frame-source.test.ts:
+(pass) the strings injected into the artifact frame > the stylesheet carries no backtick [0.22ms]
+(pass) the strings injected into the artifact frame > the script carries no backtick [0.14ms]
+
+test/server/version-diff.test.ts:
+(pass) what counts as a block > leaf blocks with text, in order [2.26ms]
+(pass) what counts as a block > a block containing another block is not counted twice [1.44ms]
+(pass) what counts as a block > empty blocks are not blocks [0.94ms]
+(pass) what counts as a block > whitespace is layout, so reflowing does not change the text [1.32ms]
+(pass) word overlap > identical is 1, disjoint is 0 [0.08ms]
+(pass) word overlap > order does not matter
+(pass) word overlap > a small edit stays well above the pairing bound [0.02ms]
+(pass) nothing changed > the same document is identical [1.92ms]
+(pass) nothing changed > a block that only moved is unchanged, not removed and added [1.34ms]
+(pass) added and removed > a new block is added [1.12ms]
+(pass) added and removed > a deleted block is removed, and says where it was [1.19ms]
+(pass) added and removed > two documents sharing nothing report everything, rather than failing [1.09ms]
+(pass) a reworded block is changed, not removed and added > an edit in place [0.96ms]
+(pass) a reworded block is changed, not removed and added > rewritten so completely no word survives, but in the same slot [0.98ms]
+(pass) a reworded block is changed, not removed and added > edited and moved, where position says nothing [0.95ms]
+(pass) a reworded block is changed, not removed and added > a different tag is a different block, not an edit of one [0.81ms]
+(pass) a reworded block is changed, not removed and added > an unrelated block is not paired with one that left [0.80ms]
+(pass) the order the answer is read in > changes come in the later document's order [0.90ms]
+(pass) the order the answer is read in > unchanged is counted so a change count can be read against a size [1.42ms]
+(pass) it is a view, so it is repeatable > the same input gives the same answer [1.85ms]
+(pass) it is a view, so it is repeatable > nothing is written to the documents it was given [1.42ms]
+(pass) controls, which change without changing any words > a ticked checkbox is reported, and says which one [2.41ms]
+(pass) controls, which change without changing any words > unticking is reported too [1.01ms]
+(pass) controls, which change without changing any words > a typed field reports what it now says [1.28ms]
+(pass) controls, which change without changing any words > untouched controls are not reported [1.11ms]
+(pass) controls, which change without changing any words > a control that arrived with its block is not reported twice [0.94ms]
+(pass) controls, which change without changing any words > identical is false when only a control moved [1.01ms]
+(pass) following a block across a version > an unchanged block says where it went [0.83ms]
+(pass) following a block across a version > a reworded block is still followed [0.75ms]
+(pass) following a block across a version > a removed block is absent, rather than pointing somewhere wrong [0.69ms]
+(pass) following a block across a version > every surviving block is accounted for [0.67ms]
+
+test/server/chat-reference-travel.test.tsx:
+(pass) clicking a resolved chat reference travels to its block [5.04ms]
+(pass) an unresolved label renders as prose with no button [2.42ms]
+(pass) the same label in two messages travels to its own message target [3.23ms]
+(pass) a null travel path renders prose even for a resolved label [2.25ms]
+
+test/server/anchor.test.ts:
+(pass) what is written when the note is made > three ways of finding the spot, all pointing at it [0.83ms]
+(pass) what is written when the note is made > the path is built from structure, not the document's own ids [0.41ms]
+(pass) what is written when the note is made > an element that does not exist has no selectors [0.40ms]
+(pass) finding it again > unchanged, it is found exactly [2.19ms]
+(pass) finding it again > reworded, it is still found — which an exact match alone would miss [1.24ms]
+(pass) finding it again > moved down the document, it is still found [1.06ms]
+(pass) finding it again > how confidently it re-attached is reported, not just whether [0.67ms]
+(pass) finding it again > a match by position is qualified as such [0.55ms]
+(pass) a layer that matches twice is discarded, not guessed at > the same text in two places does not pick one [0.42ms]
+(pass) a layer that matches twice is discarded, not guessed at > a path matching twice is refused rather than taking the first [0.44ms]
+(pass) the snapshot guard > an unverified source version re-anchors nothing [0.41ms]
+(pass) the snapshot guard > the hash is the one the store writes [0.15ms]
+(pass) a spot that is gone > a deleted paragraph resolves nowhere [0.70ms]
+(pass) a spot that is gone > it is never re-pointed at what took its place [0.76ms]
+(pass) a note over several spots > each resolves on its own, and whichever survive are kept [1.34ms]
+(pass) a path locates, the quote confirms > the same path holding different text does not take the note [1.37ms]
+(pass) a path locates, the quote confirms > the same path still holding the text keeps the note [0.62ms]
+(pass) the prefix does not drag the search somewhere wrong > a spot whose surroundings changed is still found by its own text [0.91ms]
+(pass) anchoring to selected text rather than a whole element > the quote is the selected words, not the whole element [0.35ms]
+(pass) anchoring to selected text rather than a whole element > its offsets cover only those words [0.26ms]
+(pass) anchoring to selected text rather than a whole element > context comes from either side of the words [0.26ms]
+(pass) anchoring to selected text rather than a whole element > the occurrence inside the named element wins [0.30ms]
+(pass) anchoring to selected text rather than a whole element > text that is not in the named element falls back to the element [0.34ms]
+(pass) anchoring to selected text rather than a whole element > an unknown element or empty selection anchors nothing [0.63ms]
+(pass) anchoring to selected text rather than a whole element > a selected-text anchor resolves back to its element [0.57ms]
+(pass) anchoring to selected text rather than a whole element > a whole-element anchor is unchanged by the shared context helper [0.28ms]
+
+test/server/native-input-cancellation-ui.test.tsx:
+(pass) native cancellation confirmed preserves focus, avoids duplicate writes and uses one announcement region [25.82ms]
+(pass) native cancellation lost-response preserves focus, avoids duplicate writes and uses one announcement region [16.54ms]
+(pass) native cancellation receipt-after-loss preserves focus, avoids duplicate writes and uses one announcement region [18.48ms]
+(pass) native cancellation offered-before-click preserves focus, avoids duplicate writes and uses one announcement region [6.77ms]
+
+test/server/reading-place.test.ts:
+(pass) reading place across reload > a new page restores the exact block offset for the same artifact version [0.13ms]
+(pass) reading place across reload > ignores malformed saved position broken [0.02ms]
+(pass) reading place across reload > ignores malformed saved position null
+(pass) reading place across reload > ignores malformed saved position {}
+(pass) reading place across reload > ignores malformed saved position {"index":-1,"top":0}
+(pass) reading place across reload > ignores malformed saved position {"index":1.5,"top":0}
+(pass) reading place across reload > ignores malformed saved position {"index":1,"top":"0"}
+(pass) reading place across reload > ignores malformed saved position {"index":1,"top":1e999}
+(pass) reading place across reload > blocked browser storage does not break reading [0.04ms]
+
+test/server/comparison-view.test.tsx:
+(pass) equal repeated passages remain unchanged; human provenance and subset quotes survive admission [0.76ms]
+(pass) returning a saved request to the editor preserves all source selections and files [0.16ms]
+(pass) one inline editor preserves source, focus and selection through stale arrival, review, unreadable sources and inspection [18.72ms]
+
+test/server/compatibility-notice.test.tsx:
+(pass) compatibility details remain accessible beside a closed panel and polling does not announce again [4.91ms]
+
+test/server/instrument-links.test.ts:
+(pass) links remain links while annotating > link [262.35ms]
+(pass) links remain links while annotating > label [254.32ms]
+(pass) links remain links while annotating > hover [252.97ms]
+(pass) links remain links while annotating > selection [253.51ms]
+(pass) links remain links while annotating > controls [264.44ms]
+(pass) links remain links while annotating > navigation [253.79ms]
+(pass) links remain links while annotating > dynamic [255.19ms]
+(pass) links remain links while annotating > snapshot [258.66ms]
+
+test/server/version-state.test.ts:
+(pass) which version is on screen > the newest version is current, pinned to it or following it [0.04ms]
+(pass) which version is on screen > a version chosen from the picker is pinned-old
+(pass) which version is on screen > standing still while the newest moves is overtaken, not pinned-old
+(pass) which version is on screen > with nothing to compare against, it is current
+(pass) what is read-only > only a deliberately chosen older version
+(pass) what is read-only > being overtaken is not read-only — this is the defect
+(pass) what is read-only > the newest version is not read-only
+(pass) what is read-only > read-only is not the same as not-newest [0.02ms]
+
+test/server/native-approvals.test.ts:
+(pass) authenticated browser decisions are durable and duplicate-safe while reads never claim a native write [8.95ms]
+
+test/server/artifacts.test.ts:
+(pass) documents travel on their own channel > a record with no documents has an empty catalog, not an error [2.72ms]
+(pass) documents travel on their own channel > the catalog names versions and carries no document bytes [2.73ms]
+(pass) documents travel on their own channel > the conversation endpoint never carries a document, however many exist [241.52ms]
+(pass) one version per request, read by seeking > a version comes back with its bytes and its content type [3.83ms]
+(pass) one version per request, read by seeking > one request brings back one version, never the set [3.31ms]
+(pass) one version per request, read by seeking > an older version is still readable after a newer one lands [3.42ms]
+(pass) one version per request, read by seeking > a version that was never written is not found [2.51ms]
+(pass) one version per request, read by seeking > a version that is not a version is refused, not sought [2.47ms]
+(pass) one version per request, read by seeking > the document channel needs the token like everything else [2.34ms]
+(pass) the page cannot reach into the document > a trailing slash on a page path redirects to the canonical route [130.98ms]
+(pass) the page cannot reach into the document > the frame is sandboxed without allow-same-origin, and is handed its bytes [91.74ms]
+(pass) marks live on the version they were made against > a note is reported against its own version and no other [4.84ms]
+(pass) marks live on the version they were made against > nothing is re-anchored by the server: a version with no notes has none [9.50ms]
+(pass) marks live on the version they were made against > every spot of a multi-spot note is carried [3.88ms]
+(pass) marks live on the version they were made against > an ordinary message is not mistaken for a batch [3.39ms]
+(pass) marks live on the version they were made against > what a note said and pointed at survives the round trip [3.62ms]
+(pass) marks live on the version they were made against > every version stays readable, which is what makes a mark honest [3.69ms]
+(pass) a save is a version, not an input > it produces a new version authored by the person, not the agent [3.80ms]
+(pass) a save is a version, not an input > it starts no turn and is not an input [2.78ms]
+(pass) a save is a version, not an input > the values of the controls travel beside the document [3.94ms]
+(pass) a save is a version, not an input > a save based on a version since replaced is accepted, and says so [3.33ms]
+(pass) a save is a version, not an input > a save too large to store is refused, and nothing is written [2.92ms]
+(pass) a save is a version, not an input > a save needs a document and the version it was working from [2.91ms]
+(pass) a save is a version, not an input > saving an artifact the record does not hold is not found [2.20ms]
+(pass) a save is a version, not an input > saving needs the token, like everything else [2.72ms]
+(pass) a save is a version, not an input > the catalog says who authored each version, without carrying one [2.63ms]
+(pass) save reports a busy record while version reads stay available [3.01ms]
+(pass) save maps lock-timeout at open and closes a constructed writer [3.16ms]
+(pass) save maps corrupt-log at open and closes a constructed writer [2.75ms]
+(pass) save maps fold-refused at open and closes a constructed writer [2.32ms]
+(pass) save maps lock-timeout at mutation and closes a constructed writer [2.95ms]
+(pass) save maps corrupt-log at mutation and closes a constructed writer [2.33ms]
+(pass) save maps fold-refused at mutation and closes a constructed writer [2.87ms]
+(pass) meta maps lock-timeout at open and closes a constructed writer [2.89ms]
+(pass) meta maps corrupt-log at open and closes a constructed writer [2.83ms]
+(pass) meta maps fold-refused at open and closes a constructed writer [3.04ms]
+(pass) meta maps lock-timeout at mutation and closes a constructed writer [2.80ms]
+(pass) meta maps corrupt-log at mutation and closes a constructed writer [2.33ms]
+(pass) meta maps fold-refused at mutation and closes a constructed writer [2.91ms]
+(pass) restore maps lock-timeout at open and closes a constructed writer [2.30ms]
+(pass) restore maps corrupt-log at open and closes a constructed writer [2.80ms]
+(pass) restore maps fold-refused at open and closes a constructed writer [2.55ms]
+(pass) restore maps lock-timeout at mutation and closes a constructed writer [3.06ms]
+(pass) restore maps corrupt-log at mutation and closes a constructed writer [2.93ms]
+(pass) restore maps fold-refused at mutation and closes a constructed writer [2.98ms]
+(pass) restore maps lock-timeout at read and closes a constructed writer [2.77ms]
+(pass) restore maps corrupt-log at read and closes a constructed writer [3.14ms]
+(pass) restore maps fold-refused at read and closes a constructed writer [2.80ms]
+
+test/server/folder-picker.test.ts:
+(pass) folder selection distinguishes cancellation, blocks duplicate dialogs, and releases after completion [0.19ms]
+(pass) shutdown aborts the chooser and failures allow a later attempt [0.11ms]
+(pass) unsupported platforms refuse selection without launching a process [0.03ms]
+
+test/server/native-connection-ui.test.tsx:
+(pass) connection refresh keeps focus, announces only changed status and hides stale instructions [19.94ms]
+
+test/server/route.test.ts:
+(pass) reading a path > a conversation on its own [0.07ms]
+(pass) reading a path > a conversation and an artifact [0.01ms]
+(pass) reading a path > a conversation, an artifact and a version [0.01ms]
+(pass) reading a path > a trailing slash changes nothing [0.01ms]
+(pass) reading a path > a path that is not a conversation is not a route
+(pass) what a bad version does > a version that is not a number leaves the artifact reachable
+(pass) what a bad version does > zero and negative are not versions [0.01ms]
+(pass) what a bad version does > trailing junk is not a version
+(pass) the artifact id is not narrowed > an id the store accepts survives a round trip [0.09ms]
+(pass) the artifact id is not narrowed > a slash in an id does not become a path segment
+(pass) the artifact id is not narrowed > an id that would traverse is carried as an id, not a path [0.01ms]
+(pass) the artifact id is not narrowed > a malformed escape is not an artifact [0.01ms]
+(pass) writing a path > every route it writes, it reads back [0.02ms]
+(pass) writing a path > a version without an artifact cannot be written
+(pass) knowing when not to touch the address bar > the same route is the same route [0.01ms]
+(pass) knowing when not to touch the address bar > a different version is a different route
+(pass) knowing when not to touch the address bar > naming a version is not the same as following the newest
+
+test/server/chat-references.test.ts:
+(pass) chat references > a quote from the version on screen resolves to its block [0.88ms]
+(pass) chat references > a quote from an older version does not resolve [0.03ms]
+(pass) chat references > words that appear nowhere resolve to null and render as prose [0.92ms]
+(pass) chat references > refs for another artifact are ignored [0.02ms]
+(pass) chat references > bracketed labels split into text and label parts with stable offsets [0.02ms]
+(pass) chat references > an unmatched bracket stays text [0.01ms]
+(pass) chat references > a reworded passage still matches approximately [0.51ms]
+(pass) chat references > offsets map through the same text nodes the search uses [0.55ms]
+(pass) chat references > repeated words do not resolve verbatim [0.46ms]
+(pass) chat link travel > a click travels while following the newest version [0.02ms]
+(pass) chat link travel > a click stays inert while an older version is pinned
+
+test/server/activity.test.ts:
+(pass) what the dock says > says nothing when nothing is happening [0.03ms]
+(pass) what the dock says > the slowest legitimate turn measured is not an alarm [0.04ms]
+(pass) what the dock says > a running turn is an alarm only well past the slowest work seen [0.01ms]
+(pass) what the dock says > notes nobody took are an alarm much sooner
+(pass) what the dock says > the two thresholds are not the same number
+(pass) what the dock says > a short wait shows no count
+(pass) what the dock says > a patch revision shows its count while you are still waiting
+(pass) what the dock says > the alarm sits above the slowest legitimate turn, not above the common one
+(pass) what the dock says > what is happening is named before it is timed
+(pass) saved input without an agent explains what happens without a progress timer
+(pass) an idle disconnected record does not claim a message was saved
+(pass) formatElapsed > seconds until they stop reading as a number you can judge [0.01ms]
+(pass) formatElapsed > never counts backwards
+(pass) a pending permission request waits for the person without a stall alarm
+(pass) native connection status owns activity announcements even without an ordinary attachment [0.01ms]
+
+test/server/content-comparison.test.ts:
+(pass) inert source comparison > extracts nested prose once and addresses source body order, not filtered rows or author IDs [4.20ms]
+(pass) inert source comparison > resource nodes and scripts are inert and keep later addresses stable [0.48ms]
+(pass) inert source comparison > retained equality removes only instrumentation and normalizes line endings [0.21ms]
+(pass) inert source comparison > prose reflow is ignored but original quotes and preformatted spaces survive [0.08ms]
+(pass) inert source comparison > small edits pair words without changing either source address [0.07ms]
+(pass) inert source comparison > unrelated rewrites and duplicate ambiguity do not gain positional correspondence [0.10ms]
+(pass) inert source comparison > block and word work each have a preallocation bound and preserve both texts [2.45ms]
+(pass) inert source comparison > unsupported-only content is never silently compared as empty [0.06ms]
+
+test/server/pre-edit.test.ts:
+(pass) line breaks a browser inserted become newlines > a br is a newline [1.06ms]
+(pass) line breaks a browser inserted become newlines > a div wrapper is a newline [0.42ms]
+(pass) line breaks a browser inserted become newlines > a div holding a br is one line, not two elements [0.41ms]
+(pass) line breaks a browser inserted become newlines > nested divs each open a line [0.39ms]
+(pass) line breaks a browser inserted become newlines > newlines already in the block are untouched [0.35ms]
+(pass) line breaks a browser inserted become newlines > a block nobody edited comes out byte for byte [0.30ms]
+(pass) what it must not touch > highlighting the agent wrote is left alone [0.47ms]
+(pass) what it must not touch > a break inside highlighted code still becomes a newline [0.39ms]
+(pass) what it must not touch > an empty block stays empty [0.26ms]
+(pass) the frame runs this exact function > it is injected by its own source, not written twice [0.06ms]
+(pass) the frame runs this exact function > the injected source is valid on its own [0.33ms]
+(pass) the frame runs this exact function > it refers to nothing outside itself [0.02ms]
+
+test/server/note-popover.test.ts:
+(pass) dragging a note moves it immediately without rendering or replacing its inputs [320.70ms]
+
+test/server/discovery.test.ts:
+(pass) a terminal-created record appears in the hub and opens by its saved identity [256.46ms]
+(pass) hub names follow the document when it arrives and when either view renames it [6.44ms]
+(pass) a renamed directory still opens and accepts input under its saved identity [250.94ms]
+(pass) ambiguous and missing identities never select a record or mint one through existing-record routes [11.38ms]
+(pass) creation groups subfolders, nested repositories, worktrees and ordinary folders while preserving cwd [67.70ms]
+(pass) legacy discovery derives a short title without changing metadata or starting a driver [17.10ms]
+(pass) staging and damaged records do not hide valid records, and a root failure is not empty history [5.44ms]
+(pass) discovery pages use a stable identity cursor and never duplicate records after changes [5.82ms]
+(pass) server discovery reconciles missed hints within five seconds without a browser [1.29ms]
+(pass) a writer refuses a changed identity after acquiring the append lock [0.84ms]
+(pass) terminal send refuses an unknown conversation without creating it [0.14ms]
+(pass) identity refusal also prevents attachment files and preference replacement [0.85ms]
+(pass) a damaged duplicate still conflicts, while invalid optional folder metadata keeps the identity readable [247.36ms]
+(pass) closing discovery prevents late hints from restarting its watcher [0.24ms]
+(pass) discovery errors never consume the conversation page budget [4.19ms]
+(pass) annotation-first records use readable feedback instead of encoded JSON for the title [2.95ms]
+(pass) a folder with unusable Git metadata can still create a conversation [5.99ms]
+(pass) same folder names stay separate and a missing working folder preserves its project [14.27ms]
+(pass) typed text takes priority over an accompanying annotation when naming a record [17.37ms]
+
+test/server/line-diff.test.ts:
+(pass) nothing changed > the same bytes are identical [0.20ms]
+(pass) nothing changed > only the line ending differs, which nobody means as a change [0.01ms]
+(pass) nothing changed > two empty documents
+(pass) added and removed > a line added in the middle [0.03ms]
+(pass) added and removed > a line removed from the middle [0.01ms]
+(pass) added and removed > two documents sharing nothing report all of both [0.02ms]
+(pass) added and removed > empty against not empty [0.01ms]
+(pass) a rewritten line is one row, not two > a removal followed by an addition pairs [0.02ms]
+(pass) a rewritten line is one row, not two > both line numbers survive the pairing [0.01ms]
+(pass) what only a byte comparison sees > an attribute change that alters no text [0.01ms]
+(pass) what only a byte comparison sees > a comment nobody renders [0.02ms]
+(pass) what only a byte comparison sees > whitespace inside the markup
+(pass) what only a byte comparison sees > markup a parse would repair is compared anyway [0.01ms]
+(pass) the bound > a large document with a small edit stays exact [3.67ms]
+(pass) the bound > two large unrelated documents are reported coarsely, and say so [0.69ms]
+(pass) the bound > the bound is a stated number, not a feeling
+(pass) it is a view > the same input gives the same answer [0.05ms]
+(pass) it is a view > every row carries a number for each side it exists on [0.04ms]
+(pass) runs of changed lines > three lines rewritten are three changed rows, not one plus orphans [0.02ms]
+(pass) runs of changed lines > more lines removed than added leaves the remainder as removals [0.02ms]
+(pass) runs of changed lines > more lines added than removed leaves the remainder as additions [0.01ms]
+
+test/server/restore.test.ts:
+(pass) restoring an older version > appends a copy at the end, authored by the person [5.81ms]
+(pass) restoring an older version > nothing is removed, rewritten, or hidden [4.06ms]
+(pass) restoring an older version > undoing a restore is the same act again [13.34ms]
+(pass) restoring an older version > the controls a version carried come back with it [4.22ms]
+(pass) restoring an older version > it records the version it came from [14.53ms]
+(pass) what restore refuses > restoring the version that is already current [3.29ms]
+(pass) what restore refuses > a version the artifact does not have [4.05ms]
+(pass) what restore refuses > an artifact the record does not hold [2.96ms]
+(pass) what restore refuses > a body with no version [2.70ms]
+(pass) what restore refuses > a version that is not a positive integer [3.33ms]
+(pass) what restore refuses > without the token [2.59ms]
+
+test/server/closed-chat-status.test.ts:
+(pass) the closed-chat corner > queued notes hold the send button [0.03ms]
+(pass) the closed-chat corner > an emptied queue hands the corner to the running work [0.01ms]
+(pass) the closed-chat corner > nothing in flight means nothing in the corner
+(pass) the closed-chat corner > an open panel shows everything in chat itself
+(pass) the closed-chat corner > a dead connection leaves the corner alone
+(pass) the closed-chat corner > a native-owned record docks its connection in the corner
+
+test/server/input-recovery.test.ts:
+(pass) the recovery controls > mount is passive; Retry reconciles with the server and shows acceptance [269.24ms]
+(pass) the recovery controls > 401 offers only Reload; it never turns into an automatic retry [12.47ms]
+(pass) the recovery controls > an explicit refusal returns the original note and source to its editor [248.79ms]
+(pass) the recovery controls > malformed recovery text is inert; discard explicitly explains its limited effect [8.22ms]
+(pass) repeat-safe browser admission > concurrent copies return one receipt and leave one durable input [248.59ms]
+(pass) repeat-safe browser admission > a stale open writer catches up before returning the accepted receipt [5.87ms]
+(pass) repeat-safe browser admission > accepted identity wins after application, a newer document, and capacity saturation [8.35ms]
+(pass) repeat-safe browser admission > a refused attempted entry in the durable log is not a receipt [249.29ms]
+(pass) repeat-safe browser admission > wire-invalid identities, null bodies and over-size text are refused; legacy sends still work [251.95ms]
+(pass) same-tab recovery against a running server > accepted response loss, restart, 401, reload, explicit Retry: one note [250.44ms]
+(pass) same-tab recovery against a running server > a request which never arrived is recovered with its original identity [244.48ms]
+(pass) same-tab recovery against a running server > copied tab entries reconcile concurrently rather than create fresh sends [250.50ms]
+(pass) same-tab recovery against a running server > refused recovery restores the exact draft, including source evidence [250.25ms]
+(pass) same-tab recovery against a running server > unresolved and in-flight sends block replacements; closed conversations do not retry [5.17ms]
+(pass) browser storage and uncertain replies > getter failure prevents the first network attempt [4.70ms]
+(pass) browser storage and uncertain replies > write failure prevents the first network attempt [4.86ms]
+(pass) browser storage and uncertain replies > readback failure prevents the first network attempt [4.49ms]
+(pass) browser storage and uncertain replies > cleanup failure preserves the known outcome; reload alone cannot resend [247.58ms]
+(pass) browser storage and uncertain replies > malformed entries preserve readable text; explicit discard sends nothing [6.51ms]
+(pass) browser storage and uncertain replies > another conversation's stored entry is never submitted [7.16ms]
+(pass) browser storage and uncertain replies > wrong-id remains uncertain [5.84ms]
+(pass) browser storage and uncertain replies > bad-json remains uncertain [5.30ms]
+(pass) browser storage and uncertain replies > missing-verdict remains uncertain [5.73ms]
+(pass) browser storage and uncertain replies > missing-note-index remains uncertain [5.19ms]
+(pass) browser storage and uncertain replies > server-error remains uncertain [5.15ms]
+
+test/server/recovery-compatibility.test.ts:
+(pass) recovery ignores version differences and preserves its TTL and interactive conversion [2.67ms]
+
+test/server/paste-attach.test.ts:
+(pass) paste with no files yields nothing to attach [0.06ms]
+(pass) paste prefers clipboard files list when present [0.37ms]
+(pass) paste falls back to file items and skips text entries [0.03ms]
+(pass) pasted documents ride the same store path as chosen files [0.05ms]
+
+test/server/managed-launch.test.ts:
+(pass) a background worker cannot fall through to server startup [0.11ms]
+(pass) a failed server bind never launches pending work or starts a retry timer [25.44ms]
+(pass) hub acceptance survives a missed launch and completes through reconciliation with no connected tab [163.57ms]
+
+test/server/conversation-panel.test.tsx:
+(pass) view toggles preserve mounted drafts, focus, and visibility across updates without affecting another view [6.41ms]
+(pass) manual visibility survives a reload ahead of the URL initializer:  [5.61ms]
+(pass) manual visibility survives a reload ahead of the URL initializer: ?conversation-panel=open [4.14ms]
+(pass) an empty conversation opens after loading and preserves its own manual choice on reload [8.11ms]
+
+test/server/layout.test.ts:
+(pass) how wide the conversation may be > a width in range is kept [0.03ms]
+(pass) how wide the conversation may be > it cannot be dragged past the minimum
+(pass) how wide the conversation may be > it cannot be dragged past the maximum
+(pass) how wide the conversation may be > the document keeps its own floor
+(pass) how wide the conversation may be > in a window too narrow for both, the conversation still opens
+(pass) how wide the conversation may be > a width that is not a number is the minimum
+(pass) how wide the conversation may be > it is a whole number of pixels
+(pass) remembering it > what was written is what is read back [0.07ms]
+(pass) remembering it > nothing stored means nothing to apply
+(pass) remembering it > rubbish in storage is ignored, not applied
+(pass) remembering it > a browser that refuses storage does not take the page with it [0.04ms]
+(pass) the stacked document share > keeps a requested share within both pane limits [0.01ms]
+(pass) the stacked document share > invalid measurements restore the conversation to the bottom third
+
+test/server/theme-bootstrap.test.ts:
+(pass) both prepaint scripts resolve every stored value like the runtime, even with blocked storage [4.28ms]
+(pass) annotation and application palette values stay aligned in both appearances [0.20ms]
+
+test/server/selection-compatibility.test.ts:
+(pass) native publication polls do not diagnose inactive browser selections [6.60ms]
+(pass) saved selections do not trigger version previews or warnings [2.15ms]
+(pass) failed selection inspection produces safe feedback instead of forwarding raw process output [2.39ms]
+(pass) settings failures retain the harness boundary's structured refusal and diagnostic identity [0.15ms]
+
+test/server/artifact-theme.test.ts:
+(pass) each stored version selects its declared frame policy without inferring support [0.48ms]
+
+test/server/view-options.test.ts:
+(pass) printed conversation URLs carry only the explicit view initializer [0.74ms]
+(pass) only a single explicit open parameter opens a new view [0.03ms]
+
+test/server/weave.test.ts:
+(pass) a refreshed shorter transcript keeps a later queued note visible at its end [0.10ms]
+(pass) saved versions do not move a later queued note before an earlier message [0.04ms]
+(pass) weaving pending notes into the conversation > with no notes the messages are unchanged [0.02ms]
+(pass) weaving pending notes into the conversation > a note written between two messages stays between them [0.02ms]
+(pass) weaving pending notes into the conversation > several notes and messages all keep their order [0.02ms]
+(pass) weaving pending notes into the conversation > two notes written back to back stay adjacent and in order
+(pass) weaving pending notes into the conversation > a note written before anything was said comes first
+(pass) weaving pending notes into the conversation > a note written after the last message is last
+(pass) weaving pending notes into the conversation > notes handed over out of order are still placed in order [0.01ms]
+(pass) weaving pending notes into the conversation > every note survives the weave, and no message is lost or repeated [0.03ms]
+(pass) weaving pending notes into the conversation > the messages array is not mutated
+(pass) tool activity collapses without crossing replies, user input, or pending notes [0.14ms]
+
+test/server/reading-place-frame.test.ts:
+(pass) artifact reading place handshake > waits for layout and the restore before reporting, then reports every scroll immediately [24.24ms]
+
+test/server/input-submission.test.ts:
+(pass) unusable recovery data stays visible and cannot send until explicitly discarded [0.25ms]
+(pass) a stale controller cannot replace another unresolved send in the same tab [0.08ms]
+(pass) an explicit admission refusal restores the request and clears recovery storage [0.06ms]
+(pass) storage failures and unverified responses never authorize a replacement send [0.19ms]
+(pass) a lost response survives reload and server restart without sending another prompt [246.13ms]
+
+test/server/unavailable-hcn.test.ts:
+(pass) a missing HCN fails at inspection while healthy and damaged records stay readable [82.93ms]
+(pass) a failed executable resolution leaves record reads and safe defaults available [3.68ms]
+
+test/server/mode-default.test.ts:
+(pass) the parent and fresh document both begin in edit mode without a latched modifier [0.37ms]
+
+test/server/artifact-width.test.ts:
+(pass) authored frame width > accepts bounded numeric units and full width [0.10ms]
+(pass) authored frame width > rejects unbounded, nonnumeric, executable, and unsupported CSS [0.02ms]
+(pass) authored frame width > reads the first head declaration rather than strings, comments or body metadata [0.18ms]
+(pass) authored frame width > reader overrides the author while both stay within the available pane [0.04ms]
+(pass) authored frame width > the frame floor wins when space permits, without overflowing narrow panes [0.01ms]
+(pass) reader width preference > persists and resets each exact identity independently [0.06ms]
+(pass) reader width preference > ignores malformed storage and remains usable when storage throws [0.09ms]
+
+test/server/creation.test.ts:
+(pass) creation saves concrete defaults; reload and later defaults leave the first conversation unchanged [7.32ms]
+(pass) concurrent and cold retries return one published record before reading changed defaults [53.92ms]
+(pass) creation without a project allocates one private workspace across equivalent retries [5.97ms]
+(pass) folder picker is authenticated and returns selection or cancellation without creating a record [2.37ms]
+(pass) optional project folders still reject relative paths, invalid types, and missing folders [3.57ms]
+(pass) settings replace a complete bundle at the expected revision and effort preserves the concrete model [4.89ms]
+(pass) legacy settings complete compatibly in memory and location changes preserve unknown metadata [4.29ms]
+(pass) defaults errors stay visible and changing the configured root cannot retarget a running hub [4.47ms]
+(pass) first submission saves compatible legacy settings while keeping an unknown folder recoverable [3.94ms]
+(pass) an accepted receipt is returned before legacy driver inspection or preference completion [4.49ms]
+(pass) a created headless-turn choice is retained when the terminal explicitly opens its driver [4.86ms]
+(pass) a settings save during legacy projection wins without rejecting the submitted prompt [3.34ms]
+(pass) a full input queue leaves legacy preferences unchanged [6.12ms]
+(pass) complete explicit choices can repair invalid defaults without silently replacing them [3.17ms]
+(pass) malformed settings refuse an explicit driver start and release its presence lock [3.04ms]
+(pass) an unavailable record root keeps creation retryable with the same request [3.59ms]
+(pass) hub title writes validate text and use revision conflicts without launching a model [4.11ms]
+
+test/server/theme.test.ts:
+(pass) System follows the current preference until the reader chooses an override [0.08ms]
+(pass) unavailable browser facilities preserve an override and expose failed persistence [0.07ms]
+(pass) a saved choice survives reopening and tabs converge without echo writes [0.06ms]
+
+test/server/artifact-background.test.ts:
+(pass) artifact canvas backgrounds > a narrow authored body can paint the document canvas [24.22ms]
+(pass) artifact canvas backgrounds > authored root and body backgrounds remain independent [11.28ms]
+(pass) artifact canvas backgrounds > app.css provides a scheme-aware backing outside the document [10.88ms]
+(pass) artifact canvas backgrounds > content-comparison.css provides a scheme-aware backing outside the document [8.28ms]
+
+test/server/server.test.ts:
+(pass) the way in > native cancellation preserves feedback, repeats safely and refuses a stale offered input [7.60ms]
+(pass) the way in > poll joins native delivery to plain feedback and annotation batches without ordinary recovery [169.76ms]
+(pass) the way in > a reopened native publication shows its retained failure and generic exact-record guidance [6.64ms]
+(pass) the way in > native connection instructions name the served record and root without starting a session [4.28ms]
+(pass) the way in > browser and CLI report the same connection state without exposing record authority [3.75ms]
+(pass) the way in > binds loopback, and the port is the one the kernel gave back [2.12ms]
+(pass) the way in > serves one page for every record; the conversation comes from the URL [90.23ms]
+(pass) the way in > the page is served from this origin, never from a CDN [89.49ms]
+(pass) a page that has not proved itself cannot read or write > no token is refused [2.80ms]
+(pass) a page that has not proved itself cannot read or write > a wrong token is refused [2.29ms]
+(pass) a page that has not proved itself cannot read or write > writing without the token is refused, and nothing is appended [2.62ms]
+(pass) a page that has not proved itself cannot read or write > the token is minted per start, so a restart invalidates every page [3.81ms]
+(pass) a request from anywhere else is refused before it arrives > a foreign origin is refused even holding the token [2.33ms]
+(pass) a request from anywhere else is refused before it arrives > a drive-by post from a site you visited is refused, and appends nothing [2.24ms]
+(pass) a request from anywhere else is refused before it arrives > this server's own origin is allowed [241.56ms]
+(pass) the record secret never reaches the browser > neither the page nor the API carries it [330.48ms]
+(pass) reading a conversation > shows what was said, through the same projection the terminal uses [245.53ms]
+(pass) reading a conversation > an unknown record returns not-found [3.17ms]
+(pass) reading a conversation > a damaged record says so rather than rendering as silence [165.99ms]
+(pass) reading a conversation > an invalid conversation id is refused [3.02ms]
+(pass) writing reaches the record with nothing driving > a null input body is a client error and appends no work [2.33ms]
+(pass) writing reaches the record with nothing driving > concurrent retries return one accepted receipt and conflicting text is refused [331.75ms]
+(pass) writing reaches the record with nothing driving > an append lands and waits, exactly as sending from a terminal does [247.13ms]
+(pass) writing reaches the record with nothing driving > the server never drives: it takes no presence lock and emits no effect [240.07ms]
+(pass) writing reaches the record with nothing driving > empty text is refused [3.82ms]
+(pass) writing reaches the record with nothing driving > text past the protocol's own bound is refused, not truncated [3.43ms]
+(pass) writing reaches the record with nothing driving > a body that is not JSON is refused [3.25ms]
+(pass) the page says whether anything is driving > with no driver the status is not a live one [243.88ms]
+(pass) the page says whether anything is driving > a held presence lock is reported as a live channel, however stale the lease [243.06ms]
+(pass) whether the agent is working > a recorded native refusal retains its class beside the transcript text [167.70ms]
+(pass) whether the agent is working > a turn with no terminal event is running [245.04ms]
+(pass) whether the agent is working > a turn that produced done is not running [244.34ms]
+(pass) whether the agent is working > an older unfinished turn is history, not activity [243.70ms]
+(pass) whether the agent is working > a session error followed by detach leaves queued input waiting, not working [327.06ms]
+(pass) whether the agent is working > a record with no events at all is not working [240.29ms]
+(pass) whether the agent is working > a held prompt behind an idle session says the session is idle [323.92ms]
+(pass) whether the agent is working > a held prompt behind a working turn keeps the wait text [321.28ms]
+(pass) naming an artifact > a rename lands, and the catalog shows the new name [4.36ms]
+(pass) naming an artifact > an artifact nobody renamed carries no title at all [2.92ms]
+(pass) naming an artifact > renaming creates no version [3.44ms]
+(pass) naming an artifact > naming an artifact the record does not hold is refused [2.52ms]
+(pass) naming an artifact > a title outside the bound is refused and nothing is appended [4.19ms]
+(pass) naming an artifact > a title at exactly the bound is accepted [2.95ms]
+(pass) naming an artifact > renaming twice keeps the second name [2.90ms]
+(pass) naming an artifact > a rename needs the token like everything else [3.02ms]
+
+test/server/driver-menus.test.ts:
+(pass) the effort glosses > three glosses, placed by the ladder's order [0.03ms]
+(pass) the effort glosses > a level off the ladder, or a ladder with no default, gets none
+(pass) the effort glosses > muse's own name for the bottom of the ladder still glosses as fast
+(pass) which menus exist > headless-turn offers all three [0.05ms]
+(pass) which menus exist > headless-session offers all three: hcn session carries --effort since 0.6.0 [0.02ms]
+(pass) which menus exist > interactive offers none: the human's session chose the driver
+(pass) which menus exist > interactive names what runs, not what a preference says [0.02ms]
+(pass) which menus exist > nothing driving still offers the menus: choosing now is the natural moment
+(pass) which menus exist > no served lists means no menus, whatever the mode
+(pass) which menus exist > a harness with no models and no open entry offers no model menu [0.01ms]
+(pass) which menus exist > an extensible harness offers the model menu even with an empty list
+(pass) what the segments say > the preference names the harness and the model; effort falls to the default
+(pass) what the segments say > the driver in force's model does not leak across a harness change
+(pass) what the segments say > while the harness stands, the model in force names the segment
+(pass) what a pick POSTs > a harness change sends the spine alone - the old dimensions clear [0.02ms]
+(pass) what a pick POSTs > re-choosing the effective harness is no POST at all
+(pass) what a pick POSTs > a model change keeps the effort and the provider [0.03ms]
+(pass) what a pick POSTs > an effort change keeps the model and clears back to the default by name [0.02ms]
+(pass) what a pick POSTs > picking medium saves the explicit effort and retains the model
+(pass) what a pick POSTs > picking what already runs is no POST at all [0.01ms]
+
+test/server/seams.test.ts:
+(pass) seam placement (3e) > a note anchored in a removed paragraph gets a seam before the next survivor [1.59ms]
+(pass) seam placement (3e) > notes lost to a rewording get no seam - the passage is not gone [0.99ms]
+(pass) seam placement (3e) > a removed tail puts the seam at the end [0.90ms]
+(pass) seam placement (3e) > two notes into one gap share one seam and it counts them [0.53ms]
+(pass) seam placement (3e) > the seam opens the earliest version its notes still read on [0.44ms]
+(pass) seam placement (3e) > a spot with no selectors, or a version whose bytes are missing, draws nothing [0.11ms]
+
+test/server/driver.test.ts:
+(pass) writing a preference > stores it and answers with what the file now holds [158.03ms]
+(pass) writing a preference > the file lands 0o600, beside meta.json, never in the log [157.03ms]
+(pass) writing a preference > the whole preference is replaced, not patched [240.85ms]
+(pass) writing a preference > an unknown conversation is not created by a preference [2.64ms]
+(pass) writing a preference > an alias is not one of the four [2.29ms]
+(pass) the endpoint refuses, before anything is written > a body that is not JSON [2.71ms]
+(pass) the endpoint refuses, before anything is written > a missing or unknown harness [2.93ms]
+(pass) the endpoint refuses, before anything is written > a field that is not a bounded, control-free string [2.93ms]
+(pass) the endpoint refuses, before anything is written > partial bundles and unknown fields are refused [2.47ms]
+(pass) the endpoint refuses, before anything is written > the order is the RFC's: harness before unknown fields [3.14ms]
+(pass) the endpoint refuses, before anything is written > a complete versioned bundle is accepted [161.67ms]
+(pass) the endpoint is gated like every write > no token is refused [2.81ms]
+(pass) the endpoint is gated like every write > a wrong token is refused, and nothing is written [2.18ms]
+(pass) the endpoint is gated like every write > an invalid conversation id is refused [1.90ms]
+(pass) what the poll carries > a preference surfaces beside the driver in force [245.71ms]
+(pass) what the poll carries > absent standing preferences stay null until a complete explicit save [327.23ms]
+(pass) what the poll carries > an unknown record returns not-found [2.40ms]
+
+test/server/instrument-modifiers.test.ts:
+(pass) held annotation preserves spots, supports additive selection, and respects read-only [267.88ms]
+
+test/server/native-input-delivery-ui.test.tsx:
+(pass) message delivery labels retain outcome meaning and use keyboard-accessible details without another live region [26.23ms]
+
+test/server/native-approval-ui.test.tsx:
+(pass) permission controls preserve untrusted details, save one explicit choice and never send on remount [5.61ms]
+
+test/server/naming-worker.test.ts:
+(pass) a clean blank title remains invalid output eligible for its one repair attempt [3.78ms]
+(pass) worker defers unresolved settings then names separately without a working folder or native resume [2.13ms]
+(pass) unsupported isolation is recorded without consuming an attempt or launching [2.33ms]
+(pass) a failed naming operation keeps its fallback and cannot consume another attempt [1.77ms]
+
+test/server/driver-choices.test.ts:
+(pass) the projection from inspect facts > harnesses are the four hcn knows, in the seam's own order [0.96ms]
+(pass) the projection from inspect facts > a harness whose facts carry no vocabulary has no entry - absent, not empty [0.08ms]
+(pass) the projection from inspect facts > installed pairs come first, baseline ids absent from the pairs follow [0.03ms]
+(pass) the projection from inspect facts > no pairs keeps the baseline list unchanged, with no installed key [0.01ms]
+(pass) the projection from inspect facts > a failing pair read degrades to the baseline, not a refusal [0.11ms]
+(pass) the projection from inspect facts > a served pair list merges ahead of the baseline [0.06ms]
+(pass) the projection from inspect facts > a runner predating the mode still satisfies the seam [0.04ms]
+(pass) the projection from inspect facts > a non-extensible vocabulary never spawns a pair read [0.04ms]
+(pass) the projection from inspect facts > an inspect that fails is a harness with no entry, not a refusal [0.03ms]
+(pass) what the pinned hcn serves > the poll carries the lists, read through the seam [244.09ms]
+
+test/server/transcript-runtime.test.tsx:
+(pass) an asynchronously inserted save marker cannot hide an accepted note after reload [9.16ms]
+
+test/protocol/liveness.test.ts:
+(pass) liveness + state machine (M4.4) > the five conversation states derive from profile, lease liveness, and presence - and the grace constants ARE the lease clock, in one module [2.88ms]
+(pass) liveness + state machine (M4.4) > heartbeat timeout decides, exactly at the grace boundary - heartbeats hold the channel attached indefinitely [0.43ms]
+(pass) liveness + state machine (M4.4) > headless takeover is REFUSED while presence holds - the human's process is alive, only the channel died [0.05ms]
+(pass) liveness + state machine (M4.4) > presence fences CONTENDERS, never the incumbent's own recovery: a dead headless channel re-attaches even while an interactive process lives [0.04ms]
+(pass) liveness + state machine (M4.4) > attach records carry the presence dimension, so a corroborated takeover and a blind one are distinguishable in the log [0.03ms]
+(pass) liveness + state machine (M4.4) > D-021 concurrent headless-resume oracle: two headless contenders, both seeing presence=false - exactly one wins, loser refused by epoch, not luck [0.07ms]
+(pass) liveness + state machine (M4.4) > handoff is legal only at turn boundaries: a clean yield handoff aborts nothing; lease-expiry takeover is the one mid-turn exception [0.04ms]
+(pass) a lapsed lease does not change which profile is attached > an idle headless driver reads as headless, not as an interactive session [0.02ms]
+(pass) a lapsed lease does not change which profile is attached > and the controller therefore delivers rather than waiting for a re-attach [0.02ms]
+(pass) a lapsed lease does not change which profile is attached > an interactive attachment is unchanged — that is what the name is for [0.01ms]
+(pass) a lapsed lease does not change which profile is attached > a dead process is gone whatever was attached [0.02ms]
+(pass) a lapsed lease does not change which profile is attached > never attached at all is still interactive-unattached
+
+test/protocol/stale-answer.test.ts:
+(pass) stale-answer (RFC-05 R4,R5) > answer naming a turn that is not the open question is refused stale-answer [0.13ms]
+(pass) stale-answer (RFC-05 R4,R5) > answer when no question is open is refused stale-answer [0.04ms]
+(pass) stale-answer (RFC-05 R4,R5) > second answer while one is already awaiting outcome is refused stale-answer [0.04ms]
+(pass) stale-answer (RFC-05 R4,R5) > refused answer does not consume the open question - the person can try again with fresh id [0.03ms]
+(pass) stale-answer (RFC-05 R4,R5) > resending kept text uses a fresh input id - reusing refused id after accepted would be duplicate, but refused is not stored so fresh is required for clarity [0.02ms]
+(pass) stale-answer (RFC-05 R4,R5) > replacing a question carries its reservation with it, so a late outcome for the old question cannot clear the new one [0.06ms]
+(pass) stale-answer (RFC-05 R4,R5) > replayed answer is delivered as ordinary input (queue) [0.05ms]
+(pass) stale-answer (RFC-05 R4,R5) > replay rewriting is why a replayed answer survives a restart that moved the question [0.05ms]
+
+test/protocol/turn-id.test.ts:
+(pass) minting a turn id > ids are ordered within one run [0.87ms]
+(pass) minting a turn id > a second run shares no id with the first [0.05ms]
+(pass) minting a turn id > many runs collide with none of the others [0.37ms]
+(pass) minting a turn id > the counter is still readable in the id [0.04ms]
+
+test/protocol/conversation-title.test.ts:
+(pass) title validation enforces plain single-line Unicode text after space normalization [0.10ms]
+(pass) surrounding whitespace is normalized but interior control characters refuse [0.01ms]
+(pass) an annotation envelope without text or files does not invent a naming prompt [0.14ms]
+
+test/protocol/reducer.test.ts:
+(pass) reducer core (M4.2) > attach with the right secret grants epoch 1, an attach-ok with lease + replayFrom, and a structured record [0.05ms]
+(pass) reducer core (M4.2) > attach with a wrong secret is refused auth-failed: state untouched by identity, refused send, record names the issue [0.02ms]
+(pass) reducer core (M4.2) > an accepted event mints the next lucid seq, acks the source n, and tracks the in-flight turn [0.03ms]
+(pass) reducer core (M4.2) > a duplicate per-epoch n is refused dupe-n and applies nothing [0.03ms]
+(pass) reducer core (M4.2) > a gap in per-epoch n is refused gap-n so the source must resend in order [0.02ms]
+(pass) reducer core (M4.2) > a post-fence refusal still proves the writer alive: gap-n retries renew the lease once renewal is due [0.02ms]
+(pass) reducer core (M4.2) > heartbeat renews the lease from the injected clock and returns an explicit lease grant [0.02ms]
+(pass) reducer core (M4.2) > any accepted frame renews the lease once renewal is due, not just heartbeat [0.01ms]
+(pass) reducer core (M4.2) > renewal is gated at renewEvery granularity: frames inside the window reuse lease and turn identity [0.03ms]
+(pass) reducer core (M4.2) > attach while a valid lease is held is refused lease-held - takeover needs expiry [0.02ms]
+(pass) reducer core (M4.2) > isLive is the one exported expiry comparison: live while the lease holds, dead at expiry or detach [0.02ms]
+(pass) reducer core (M4.2) > stale-lease takeover: attach after expiry increments the epoch, and the old epoch's frames are refused stale-epoch from that moment [0.05ms]
+(pass) reducer core (M4.2) > two-simultaneous-attach oracle: exactly one writer, loser refused by epoch - not luck [0.04ms]
+(pass) reducer core (M4.2) > lease expiry mid-turn: the takeover attach aborts the in-flight turn [0.02ms]
+(pass) reducer core (M4.2) > ack records the source's durable position on the current epoch and is fenced on a stale one [0.02ms]
+(pass) reducer core (M4.2) > acked is monotonic: a re-delivered older ack never rewinds the durable watermark [0.02ms]
+(pass) reducer core (M4.2) > takeover rebases acked from the NEW writer's resumeFrom - the old writer's watermark never speaks for the new one [0.10ms]
+(pass) reducer core (M4.2) > ack claiming a seq lucid never minted is refused covers-ahead-of-log with the comparison in the record [0.02ms]
+(pass) reducer core (M4.2) > disposition is accepted with a minted seq on the current epoch and fenced on a stale one [0.04ms]
+(pass) reducer core (M4.2) > detach releases the channel: later frames are refused not-attached, and re-attach takes the next epoch [0.02ms]
+(pass) reducer core (M4.2) > detach mid-turn aborts the turn the departing writer can never finish [0.02ms]
+(pass) reducer core (M4.2) > turnId is validated on first sight: a retired turnId can never come back, same epoch or after takeover [0.04ms]
+(pass) reducer core (M4.2) > channel-auth oracle: an impersonator cannot end or redirect the conversation with lucid->source frame kinds [0.08ms]
+(pass) reducer core (M4.2) > every post-attach source kind is refused not-attached on a dead channel and fenced on any non-current epoch [0.07ms]
+(pass) reducer core (M4.2) > re-attach negotiates replay: replayFrom is the exclusive watermark (host replays seq > replayFrom), and a claim ahead of the log is refused [0.04ms]
+(pass) reducer core (M4.2) > enqueueInput mints a seq, stores the input as outstanding, and sends it to the attached source [0.03ms]
+(pass) reducer core (M4.2) > enqueueInput with a reused id is refused input-id-reused - the idempotency key is never minted twice [0.02ms]
+(pass) reducer core (M4.2) > disposition drives the input state machine: outstanding -> queued -> applied, and an unknown inputId is refused [0.04ms]
+(pass) reducer core (M4.2) > a rejected input returns to the queue - never dropped - and is re-sent at the next turn boundary [0.06ms]
+(pass) reducer core (M4.2) > attach replays non-applied inputs with seq > replayFrom, in seq order, after attach-ok [0.06ms]
+(pass) reducer core (M4.2) > death-before-ack oracle: applied at the source, died before disposition - replay redelivers the same id, dedupe keeps it exactly-once [0.07ms]
+(pass) reducer core (M4.2) > grantCredit mints a credit frame for the droppable class, clamped so outstanding credits never exceed DROPPABLE_QUEUE_MAX [0.07ms]
+(pass) reducer core (M4.2) > droppable events consume a credit and are refused no-credit under starvation; the lossless class is never gated [0.06ms]
+(pass) reducer core (M4.2) > heartbeat-vs-slow-turn oracle: a long silent turn with current heartbeats is NOT takeover-eligible; stopped heartbeats are [0.04ms]
+(pass) reducer core (M4.2) > malformed frames mid-stream never reach the reducer and never disturb continuity [0.10ms]
+(pass) reducer core (M4.2) > cross-conversation isolation oracle: one conversation's traffic cannot touch another's state [0.04ms]
+(pass) reducer core (M4.2) > enqueueInput never sends into an expired lease: the input is queued, armed, and delivered on recovery or replay [0.03ms]
+(pass) reducer core (M4.2) > enqueueInput is exactly as strict as the wire codec: invalid id/turnId/text refused before any state change [0.10ms]
+(pass) reducer core (M4.2) > an input whose mode is outside INPUT_MODES is refused wrong-type, wherever it came from (RFC-05 B4) [0.07ms]
+(pass) reducer core (M4.2) > steer cannot be requested at a headless-turn attachment - a turn in flight cannot be interjected there [0.02ms]
+(pass) reducer core (M4.2) > starvation delays boundary redelivery but never loses it: once credit resumes, the resent boundary event delivers [0.04ms]
+(pass) reducer core (M4.2) > attach addressed to another conversation or an unsupported protocol version is refused before any grant [0.02ms]
+(pass) RFC-04 P2: the in-flight input gauge > rises on the applied disposition (delivery) and falls on the turn's terminal event - never at enqueue or queued [0.06ms]
+(pass) RFC-04 P2: the in-flight input gauge > the two gauges disagree: applied sends leave queueDepth at zero while the harness is turns behind [0.17ms]
+(pass) RFC-04 P2: the in-flight input gauge > a redelivered applied disposition is idempotent for the gauge too - one input, one rise [0.02ms]
+(pass) RFC-04 P2: the in-flight input gauge > the gauge is scoped to the attachment: takeover and detach both reset it, so dead turns cannot strand a backlog [0.08ms]
+(pass) RFC-04 P2: the in-flight input gauge > a turn no input opened cannot drive the gauge negative, and refused frames never move it [0.04ms]
+(pass) RFC-04: the input bound > the bound is decided: 8, one named constant beside the outbound bound (RFC-04 Open Question 1)
+(pass) RFC-04: the input bound > a send at the bound is refused input-queue-full: state untouched, no effects, and the record names the condition with both gauges [0.06ms]
+(pass) RFC-04: the input bound > the bound reads the in-flight gauge, not queueDepth - the revision-1 trap [0.03ms]
+(pass) RFC-04: the input bound > below the bound, sending is unaffected [0.04ms]
+(pass) RFC-04: the input bound > a finished turn opens a slot: the backlog falls and the next send is accepted again [0.03ms]
+(pass) RFC-04: the input bound > the bound holds on durable state alone: a lapsed lease opens no slot, the takeover that zeroes the gauge does [0.03ms]
+(pass) RFC-04: the input bound > a reused id still answers input-id-reused at the bound - a retried send is a redelivery question, not a capacity one [0.02ms]
+(pass) RFC-03: the record remembers which harness held the session > a headless attach without a harness is refused; interactive without one is fine [0.02ms]
+(pass) RFC-03: the record remembers which harness held the session > attaching the same harness is told the session it last held [0.06ms]
+(pass) RFC-03: the record remembers which harness held the session > attaching a DIFFERENT harness is told nothing, even though the record has a session [0.03ms]
+(pass) RFC-03: the record remembers which harness held the session > attribution survives the epoch increment that discards the attachment [0.03ms]
+(pass) RFC-03: the record remembers which harness held the session > the newest identity of that harness wins [0.02ms]
+(pass) RFC-03: the record remembers which harness held the session > an unknown newer identity preserves the last verified participation as history [0.04ms]
+(pass) RFC-03: the record remembers which harness held the session > an unnamed interactive attachment leaves its native identity unattributed [0.02ms]
+(pass) RFC-03: the record remembers which harness held the session > a named interactive identity retains its harness and producing participation after detach [0.02ms]
+
+test/protocol/native-offer-delivery.test.ts:
+(pass) an offer without delivery parses as inline and keeps no delivery field [0.08ms]
+(pass) a reference delivery parses only in its exact shape [0.08ms]
+
+test/protocol/events.test.ts:
+(pass) event classes + coalescing (M4.3) > the class split matches PLAN Part 0, and anything unclassifiable is lossless [0.67ms]
+(pass) event classes + coalescing (M4.3) > under starvation, coalescing is latest-wins per (turn, droppable kind), and a turn's lossless event supersedes its stale deltas [0.04ms]
+
+test/protocol/queue-bound.test.ts:
+(pass) one queue is bounded > an empty queue admits a note [0.01ms]
+(pass) one queue is bounded > the last place in the queue is still a place
+(pass) one queue is bounded > a full queue admits nothing
+(pass) one queue is bounded > a queue somehow past the bound stays refused
+(pass) one queue is bounded > the refusal says why, and says what to do about it [0.02ms]
+(pass) one queue is bounded > the bound is 20
+(pass) what the bound is not > it is not the in-flight input bound
+(pass) what the bound is not > a full queue is still one input [0.05ms]
+(pass) what the bound is not > it says nothing about how many queues exist [0.02ms]
+
+test/protocol/patch.test.ts:
+(pass) reading a patch body > one edit, read back as written [0.05ms]
+(pass) reading a patch body > an empty replace is a deletion, and is legal [0.02ms]
+(pass) reading a patch body > an empty find is not, because it would match everywhere [0.02ms]
+(pass) reading a patch body > a body that is not a JSON object with an edits array is refused [0.03ms]
+(pass) reading a patch body > an empty edits array is refused
+(pass) reading a patch body > an edit missing or mistyping either field is refused, naming which edit [0.03ms]
+(pass) reading a patch body > an unknown field on an edit is refused, not ignored [0.02ms]
+(pass) applying edits > one replacement produces the whole new document [0.04ms]
+(pass) applying edits > an empty replace deletes [0.01ms]
+(pass) applying edits > matching is literal, never a pattern
+(pass) applying edits > an anchor that matches nothing is refused, and nothing changes
+(pass) applying edits > an anchor that matches twice is refused, and says how many
+(pass) applying edits > overlapping occurrences count as several matches
+(pass) applying edits > a refusal quotes the anchor back, bounded [0.03ms]
+(pass) applying edits > the result of no edits at all is the document unchanged
+(pass) several edits in one patch > all of them land, in one new document [0.03ms]
+(pass) several edits in one patch > the order they are listed in cannot change the result [0.02ms]
+(pass) several edits in one patch > an edit whose replacement changes length does not shift the ones after it [0.01ms]
+(pass) several edits in one patch > an edit may not anchor on text an earlier edit introduces [0.01ms]
+(pass) several edits in one patch > edits that matched overlapping text are refused [0.01ms]
+(pass) several edits in one patch > two edits with the same anchor are an overlap, not a double apply
+(pass) several edits in one patch > edits that merely touch, without overlapping, are fine
+(pass) several edits in one patch > one bad anchor refuses the whole patch, and none of the others apply [0.01ms]
+(pass) several edits in one patch > the refusal names an edit by its listed position, not its position in the text
+(pass) the bounds a patch cannot grow past > more edits than the bound allows is refused, before any of them is read [0.07ms]
+(pass) the bounds a patch cannot grow past > exactly the bound is allowed [0.09ms]
+(pass) the bounds a patch cannot grow past > an anchor longer than the bound is refused, naming which edit [0.04ms]
+(pass) the bounds a patch cannot grow past > a replacement longer than the bound is refused [0.04ms]
+(pass) the bounds a patch cannot grow past > replacements that individually fit but together do not are refused [0.32ms]
+(pass) the bounds a patch cannot grow past > the total is refused before applying, not after building the document [0.29ms]
+(pass) the bounds a patch cannot grow past > an ordinary patch is nowhere near any of them [0.01ms]
+(pass) what the patch form does and does not unbound > the artifact bound and the message bound are the same number
+(pass) what the patch form does and does not unbound > the sum bound cannot be reached by a patch the result check would catch anyway
+
+test/protocol/annotations.test.ts:
+(pass) a batch travels in the input text > fences quoted in a note or snippet remain inside the batch [0.07ms]
+(pass) a batch travels in the input text > what goes out comes back [0.01ms]
+(pass) a batch travels in the input text > a batch can carry what the person also typed [0.02ms]
+(pass) a batch travels in the input text > text with no batch in it is not one
+(pass) a batch travels in the input text > a malformed block is malformed, not absent [0.02ms]
+(pass) a batch travels in the input text > a block that parses but is the wrong shape is refused
+(pass) a batch travels in the input text > a note with several spots stays one note [0.01ms]
+(pass) the agent is taught only when there is something to teach > a batch gets the preamble
+(pass) the agent is taught only when there is something to teach > an ordinary send does not
+(pass) the agent is taught only when there is something to teach > composing twice does not say it twice
+(pass) the agent is taught only when there is something to teach > the agent is told what was said and where it sits, not where to answer [0.04ms]
+(pass) the agent is taught only when there is something to teach > per-spot authorship reaches the agent [0.01ms]
+(pass) a reader sees the notes, never the encoding > the batch renders as notes and the spots they point at [0.02ms]
+(pass) a reader sees the notes, never the encoding > one note reads as one, not as none [0.01ms]
+(pass) a reader sees the notes, never the encoding > what the person also typed survives beside the notes [0.01ms]
+(pass) a reader sees the notes, never the encoding > the transcript shows it, so the terminal never sees the JSON [0.04ms]
+(pass) a snippet is what was on screen, bounded > whitespace is flattened, so a snippet reads as one line
+(pass) a snippet is what was on screen, bounded > an oversized snippet is cut, and says it was [0.01ms]
+(pass) a snippet is what was on screen, bounded > a snippet at the cap is not marked as cut
+
+test/protocol/compatibility-projection.test.ts:
+(pass) historical compatibility holds do not project raw process text and new holds retain safe facts [0.13ms]
+(pass) historical hcn-version-too-old diagnostics cannot restore version policy during replay [0.06ms]
+(pass) historical hcn-version-drift diagnostics cannot restore version policy during replay [0.02ms]
+(pass) historical harness-version-unverified diagnostics cannot restore version policy during replay
+(pass) a requested hold names an idle session only when the turn answer is known idle [0.03ms]
+
+test/protocol/chat-references.test.ts:
+(pass) chat references > detects a valid block with quote and label [0.12ms]
+(pass) chat references > strip drops the fence entirely; the prose already names the location [0.03ms]
+(pass) chat references > malformed JSON is not a reference and strips to nothing [0.04ms]
+(pass) chat references > wrong shape is not a reference
+(pass) chat references > empty quotes and labels are dropped; all-empty yields no block [0.01ms]
+(pass) chat references > refs are capped at twenty per message, across fences [0.07ms]
+(pass) chat references > an overlong quote is dropped, not cut [0.02ms]
+(pass) chat references > text without a fence has no references and strips unchanged
+
+test/protocol/annotation-files.test.ts:
+(pass) a file on a note > survives encoding and decoding [0.07ms]
+(pass) a file on a note > a file with no path is valid — its contents were inlined [0.02ms]
+(pass) a file on a note > several files on one note [0.02ms]
+(pass) a file on a note > a note without files has none
+(pass) a batch stays readable > a newer build's unknown field is ignored, and the batch decodes [0.03ms]
+(pass) a batch stays readable > a malformed files field is dropped and the note survives [0.03ms]
+(pass) a batch stays readable > one bad file among good ones drops only the bad one [0.01ms]
+(pass) a batch stays readable > a hash that is not a hash is not a file
+(pass) the preamble teaches it > it mentions files and does not promise the agent can read one [0.06ms]
+
+test/protocol/artifact-state.test.ts:
+(pass) telling the agent what the record holds > nothing is added when there are no artifacts [0.01ms]
+(pass) telling the agent what the record holds > the current version is named, so `replaces` is not a guess [0.02ms]
+(pass) telling the agent what the record holds > a version the person saved says so, and what they left in the controls [0.02ms]
+(pass) telling the agent what the record holds > a version the agent wrote carries no values [0.01ms]
+(pass) telling the agent what the record holds > a version the agent wrote is not read back to it
+(pass) telling the agent what the record holds > a version a person saved travels in full [0.02ms]
+(pass) telling the agent what the record holds > a version too large to carry says so, and says what to do [0.02ms]
+(pass) telling the agent what the record holds > several artifacts are all named
+(pass) telling the agent what the record holds > composing twice does not say it twice
+(pass) telling the agent what the record holds > an empty values map is not mentioned
+(pass) sending the agent its own document back after a patch missed > a version the agent wrote is normally not included
+(pass) sending the agent its own document back after a patch missed > after a missed anchor, its own current version is included whole [0.01ms]
+(pass) sending the agent its own document back after a patch missed > it says the bytes are its own version, not somebody else's edit
+(pass) sending the agent its own document back after a patch missed > a person's save still reads as a person's save [0.01ms]
+(pass) sending the agent its own document back after a patch missed > a document too large is never truncated, and says to emit the whole form [0.02ms]
+(pass) sending the agent its own document back after a patch missed > an artifact carrying no bytes is listed without a document [0.01ms]
+(pass) retire is gone from what the agent is told > no artifact is marked retired, whatever the record holds
+
+test/protocol/attachment.test.ts:
+(pass) what counts as text > plain prose, source, CSV, JSON and markdown [0.06ms]
+(pass) what counts as text > tab, newline and carriage return are text
+(pass) what counts as text > an empty file is text
+(pass) what counts as text > text beyond ASCII is text
+(pass) what is not text > a null byte, wherever it sits [0.01ms]
+(pass) what is not text > other control characters [0.01ms]
+(pass) what is not text > a PNG header [0.01ms]
+(pass) what is not text > a PDF, which begins with readable text and is not text [0.01ms]
+(pass) what is not text > invalid UTF-8
+(pass) a claim about a file never decides it > bytes that are binary are binary whatever they are called [0.01ms]
+(pass) a claim about a file never decides it > bytes that are text are text whatever they are called
+(pass) the size bound > the bound is a stated number
+(pass) the size bound > it is larger than an artifact's, because a blob is not a log line
+(pass) the size bound > inclusive, and one past it is not
+(pass) the size bound > zero is allowed and nonsense is not
+(pass) what type an attachment is served as > a PNG is recognised by its bytes
+(pass) what type an attachment is served as > JPEG, GIF and WEBP [0.01ms]
+(pass) what type an attachment is served as > anything else is not an image [0.01ms]
+(pass) what type an attachment is served as > SVG is not served as an image, whatever it claims
+(pass) what type an attachment is served as > HTML pretending to be a PNG is not an image
+(pass) what type an attachment is served as > a truncated header is not an image
+
+test/protocol/question.test.ts:
+(pass) questionOpen (RFC-05 R1) > reports the open question and the turn that asked it [0.06ms]
+(pass) questionOpen (RFC-05 R1) > the done that ends an asking turn leaves the question open [0.04ms]
+(pass) questionOpen (RFC-05 R1) > any other terminal cause leaves an open question alone (same turn) [0.02ms]
+(pass) questionOpen (RFC-05 R1) > clears on first accepted event of an unrelated turn [0.02ms]
+(pass) questionOpen (RFC-05 R1) > clears on detach [0.02ms]
+(pass) questionOpen (RFC-05 R1) > survives a fold [0.08ms]
+(pass) a coded demotion clears its question without depending on message wording [0.04ms]
+(pass) demotion compatibility survives replay without another turn: {"message":"answer demoted: no-open-question for in-1"} [0.07ms]
+(pass) demotion compatibility survives replay without another turn: {"message":"no-open-question appeared in a diagnostic"} [0.02ms]
+(pass) demotion compatibility survives replay without another turn: {"kind":"message","message":"answer demoted: no-open-question for in-1"} [0.02ms]
+(pass) demotion compatibility survives replay without another turn: {"message":"answer demoted: no-open-question for in-1\nextra"} [0.01ms]
+(pass) demotion compatibility survives replay without another turn: {"message":"answer demoted: no-open-question for xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"} [0.01ms]
+(pass) demotion compatibility survives replay without another turn: {"message":"answer demoted: no-open-question for "} [0.01ms]
+(pass) demotion compatibility survives replay without another turn: {"code":"unrecognized","message":"answer demoted: no-open-question for in-1"} [0.01ms]
+(pass) demotion compatibility survives replay without another turn: {"code":"answer-demoted","message":"changed wording","inputId":"in-1"} [0.01ms]
+(pass) a legacy demotion clears the question even when its fallback send is rejected [0.09ms]
+
+test/protocol/artifact-form.test.ts:
+(pass) the default form > a header with no form is a whole document, exactly as before [0.06ms]
+(pass) the default form > form: "whole" means the same thing as saying nothing [0.03ms]
+(pass) the default form > the form is always set, so no reader has to remember the default [0.01ms]
+(pass) a form lucid does not know > form: "patch" parses, because RFC-08 defines it [0.02ms]
+(pass) a form lucid does not know > any other value is refused, not assumed to be whole [0.04ms]
+(pass) a form lucid does not know > a form that is not a string is refused too [0.03ms]
+(pass) a form lucid does not know > the refusal says what it saw, so the agent can fix it [0.01ms]
+(pass) a form lucid does not know > a refused block does not take a valid one down with it [0.02ms]
+(pass) quoting agent text back in a refusal > short text is quoted whole
+(pass) quoting agent text back in a refusal > long text is cut, so a refusal cannot be used to write length into the log [0.03ms]
+(pass) quoting agent text back in a refusal > the bound is bytes, not UTF-16 code units [0.05ms]
+(pass) quoting agent text back in a refusal > it cuts on a character boundary, never inside one [0.04ms]
+(pass) quoting agent text back in a refusal > text already within the bound is quoted whole and unmarked
+(pass) quoting agent text back in a refusal > a refusal for an enormous form is bounded [0.07ms]
+(pass) quoting agent text back in a refusal > control characters cannot break the reason onto another line
+
+test/protocol/answer.test.ts:
+(pass) answer mode (RFC-05 R2,R3,R6 T45) > an input can carry the answer mode, and the turn it answers [0.13ms]
+(pass) answer mode (RFC-05 R2,R3,R6 T45) > answer with no valid turn reference is refused at decode as malformed (answer-needs-turn), not stale [0.05ms]
+(pass) answer mode (RFC-05 R2,R3,R6 T45) > the mode is refused where there is no session to answer into - headless-turn has nothing to answer [0.03ms]
+(pass) answer mode (RFC-05 R2,R3,R6 T45) > an answer is never held for a turn boundary - it exists to unblock a turn [0.04ms]
+(pass) answer mode (RFC-05 R2,R3,R6 T45) > refusal order is fixed: malformed > duplicated > impossible > stale > full, capacity last [0.16ms]
+(pass) answer mode (RFC-05 R2,R3,R6 T45) > answer-needs-turn is a wire validity issue - it is in DECODE_ISSUES and also refused on fold [0.02ms]
+
+test/protocol/frames.test.ts:
+(pass) frame codecs (M4.1) > every declared kind has a sample, and each round-trips through encode/parse [0.13ms]
+(pass) frame codecs (M4.1) > the decoded frame is CONSTRUCTED, not the input by reference [0.01ms]
+(pass) frame codecs (M4.1) > extra fields never ride into the typed frame [0.02ms]
+(pass) frame codecs (M4.1) > prototype-carried fields do not validate a frame that decodes to nothing [0.01ms]
+(pass) frame codecs (M4.1) > a JSON __proto__ key cannot pollute a copy of the decoded frame [0.01ms]
+(pass) frame codecs (M4.1) > unknown kind and non-frames refuse with distinct named issues [0.02ms]
+(pass) frame codecs (M4.1) > the codec keeps its own input-mode check: a value outside INPUT_MODES refuses wrong-type at the boundary [0.02ms]
+(pass) frame codecs (M4.1) > each required field, deleted in turn, refuses with missing-field [0.12ms]
+(pass) frame codecs (M4.1) > epoch is required on every post-attach frame (fencing token) [0.03ms]
+(pass) frame codecs (M4.1) > non-safe-integer sequence fields are refused (monotonicity guard) [0.03ms]
+(pass) frame codecs (M4.1) > control characters and over-long strings are refused [0.02ms]
+(pass) frame codecs (M4.1) > a wrong-typed conversationId is wrong-type, not missing-field
+(pass) frame codecs (M4.1) > enum fields refuse out-of-vocabulary values [0.02ms]
+(pass) frame codecs (M4.1) > a non-serializable or non-object event payload is refused [0.68ms]
+(pass) frame codecs (M4.1) > optional fields present-but-wrong are refused; absent is fine [0.03ms]
+(pass) frame codecs (M4.1) > every refusal issue rides a refused frame, input-queue-full included, and an unknown issue still fails closed [0.06ms]
+
+test/protocol/artifacts-emission.test.ts:
+(pass) artifact preamble > headless-session preamble is composed once per session [0.03ms]
+(pass) artifact preamble > headless-turn preamble every turn [0.01ms]
+(pass) artifact preamble > interactive is excluded
+(pass) artifact fence parser > parses a well-formed block [0.04ms]
+(pass) artifact fence parser > two blocks in one message both land in order [0.03ms]
+(pass) artifact fence parser > malformed header is refused with reason [0.04ms]
+(pass) artifact emission via headless host (fake) > a document in that format is parsed and stored as version 1, agent chooses id and replaces [7.44ms]
+(pass) artifact emission via headless host (fake) > revising with correct replaces lands as v2; lucid assigns version [11.32ms]
+(pass) artifact emission via headless host (fake) > replacing a version that is not current is refused, recording what agent thought [12.28ms]
+(pass) artifact emission via headless host (fake) > unknown identity starts new artifact rather than failing [6.08ms]
+(pass) artifact emission via headless host (fake) > the first of two documents in one message lands, the second is refused [6.71ms]
+(pass) artifact emission via headless host (fake) > a second block revising what the first block created still lands [6.05ms]
+(pass) artifact emission via headless host (fake) > malformed block is refused, turn still completes, other block still lands [6.05ms]
+(pass) artifact emission via headless host (fake) > oversized is refused, turn still completes [12.80ms]
+(pass) artifact emission via headless host (fake) > headless-turn preamble on every turn [2.50ms]
+(pass) artifact emission via headless host (durable) > a document in that format is parsed and stored as version 1, agent chooses id and replaces [5.98ms]
+(pass) artifact emission via headless host (durable) > revising with correct replaces lands as v2; lucid assigns version [12.05ms]
+(pass) artifact emission via headless host (durable) > replacing a version that is not current is refused, recording what agent thought [11.28ms]
+(pass) artifact emission via headless host (durable) > unknown identity starts new artifact rather than failing [5.86ms]
+(pass) artifact emission via headless host (durable) > the first of two documents in one message lands, the second is refused [7.18ms]
+(pass) artifact emission via headless host (durable) > a second block revising what the first block created still lands [6.19ms]
+(pass) artifact emission via headless host (durable) > malformed block is refused, turn still completes, other block still lands [5.95ms]
+(pass) artifact emission via headless host (durable) > oversized is refused, turn still completes [13.04ms]
+(pass) artifact emission via headless host (durable) > headless-turn preamble on every turn [2.43ms]
+(pass) artifact view projection > conversation view shows named reference, never document bytes [0.93ms]
+(pass) artifact view projection > stripArtifactBlocks handles malformed without leaking bytes [0.02ms]
+(pass) a patch that revises a document (fake) > produces the next version, complete, from an edit that names only the change [11.30ms]
+(pass) a patch that revises a document (fake) > the version it produces is indistinguishable from one emitted whole [23.45ms]
+(pass) a patch that revises a document (fake) > a patch with no base is refused as E-PATCH-01 [7.06ms]
+(pass) a patch that revises a document (fake) > a patch against an artifact that does not exist is refused, not created [6.02ms]
+(pass) a patch that revises a document (fake) > an anchor that does not match refuses, and leaves the version alone [11.29ms]
+(pass) a patch that revises a document (fake) > an anchor that matches twice refuses rather than guessing [12.46ms]
+(pass) a patch that revises a document (fake) > a malformed body refuses as E-PATCH-04 [12.43ms]
+(pass) a patch that revises a document (fake) > a stale replaces keeps the refusal RFC-06 already defines [11.32ms]
+(pass) a patch that revises a document (fake) > a result over the byte bound refuses as E-PATCH-06 [13.08ms]
+(pass) a patch that revises a document (fake) > a replacement too large on its own is refused before anything is applied [18.21ms]
+(pass) a patch that revises a document (fake) > an oversize patch body is not reported as an oversize document [19.44ms]
+(pass) a patch that revises a document (fake) > a refusal does not end the turn, and a whole form after it still lands [13.57ms]
+(pass) a patch that revises a document (fake) > several edits in one patch all land in one new version [12.39ms]
+(pass) a patch that revises a document (fake) > overlapping edits refuse the whole patch [11.36ms]
+(pass) a patch that revises a document (fake) > a second block patches what the first block in the same message produced [12.54ms]
+(pass) a patch that revises a document (fake) > a refused second block leaves the first block's version standing [11.24ms]
+(pass) a patch that revises a document (fake) > an unknown form is refused before it reaches the store at all [7.89ms]
+(pass) a patch that revises a document (durable) > produces the next version, complete, from an edit that names only the change [11.55ms]
+(pass) a patch that revises a document (durable) > the version it produces is indistinguishable from one emitted whole [24.17ms]
+(pass) a patch that revises a document (durable) > a patch with no base is refused as E-PATCH-01 [7.45ms]
+(pass) a patch that revises a document (durable) > a patch against an artifact that does not exist is refused, not created [6.32ms]
+(pass) a patch that revises a document (durable) > an anchor that does not match refuses, and leaves the version alone [11.37ms]
+(pass) a patch that revises a document (durable) > an anchor that matches twice refuses rather than guessing [12.12ms]
+(pass) a patch that revises a document (durable) > a malformed body refuses as E-PATCH-04 [12.58ms]
+(pass) a patch that revises a document (durable) > a stale replaces keeps the refusal RFC-06 already defines [11.31ms]
+(pass) a patch that revises a document (durable) > a result over the byte bound refuses as E-PATCH-06 [27.45ms]
+(pass) a patch that revises a document (durable) > a replacement too large on its own is refused before anything is applied [19.05ms]
+(pass) a patch that revises a document (durable) > an oversize patch body is not reported as an oversize document [17.36ms]
+(pass) a patch that revises a document (durable) > a refusal does not end the turn, and a whole form after it still lands [13.63ms]
+(pass) a patch that revises a document (durable) > several edits in one patch all land in one new version [12.30ms]
+(pass) a patch that revises a document (durable) > overlapping edits refuse the whole patch [11.20ms]
+(pass) a patch that revises a document (durable) > a second block patches what the first block in the same message produced [12.19ms]
+(pass) a patch that revises a document (durable) > a refused second block leaves the first block's version standing [11.04ms]
+(pass) a patch that revises a document (durable) > an unknown form is refused before it reaches the store at all [6.24ms]
+(pass) what the preamble says about the patch form > it describes the form and its header [0.06ms]
+(pass) what the preamble says about the patch form > it says find is literal and must match exactly once [0.02ms]
+(pass) what the preamble says about the patch form > it says the listed order does not matter, and why [0.01ms]
+(pass) what the preamble says about the patch form > it says a failed patch is refused whole, with a reason, and can be retried [0.01ms]
+(pass) what the preamble says about the patch form > it says the whole form is always available and never wrong
+(pass) what the preamble says about the patch form > it says a patch cannot create an artifact
+(pass) what the preamble says about the patch form > it still goes once per session, and not every turn [0.01ms]
+(pass) what the preamble says about the patch form > the whole form still works for an agent that ignores all of it [0.03ms]
+(pass) a conversation holds one artifact (fake) > a different id is refused, and the refusal names what is held [12.96ms]
+(pass) a conversation holds one artifact (fake) > the id it holds is still a revision [11.43ms]
+(pass) a conversation holds one artifact (fake) > nothing is folded in: the refused bytes are not stored under the held id [12.47ms]
+(pass) a conversation holds one artifact (fake) > identity is checked before size [19.02ms]
+(pass) a conversation holds one artifact (fake) > identity is checked before the patch checks [11.27ms]
+(pass) a conversation holds one artifact (fake) > a malformed block still refuses before the identity check [12.35ms]
+(pass) a conversation holds one artifact (fake) > an unrecognised form still refuses before the identity check [11.34ms]
+(pass) a conversation holds one artifact (fake) > a first emission of the whole form may carry a non-null replaces [7.34ms]
+(pass) a conversation holds one artifact (fake) > a record already holding two artifacts still takes a revision of either [6.21ms]
+(pass) a conversation holds one artifact (fake) > a record holding two artifacts refuses a third, naming both [6.51ms]
+(pass) a conversation holds one artifact (fake) > an enormous id is quoted back within the refusal bound [5.92ms]
+(pass) a conversation holds one artifact (durable) > a different id is refused, and the refusal names what is held [12.23ms]
+(pass) a conversation holds one artifact (durable) > the id it holds is still a revision [12.45ms]
+(pass) a conversation holds one artifact (durable) > nothing is folded in: the refused bytes are not stored under the held id [11.40ms]
+(pass) a conversation holds one artifact (durable) > identity is checked before size [18.65ms]
+(pass) a conversation holds one artifact (durable) > identity is checked before the patch checks [11.18ms]
+(pass) a conversation holds one artifact (durable) > a malformed block still refuses before the identity check [12.50ms]
+(pass) a conversation holds one artifact (durable) > an unrecognised form still refuses before the identity check [12.21ms]
+(pass) a conversation holds one artifact (durable) > a first emission of the whole form may carry a non-null replaces [6.33ms]
+(pass) a conversation holds one artifact (durable) > a record already holding two artifacts still takes a revision of either [6.49ms]
+(pass) a conversation holds one artifact (durable) > a record holding two artifacts refuses a third, naming both [7.75ms]
+(pass) a conversation holds one artifact (durable) > an enormous id is quoted back within the refusal bound [6.41ms]
+(pass) the fake artifact adapter accepts a whole version and its patch [5.19ms]
+(pass) the durable artifact adapter accepts a whole version and its patch [6.40ms]
+(pass) closing the headless source cancels pending link admission without a late version [1009.03ms]
+(pass) a broken external link is refused through the harness emission path [9.93ms]
+
+test/cli/compiled-routing.test.ts:
+(pass) a managed worker cannot recursively launch another worker [0.18ms]
+(pass) compiled worker commands route directly to their internal subcommand [672.16ms]
+(pass) startup command quoting preserves literal paths and option-like arguments [14.78ms]
+
+test/cli/native-context.test.ts:
+(pass) a Codex parent tool command resolves only its verified native session [1.63ms]
+(pass) a Lucid headless child cannot register itself as an interactive author [0.19ms]
+(pass) native command rejects unverified or different context {"session":"native-parent","thread":"child-thread","expected":false} [0.04ms]
+(pass) native command rejects unverified or different context {"session":"other-parent","thread":"other-parent","expected":false} [0.02ms]
+(pass) native command rejects unverified or different context {"thread":"native-parent"}
+(pass) native command rejects unverified or different context {"session":"native-parent"}
+(pass) native command rejects unverified or different context {"session":"native-parent","thread":"native-parent","role":"unknown"}
+(pass) Codex command context cannot establish desktop or another harness identity [0.05ms]
+
+test/cli/managed-worker-process.test.ts:
+(pass) contender worker processes run one accepted task and exit without holding its lease [1743.69ms]
+(pass) compiled background launch completes one task and all worker processes exit [5147.83ms]
+(pass) worker death terminates its child and leaves one uncertain attempt without replay [1929.87ms]
+
+test/cli/naming.test.ts:
+(pass) independent worker processes serialize ownership and complete isolated naming through fake hcn [3154.48ms]
+(pass) internal naming dispatch uses its explicit root without constructing unrelated record addressing [0.30ms]
+
+test/cli/managed-runtime.test.ts:
+(pass) managed runtime dispatches and resumes: managed workspace %s, native management %s [281.61ms]
+(pass) managed runtime dispatches and resumes: managed workspace %s, native management %s [261.33ms]
+(pass) managed runtime dispatches and resumes: managed workspace %s, native management auto-compaction [254.77ms]
+(pass) managed runtime dispatches and resumes: managed workspace %s, native management native-session-auto-compaction [271.27ms]
+(pass) managed runtime cannot create a missing record [1.60ms]
+(pass) managed runtime records uncertainty when its active process is stopped [135.84ms]
+(pass) explicit fresh recovery reuses an applied input and carries its partial history [271.84ms]
+(pass) managed session prepares and settles consecutive turns on its persistent process [263.31ms]
+(pass) takeover settles abandoned attempt, terminal proof present: %s [4.71ms]
+(pass) takeover settles abandoned attempt, terminal proof present: %s [3.25ms]
+(pass) a managed model change resumes the selected harness native session [262.71ms]
+(pass) a harness switch transfers history and returning resumes only that harness session [452.38ms]
+(pass) cancelling initial inspection stops the worker before a task process is created [2.14ms]
+(pass) a managed session's explicit send refusal is safe to retry without acknowledging effects [137.71ms]
+(pass) a missing folder holds without consuming an attempt and a folder remedy releases the original prompt [137.19ms]
+(pass) HTTP recovery preserves an uncertain input and rejects unsafe or changed actions [138.04ms]
+(pass) an explicit terminal run adopts managed intents and records one attachment intent [263.08ms]
+(pass) a concurrent accepted prompt does not strand or overtake the preparing prompt [260.29ms]
+(pass) a completed resumed turn with a different identity keeps coverage unconfirmed and accepts later work [386.39ms]
+(pass) a managed terminal source drains legacy queued input and preserves its original receipt [276.26ms]
+(pass) a managed persistent worker closes its native session and releases presence after idle [144.70ms]
+(pass) a repaired startup failure can retry the original accepted input [136.99ms]
+(pass) native context rejection preserves the input without automatic retry or replacement session: auto-compaction [129.99ms]
+(pass) native context rejection preserves the input without automatic retry or replacement session: native-session-auto-compaction [132.50ms]
+
+test/cli/native-runtime.test.ts:
+(pass) the automatic worker preserves native settings and folder spelling (alias %s) [134.98ms]
+(pass) the automatic worker preserves native settings and folder spelling (alias %s) [136.43ms]
+(pass) automatic continuation preserves saved feedback when native owner presence is %s [4.24ms]
+(pass) automatic continuation preserves saved feedback when native owner presence is %s [1.92ms]
+(pass) automatic continuation does not enable the unverified codex-desktop lane [2.10ms]
+(pass) automatic continuation does not enable the unverified pi-cli lane [1.69ms]
+(pass) automatic continuation does not enable the unverified muse-cli lane [1.85ms]
+(pass) automatic continuation does not enable the unverified claude-cli lane [1.59ms]
+(pass) unavailable native settings hold the input without launching or repeatedly probing it [3.20ms]
+
+test/cli/send.test.ts:
+(pass) RFC-04: `lucid send` at the input bound > a send at the bound is refused, the condition is named, and the record is unchanged [8.95ms]
+(pass) RFC-04: `lucid send` at the input bound > the refusal reaches the process seam as a rejection - the path main.ts maps to exit 1 [8.83ms]
+(pass) RFC-04: `lucid send` at the input bound > below the bound, and after a turn finishes, sending is unaffected [9.56ms]
+
+test/cli/announce.test.ts:
+(pass) the SessionStart hook records the native identity and corroborated parent process [574.98ms]
+(pass) hook attachment intent is stable for explicit starts and absent for compaction [0.25ms]
+
+test/cli/codex-delivery.test.ts:
+(pass) selecting another record cannot escape an unresolved offer to the same native session [10.52ms]
+(pass) a listening request checks other owners of the same native session across records [5.21ms]
+(pass) native command delivery preserves full feedback and only its parent can settle the offer [929.38ms]
+(pass) the first empty wait starts at Stop, expires once, and a pending Interrupt prevents re-entry [16.12ms]
+(pass) Stop and Interrupt use the selected record even when an unrelated history is unreadable [5.95ms]
+
+test/cli/claude-setup.test.ts:
+(pass) Claude Code setup preserves other settings and hooks and repeating it changes nothing [2.19ms]
+(pass) setup flags follow the interface and a mismatched flag is help [0.16ms]
+(pass) the Claude hook CLI reports committed commands to the model and notices to the person [1.06ms]
+
+test/cli/chat.test.ts:
+(pass) lucid chat — one window drives, renders, and sends (RFC-05) > one command drives a conversation and renders it, and what you type reaches the harness [7.00ms]
+(pass) lucid chat — one window drives, renders, and sends (RFC-05) > a question is answered from this window, without another terminal [6.68ms]
+(pass) lucid chat — one window drives, renders, and sends (RFC-05) > while harness is asking, submitting sends answer; otherwise ordinary input [11.27ms]
+(pass) lucid chat — one window drives, renders, and sends (RFC-05) > window refuses what protocol would refuse, says why, keeps draft — answer already in flight [6.31ms]
+(pass) lucid chat — one window drives, renders, and sends (RFC-05) > window refuses answer when profile is headless-turn — no session to answer into [5.69ms]
+(pass) lucid chat — one window drives, renders, and sends (RFC-05) > window refuses when conversation too far behind — input-queue-full [7.26ms]
+(pass) lucid chat — one window drives, renders, and sends (RFC-05) > refused submit keeps draft and resend mints fresh id [5.96ms]
+(pass) lucid chat — one window drives, renders, and sends (RFC-05) > will not start against conversation something else is driving — names holder, says watch works [4.93ms]
+(pass) lucid chat — one window drives, renders, and sends (RFC-05) > D-021: will not start when interactive session still attached [4.86ms]
+(pass) lucid chat — one window drives, renders, and sends (RFC-05) > losing the right to drive mid-session does not kill it: stops accepting, keeps rendering, keeps draft, says moved [107.87ms]
+(pass) lucid chat — one window drives, renders, and sends (RFC-05) > reads under the lock, not through viewer's lock-free peek [8.37ms]
+(pass) lucid chat — one window drives, renders, and sends (RFC-05) > Ctrl-C leaves terminal exactly as it found it — restores raw mode [6.93ms]
+(pass) lucid chat — one window drives, renders, and sends (RFC-05) > piped or redirected, it renders once and exits non-zero — no escape codes into file [0.25ms]
+(pass) lucid chat — one window drives, renders, and sends (RFC-05) > Ctrl-C with non-empty draft — draft is lost, not durable [6.71ms]
+(pass) lucid chat — one window drives, renders, and sends (RFC-05) > the conversation name reaches chat, rather than a generated one [0.18ms]
+(pass) chat applies an artifact patch and tells the next input what the record holds [1026.76ms]
+(pass) chat preserves the submitted draft when collect fails [7.36ms]
+(pass) chat preserves the submitted draft when append fails [5.94ms]
+(pass) chat reports a stopped driver without claiming another driver took over [5.64ms]
+
+test/cli/watch.test.ts:
+(pass) lucid watch over the shared tailer (RFC-04 step 4 regression) > paints the first view immediately, then follows a record another process grows [7.32ms]
+(pass) lucid watch over the shared tailer (RFC-04 step 4 regression) > an unknown identity is refused instead of following a guessed directory [0.18ms]
+
+test/cli/serve-view.test.ts:
+(pass) serve without view options links to the hub and leaves visibility unspecified [0.08ms]
+(pass) serve carries explicit visibility and conversation regardless of option order [0.16ms]
+(pass) invalid serve arguments return guidance before starting a server or resolving records [0.13ms]
+
+test/cli/claude-delivery.test.ts:
+(pass) SessionStart registers only the parent Claude Code lifecycle [1.06ms]
+(pass) a Claude tool command changes nothing until its parent Bash callback commits it [7.65ms]
+(pass) Claude Code delivers complete feedback at Stop and records receipt and response from the parent [281.15ms]
+(pass) a new prompt clears a pending listening request and revokes an active wait [9.10ms]
+(pass) listening ends before Claude Code's consecutive Stop hook cap discards an offer [6.76ms]
+(pass) a proposal commits once, within its lifetime, for the lifecycle that saved it [4.37ms]
+(pass) a Claude Code command without a registered session refuses and keeps the publication [2.42ms]
+(pass) Claude Code receives a large document by reference and answers only after reading all of it [522.59ms]
+(pass) a reference offer whose copy is lost refuses an answer and still records a failure [389.37ms]
+(pass) a listen that expires with feedback held tells the person; an interrupted one does not [401.37ms]
+(pass) Claude Code's Bash output limit sets the context slice [0.07ms]
+
+test/cli/serve-help.test.ts:
+(pass) asking for server help or passing an unsupported argument never starts a server [0.07ms]
+
+test/cli/runtime.test.ts:
+(pass) a registered live author blocks execution before its first listener attaches [2.09ms]
+(pass) a registered conversation refuses an explicit launch through a different harness [1.75ms]
+(pass) legacy runtime does not drain managed inputs armed during lease expiry [26.80ms]
+(pass) a detached living owner prevents takeover, with identity: %s [5.89ms]
+(pass) a detached living owner prevents takeover, with identity: %s [5.44ms]
+(pass) a departed terminal continues its native session in the saved folder with a mode notice [6.91ms]
+(pass) a terminal attaching during executor acquisition prevents the pending headless launch [5.31ms]
+(pass) unknown compatibility preserves the prompt and headless-turn selection [2.01ms]
+(pass) unknown compatibility preserves the prompt and interactive selection [1.81ms]
+(pass) a legacy conversation with no saved folder refuses launch and keeps its prompt [1.48ms]
+(pass) an unverified later identity verified cannot authorize native resume [2.32ms]
+(pass) an unverified later identity different cannot authorize native resume [1.94ms]
+(pass) both headless profiles launch in the saved working folder rather than the caller folder [5.59ms]
+(pass) RFC-04 R2 at the runtime seam > the dispatch gate reads the presence handle the runtime holds - not the interactive-process probe [8.58ms]
+(pass) RFC-12: the startup honor fold at the runtime seam > a preference in the record names the harness and model of the first spawn [5.48ms]
+(pass) RFC-12: the startup honor fold at the runtime seam > an explicit harness at spawn pins the harness for the process's life [5.24ms]
+(pass) failed-log shutdown retains presence through harness cleanup even when diagnostics throw [8.57ms]
+(pass) runtime retains executor ownership until its source cleanup settles [5.22ms]
+
+test/cli/codex-setup.test.ts:
+(pass) Codex setup preserves unrelated hooks and repeating it leaves the file unchanged [0.98ms]
+(pass) Codex setup treats a missing hooks file argument as help without touching configuration [0.04ms]
+(pass) Codex setup refuses a deployed symlink and leaves its source and link untouched [0.50ms]
+(pass) Codex setup refuses changed or duplicate Lucid handlers without rewriting them [1.08ms]
+(pass) Codex setup creates a missing configuration and keeps malformed existing bytes [0.87ms]
+(pass) Codex setup leaves configuration untouched while another setup owns its lock [0.61ms]
+(pass) generated Codex hooks preserve literal shell arguments and select the configured record root [480.47ms]
+
+test/cli/artifact-publish.test.ts:
+(pass) publication remains readable and retries the same record when connection needs setup [4.21ms]
+(pass) publication binds verified registration and detects an open native session without a listener [2.29ms]
+(pass) a different artifact working folder refuses connection while preserving publication [2.28ms]
+(pass) publication and connection status distinguish invalid requests from missing records [0.41ms]
+(pass) unverified native ownership remains unknown in the publication result [1.97ms]
+(pass) failed native publication holds saved feedback and retains its cause after reopening [2.51ms]
+(pass) failure to persist diagnostics preserves the successful publication result and durable hold [2.10ms]
+(pass) an interrupted native publication remains held and repair preserves saved artifact bytes [2.36ms]
+
+test/cli/codex-hook.test.ts:
+(pass) the native hook CLI parses stdin and returns registration failures without a continuation [0.31ms]
+(pass) unknown SessionStart sources explain the unsupported callback while compact stays non-registering [0.15ms]
+(pass) Stop and Interrupt resolve the existing registration without creating a lifecycle generation [0.79ms]
+(pass) failed native inspection returns an owner-unknown result without registration [0.22ms]
+(pass) Codex SessionStart registers the exact callback session for its parent tool commands [0.56ms]
+(pass) a subagent callback carrying the parent session cannot replace its registration [0.60ms]
+(pass) a new native lifecycle invalidates prior command identity without carrying its registration [0.73ms]
+
+test/harness/hcn-bin.test.ts:
+(pass) resolving the hcn binary > LUCID_HCN wins over everything [0.20ms]
+(pass) resolving the hcn binary > an empty LUCID_HCN is not a choice [146.88ms]
+(pass) resolving the hcn binary > a package-local bin beside the module is used [0.71ms]
+(pass) resolving the hcn binary > with none beside the module, a node_modules beside the cwd is used [0.48ms]
+(pass) resolving the hcn binary > an npm install resolves its hoisted dependency outside the working folder [0.79ms]
+(pass) resolving the hcn binary > a compiled binary finds its checkout dependency from another working folder [0.37ms]
+(pass) resolving the hcn binary > with nothing local, it falls to PATH [0.14ms]
+
+test/harness/version-authority.test.ts:
+(pass) startup never invokes HCN to inspect its version: 0.0.1 [0.42ms]
+(pass) startup never invokes HCN to inspect its version: 999.0.0 [0.20ms]
+(pass) startup never invokes HCN to inspect its version: unparseable [0.18ms]
+(pass) HCN can supply available accounting without matching version metadata [0.50ms]
+
+test/harness/interactive.test.ts:
+(pass) native terminal launch uses a separate control stream and settles correlated cleanup [0.71ms]
+(pass) a failed diagnostic sink cannot interrupt native lifecycle evidence [0.09ms]
+(pass) native control missing retains uncertainty [0.11ms]
+(pass) native control ready-only retains uncertainty [0.02ms]
+(pass) native control missing-close retains uncertainty [0.03ms]
+(pass) native control wrong-launch retains uncertainty [0.15ms]
+(pass) native control wrong-session retains uncertainty [0.03ms]
+(pass) native control wrong-folder retains uncertainty [0.03ms]
+(pass) native control wrong-interface retains uncertainty [0.03ms]
+(pass) native control missing-owner retains uncertainty [0.02ms]
+(pass) native control duplicate-ready retains uncertainty [0.01ms]
+(pass) native control closed-first retains uncertainty [0.01ms]
+(pass) native control refused-then-started retains uncertainty [0.03ms]
+(pass) native control cleanup-false retains uncertainty [0.02ms]
+(pass) native control truncated retains uncertainty [0.01ms]
+(pass) native control oversized retains uncertainty [0.06ms]
+(pass) native preflight refusal is final only after HCN exit [0.07ms]
+(pass) cancellation before reading and a retained invocation cannot create a native terminal [0.07ms]
+(pass) cancelling an invoked terminal waits for process exit and retains missing native cleanup evidence [2.17ms]
+(pass) an undocumented native refusal cannot establish pre-start evidence [0.09ms]
+(pass) split control records keep one reader and cannot start a second terminal [0.10ms]
+(pass) a synchronous terminal spawn exception retains possible creation [0.06ms]
+
+test/harness/context-accounting.test.ts:
+(pass) context accounting uses hcn stdin and retains measured native occupancy [0.09ms]
+(pass) incomplete or mismatched accounting stays unavailable [0.05ms]
+(pass) incomplete or mismatched accounting stays unavailable [0.01ms]
+(pass) incomplete or mismatched accounting stays unavailable
+(pass) incomplete or mismatched accounting stays unavailable
+(pass) an unavailable native budget carries a bounded reason, never a guessed window [0.04ms]
+(pass) a failed probe preserves its structured auth reason [0.03ms]
+(pass) a failed probe preserves its structured limit reason
+(pass) a failed probe preserves its structured native-exit reason
+(pass) an observed model change has a distinct hold reason [0.04ms]
+(pass) a failed process cannot authorize dispatch with an available count [0.04ms]
+(pass) summary accounting requests the same isolated route and unmodified prompt [0.04ms]
+(pass) cancelling accounting stops its hcn process and preserves no dispatch result [0.07ms]
+(pass) unbounded or silent inspection output is terminated [10.13ms]
+(pass) accounting retains structured refusal issues without raw diagnostics [0.11ms]
+(pass) accounting escalates when hcn ignores termination [2.61ms]
+(pass) an early real process refusal handles broken stdin without crashing Lucid [1.12ms]
+
+test/harness/native-settings.test.ts:
+(pass) native continuation reads uncached HCN settings for the exact session and folder [1.64ms]
+
+test/harness/compatibility.test.ts:
+(pass) operation diagnostics retain safe resolution details without package advice [0.10ms]
+(pass) an HCN refusal retains its issue while bounding and cleaning text [0.03ms]
+
+test/harness/native-approval-stream.test.ts:
+(pass) native continuation refuses an explicitly supplied empty model instead of discarding it [0.08ms]
+(pass) verified native approval transport keeps decisions on stdin and retires its owned channel after cleanup [0.71ms]
+(pass) a native turn iterable cannot start the same native session twice [0.30ms]
+(pass) an expired dispatch callback cannot create an HCN process after its channel closes [0.29ms]
+(pass) refusing the attempt's channel prevents HCN process creation [0.24ms]
+(pass) a request admission failure keeps cleanup pending until the owned process actually exits [14.66ms]
+(pass) process output preserves approval text when UTF-8 characters cross pipe chunks [46.48ms]
+
+test/harness/hcn-runner.test.ts:
+(pass) HCN children inherit a managed role through both direct and supervised launch [62.86ms]
+(pass) decoding hcn's stream > a known kind decodes to itself [0.04ms]
+(pass) decoding hcn's stream > an unknown kind is carried, not dropped and not thrown on [0.02ms]
+(pass) decoding hcn's stream > a line that is not an event decodes to null rather than throwing [0.03ms]
+(pass) streamTurn over hcn run --json > a recorded clean run yields its events in order and ends with done [0.33ms]
+(pass) streamTurn over hcn run --json > resume and model reach the argv [0.06ms]
+(pass) openSession over hcn session --json > a recorded two-turn session regroups into turns tagged by input id [0.34ms]
+(pass) openSession over hcn session --json > send writes a command and resolves with the disposition hcn reports [1.32ms]
+(pass) openSession over hcn session --json > a disposition resolves its own send, not another [1.32ms]
+(pass) openSession over hcn session --json > a disposition hcn does not have is refused, not passed through [1.30ms]
+(pass) openSession over hcn session --json > a rejected send carries its reason [2.43ms]
+(pass) openSession over hcn session --json > answer sends the answer op, so hcn composes the preamble [1.35ms]
+(pass) openSession over hcn session --json > close reports the closed event's exit code and cause [1.35ms]
+(pass) openSession over hcn session --json > a refusal before the session line throws, using the recorded refusal [0.15ms]
+(pass) openSession over hcn session --json > the session argv carries the id, provider and stall budget [0.04ms]
+(pass) inspection, which never spawns a harness > native context management requires a known complete declaration {"kind":"auto-compaction","modes":["headless-turn"]} [0.10ms]
+(pass) inspection, which never spawns a harness > native context management requires a known complete declaration {"kind":"auto-compaction","modes":["headless-turn","headless-session"]} [0.01ms]
+(pass) inspection, which never spawns a harness > native context management requires a known complete declaration {"kind":"native-session-auto-compaction","modes":["headless-turn"]}
+(pass) inspection, which never spawns a harness > native context management requires a known complete declaration {"kind":"native-session-auto-compaction","modes":["headless-turn","headless-turn"]} [0.01ms]
+(pass) inspection, which never spawns a harness > native context management requires a known complete declaration {"kind":"native-session-auto-compaction","modes":["headless-turn","headless-session"]}
+(pass) inspection, which never spawns a harness > native context management requires a known complete declaration {"kind":"native-session-auto-compaction","modes":["headless-session"]}
+(pass) inspection, which never spawns a harness > native context management requires a known complete declaration null
+(pass) inspection, which never spawns a harness > native context management requires a known complete declaration 
+(pass) inspection, which never spawns a harness > native context management requires a known complete declaration {"kind":"unknown","modes":["headless-turn"]} [0.02ms]
+(pass) inspection, which never spawns a harness > native context management requires a known complete declaration {"kind":"auto-compaction","modes":["headless-turn","unknown"]}
+(pass) inspection, which never spawns a harness > native context management requires a known complete declaration {"kind":"auto-compaction","modes":["headless-session"]}
+(pass) inspection, which never spawns a harness > native context management requires a known complete declaration {"kind":"auto-compaction","modes":"headless-turn"}
+(pass) inspection, which never spawns a harness > native context management requires a known complete declaration []
+(pass) inspection, which never spawns a harness > capabilities parses the recorded record [0.07ms]
+(pass) inspection, which never spawns a harness > inspect reads session support off the descriptor [0.03ms]
+(pass) inspection, which never spawns a harness > a harness with no session mode reports session false [0.03ms]
+(pass) inspection, which never spawns a harness > inspect reads the choosing vocabulary off the descriptor (RFC-12) [0.06ms]
+(pass) inspection, which never spawns a harness > a harness without the provider turn option carries no provider key [0.04ms]
+(pass) inspection, which never spawns a harness > a dump with no vocabulary leaves the facts without one [0.03ms]
+(pass) inspection, which never spawns a harness > a vocabulary of the wrong shape is narrowed, not cast [0.03ms]
+(pass) review fixes: what the cross-family review found > session admission ignores HCN version metadata: 0.0.1 [0.05ms]
+(pass) review fixes: what the cross-family review found > session admission ignores HCN version metadata: 999.0.0 [0.01ms]
+(pass) review fixes: what the cross-family review found > session admission ignores HCN version metadata: unknown [0.01ms]
+(pass) review fixes: what the cross-family review found > session admission ignores HCN version metadata: 
+(pass) review fixes: what the cross-family review found > an event with no turn open is held for the next turn, never dropped [0.12ms]
+(pass) review fixes: what the cross-family review found > a send still waiting when the session closes is answered, not left pending [1.33ms]
+(pass) review fixes: what the cross-family review found > a turn line arriving while one is open closes the first, stranding nobody [0.14ms]
+(pass) an abandoned turn does not leave a child running > abandonment waits for process cleanup before returning to the directory owner [5.90ms]
+(pass) an abandoned turn does not leave a child running > breaking out of a turn's events kills the hcn process [0.11ms]
+(pass) an abandoned turn does not leave a child running > a turn that runs to completion is not signalled [0.09ms]
+(pass) a large prepared prompt crosses the real hcn process boundary over stdin [10.06ms]
+(pass) a turn that carries a failure still delivers its events > a non-fatal failure rides with the turn's events [0.20ms]
+(pass) a refused child that ignores SIGTERM is killed before the refusal returns [1.48ms]
+(pass) closing an opened session through its signal allows the graceful close reply [0.11ms]
+(pass) aborting session startup settles the open and terminates its silent child [0.08ms]
+(pass) aborting a quiet turn terminates its process while a read is pending [0.08ms]
+(pass) an aborted turn that ignores SIGTERM is killed and releases its reader [1.39ms]
+(pass) malformed runtime inspection is a typed settings refusal [0.17ms]
+(pass) settings inspection validates argv, propagates refusal, and reuses descriptor facts [0.16ms]
+(pass) native resume inspection trusts HCN status supported despite version metadata [0.12ms]
+(pass) native resume inspection trusts HCN status unknown despite version metadata [0.03ms]
+(pass) isolated naming asks hcn to enforce isolation, bounds runtime, and refuses resume [0.23ms]
+(pass) inspection has a deadline and closes silent child output [6.46ms]
+(pass) cancelled inspection does not spawn and in-flight cancellation cleans up [0.16ms]
+(pass) inspection bounds a response even when it contains no newline [0.13ms]
+(pass) failed descriptor inspection does not poison a later explicit inspection [6.45ms]
+(pass) structured run refusals retain their issue without forwarding process prose [0.15ms]
+
+test/harness/interactive-process.test.ts:
+(pass) the native terminal process inherits caller I/O and keeps control on fd 3 [30.29ms]
+
+test/links/check-web-link.test.ts:
+(pass) refuses nonpublic address 127.0.0.1 [0.06ms]
+(pass) refuses nonpublic address 0.1.2.3
+(pass) refuses nonpublic address 10.1.2.3
+(pass) refuses nonpublic address 100.64.1.1
+(pass) refuses nonpublic address 169.254.169.254
+(pass) refuses nonpublic address 172.16.1.1
+(pass) refuses nonpublic address 192.168.1.1
+(pass) refuses nonpublic address 192.0.2.1
+(pass) refuses nonpublic address 198.18.1.1
+(pass) refuses nonpublic address 224.1.2.3
+(pass) refuses nonpublic address 255.255.255.255
+(pass) refuses nonpublic address ::1 [0.09ms]
+(pass) refuses nonpublic address fc00::1
+(pass) refuses nonpublic address fe80::1
+(pass) refuses nonpublic address ::ffff:127.0.0.1
+(pass) refuses nonpublic address 64:ff9b::7f00:1
+(pass) refuses nonpublic address 2002:7f00:1::
+(pass) refuses nonpublic address 2001:db8::1
+(pass) refuses nonpublic address 3fff::1
+(pass) accepts public IPv4 and IPv6 [0.01ms]
+(pass) resolves once and passes the validated address into transport [0.21ms]
+(pass) private DNS answers and redirect rebinding never reach transport [0.10ms]
+(pass) classifies HTTP %s [0.06ms]
+(pass) classifies HTTP %s [0.01ms]
+(pass) classifies HTTP %s [0.01ms]
+(pass) classifies HTTP %s
+(pass) classifies HTTP %s
+(pass) classifies HTTP %s
+(pass) classifies HTTP %s
+(pass) refuses redirect to http://127.0.0.1/ [0.04ms]
+(pass) refuses redirect to https://user:password@example.com/ [0.01ms]
+(pass) refuses redirect to file:///etc/passwd [0.01ms]
+(pass) refuses redirect to javascript:alert(1)
+(pass) bounds redirect loops and chains [0.10ms]
+(pass) actual HTTP transport dials the supplied address and retains Host [5.68ms]
+(pass) inert link parsing validates targets and deduplicates HTTP checks [0.46ms]
+(pass) caps distinct links without truncation [0.41ms]
+(pass) checks at most four links concurrently and reports the first failure in document order [0.20ms]
+(pass) cancellation ends hung probes and never claims success [0.08ms]
+(pass) pinned transport does not follow an environment proxy [24.31ms]
+(pass) bounded header probe handles informational and ambiguous responses 0 [2.74ms]
+(pass) bounded header probe handles informational and ambiguous responses 1 [2.98ms]
+(pass) bounded header probe handles informational and ambiguous responses 2 [1.72ms]
+
+test/store/m13-two-writer.test.ts:
+(pass) two-writer real-flock integration (M1.3) > two real processes append concurrently under flock: no torn lines, strictly increasing seq, no collision, reopened fold matches union [46.35ms]
+
+test/store/store.test.ts:
+(pass) durable conversation store (M5.1) > record creation mints the secret 0600 with an empty log - and a second creation NEVER re-mints (first-attacker hole closed) [0.64ms]
+(pass) durable conversation store (M5.1) > the host enforces the reducer's verdicts: accepted frames are appended before applied, effects delivered, one record per frame either way [1.00ms]
+(pass) durable conversation store (M5.1) > opening a record without its secret is a typed error [0.14ms]
+(pass) durable conversation store (M5.1) > fold reproduces state across reopen, is idempotent, and repairs a crash-torn trailing line [1.83ms]
+(pass) durable conversation store (M5.1) > the in-flight input gauge survives the fold: a reopened record reports the same backlog (RFC-04 P2) [1.70ms]
+(pass) durable conversation store (M5.1) > presence is polled on the status cadence: alive + heartbeat timeout is interactive-unattached, NEVER agent-gone [0.64ms]
+(pass) durable conversation store (M5.1) > concurrent unrelated conversations are isolated: killing one source disturbs nothing in the other [1.46ms]
+(pass) durable conversation store (M5.1) > headless-vs-headless concurrent resume at the store: exactly one wins, the loser is fenced by epoch, and the outcome is durable [0.90ms]
+(pass) durable conversation store (M5.1) > the log is never a weaker copy of the credential: 0600 log in a 0700 dir, secret redacted before durability [0.83ms]
+(pass) durable conversation store (M5.1) > crash repair is byte-accurate under non-ASCII content, and a corrupt newline-terminated line is corruption - never silently discarded [1.07ms]
+(pass) durable conversation store (M5.1) > an envelope-valid entry whose src this build does not know is carried, not applied (RFC-04 P1): the record opens, nothing is contributed, and its bytes count as good [1.17ms]
+(pass) durable conversation store (M5.1) > a durable input whose mode this build does not know is refused on the fold with the wire's own issue, visibly, without bricking the record (RFC-05 B4) [0.96ms]
+(pass) durable conversation store (M5.1) > envelope corruption is still refused whatever the src: a bad version or a missing timestamp is corruption, not an unknown entry (RFC-04 P1 keeps the envelope) [1.66ms]
+(pass) durable conversation store (M5.1) > identity lives in meta, not the path: a moved record still opens and folds under its own conversationId [0.84ms]
+(pass) durable conversation store (M5.1) > record hygiene: path-escaping ids refused, provisioning whitespace in the secret file tolerated, recovery visible at the boundary [0.73ms]
+(pass) durable conversation store (M5.1) > a refused-but-alive frame renews the lease in host memory - the retrying writer is not fenced out by the store layer [0.73ms]
+(pass) RFC-04 R2: only the presence-lock holder acts on effects > a non-holder writes, produces the effects, and acts on none of them [1.01ms]
+(pass) RFC-04 R2: only the presence-lock holder acts on effects > a holder that loses the lease stops acting mid-life - the gate reads the handle live, not once at construction [0.94ms]
+(pass) RFC-04 R2: only the presence-lock holder acts on effects > a malformed frame's refused reply is exempt - a local answer, not conversation work; a reducer refusal is gated [0.61ms]
+(pass) RFC-04 R2: only the presence-lock holder acts on effects > the attach replay stays on the reduce result - reading effects there needs no lease [0.92ms]
+(pass) a writer produces effects without acquiring the executor lease [0.97ms]
+
+test/store/native-owner.test.ts:
+(pass) native identity retains only an owner corroborated at attachment, including after reopen [2.44ms]
+(pass) an older living terminal owner blocks headless attach after the latest owner departs [1.64ms]
+
+test/store/native-approvals.test.ts:
+(pass) only a current managed executor can durably publish a native approval request [2.85ms]
+(pass) a browser choice survives reopen and its write intent can be claimed only once [2.57ms]
+(pass) a native clear retains the chosen answer and a late sent acknowledgement cannot reopen it [1.90ms]
+(pass) settling a lost attempt makes its pending request unavailable without changing delivery evidence [1.73ms]
+(pass) settling a lost attempt makes its decided request unavailable without changing delivery evidence [1.67ms]
+(pass) settling a lost attempt makes its sending request unavailable without changing delivery evidence [1.59ms]
+(pass) settling a lost attempt makes its sent request unavailable without changing delivery evidence [1.95ms]
+(pass) a replacement executor makes the old process request unavailable before recovery or dispatch [1.97ms]
+(pass) source text and browser-supplied native payloads cannot create approval authority [1.81ms]
+(pass) an explicit HCN rejection records that the chosen answer was not sent and never authorizes another write [1.93ms]
+(pass) a managed attempt admits at most 32 unresolved native requests and releases capacity only after a clear [6.63ms]
+(pass) an unsupported approval request field cannot be silently discarded into an actionable request [1.32ms]
+
+test/store/artifacts.test.ts:
+(pass) artifact versions (RFC-06 storage) > an artifact version is its own log entry, carrying id, version, author, contentType, hash, bytes [1.08ms]
+(pass) artifact versions (RFC-06 storage) > folding a record does not pull artifact bytes into state or transcript [0.68ms]
+(pass) artifact versions (RFC-06 storage) > reading a version is a seek, not a fold — index built during fold at open [0.89ms]
+(pass) artifact versions (RFC-06 storage) > reopening a record returns the same versions, unchanged [1.08ms]
+(pass) artifact versions (RFC-06 storage) > nothing is ever rewritten — every version is a new entry, duplicate version keeps first [0.91ms]
+(pass) artifact versions (RFC-06 storage) > a version over the size limit is refused, and the record still opens [2.65ms]
+(pass) artifact versions (RFC-06 storage) > the hash is written for every version from the first — missing hash is corrupt [1.29ms]
+(pass) artifact versions (RFC-06 storage) > write three versions, close, reopen, read version two (ticket proof) [1.06ms]
+(pass) artifact versions (RFC-06 storage) > a version that already exists is idempotent for the same bytes and refused for different ones [0.77ms]
+(pass) artifact heads and headers retain version placement across reopening [1.51ms]
+(pass) artifact writes use the host clock [0.86ms]
+(pass) indexed artifact reads are lock-free; a stale index reports its fallback timeout [17.98ms]
+(pass) headers preserve the first accepted version and exclude oversized versions [0.55ms]
+(pass) the catalog builds from fold headers without reading version lines again [1.19ms]
+
+test/store/record-root.test.ts:
+(pass) the default record root > is under ~/.lucid/records [0.08ms]
+(pass) the default record root > LUCID_ROOT still wins [0.02ms]
+(pass) the default record root > an explicit rootDir wins over both
+
+test/store/input-acceptance.test.ts:
+(pass) managed attachment intent validates and survives source events [1.99ms]
+(pass) a repeated accepted input recovers its receipt after reopen without a second input [1.29ms]
+(pass) managed acceptance records prompt and authorization together and fences an old source [1.57ms]
+(pass) an applied receipt precedes queue capacity and conflicting payload checks [3.30ms]
+
+test/store/lock.test.ts:
+(pass) append-lock acquire / hold / release (M1.1) > release permits the same target to be acquired again [0.27ms]
+(pass) append-lock acquire / hold / release (M1.1) > a second acquire on a held target WAITS, then times out with LockError lock-timeout (E001); release lets a later acquire succeed [150.46ms]
+(pass) append-lock unavailable backend refuses, never falls back (M1.1, D-008) > acquireWith(undefined, ...) throws LockError lock-unavailable and creates no fallback lockfile [0.25ms]
+(pass) append-lock structured events (M1.1 observability) > emits lock.acquire/lock.release with the label, and lock.timeout with waitedMs under contention [134.88ms]
+(pass) append-lock cross-process death-release (M1.1, D-008) > a lock held by another process blocks acquire; killing that process kernel-releases it [224.07ms]
+(pass) append-lock lifecycle robustness (M1.1 boundary-review fixes) > release() is idempotent - a second release does not throw [0.57ms]
+(pass) append-lock lifecycle robustness (M1.1 boundary-review fixes) > a non-finite or negative timeout is rejected (never an infinite hang) and opens no lockfile [0.45ms]
+(pass) append-lock lifecycle robustness (M1.1 boundary-review fixes) > a throwing onEvent sink never strands the lock - acquire still returns a working handle [0.53ms]
+
+test/store/connection.test.ts:
+(pass) a verified binding survives replay and refuses a different native session [3.45ms]
+(pass) an unknown connection envelope is refused without discarding its admission facts [1.55ms]
+(pass) connection status refreshes native ownership without writing or treating unknown as closed [2.26ms]
+(pass) a Claude Code binding offers resume listening but never the Codex terminal reconnect [1.97ms]
+(pass) a legacy record without a working folder cannot bind an arbitrary native folder [1.39ms]
+(pass) a departed bound owner does not authorize a headless attach without continuation admission [1.80ms]
+(pass) a publication requirement fences executor acquisition, attachment and an earlier prepared attempt [3.20ms]
+(pass) publication holds later delivery while an earlier receipt and response settle without replay [4.31ms]
+
+test/store/atomic-file.test.ts:
+(pass) exclusive sidecar creation failure preserves a temporary file owned by another writer [2.27ms]
+
+test/store/conversation-naming.test.ts:
+(pass) submission persists the original prompt title and eligibility, but opening is read only [1.68ms]
+(pass) naming consumes durable attempts and repairs invalid output only once across reopen [4.77ms]
+(pass) manual rename rejects stale revisions and defeats a late generated result [2.83ms]
+(pass) a durable submission recovers naming after metadata loss without migrating untouched legacy records [4.82ms]
+(pass) attachment-only input has a short label and waits for the first text without reading file contents [2.49ms]
+(pass) explicit rename repairs a legacy title whose invalid revision projects as zero [1.08ms]
+
+test/store/collect-effects.test.ts:
+(pass) the range fold that hands back effects (RFC-04 step 5) > a caller can fold from a given position and receive effects in log order [1.55ms]
+(pass) the range fold that hands back effects (RFC-04 step 5) > each effect is paired with the position of the entry that produced it [1.20ms]
+(pass) the range fold that hands back effects (RFC-04 step 5) > the fold runs under the append lock and returns effects without dispatching inside [1.15ms]
+(pass) the range fold that hands back effects (RFC-04 step 5) > an entry the reducer refuses contributes no effects [1.07ms]
+(pass) the range fold that hands back effects (RFC-04 step 5) > an entry with an unrecognised source contributes no effects and does not break later entries [1.05ms]
+(pass) the range fold that hands back effects (RFC-04 step 5) > existing fold and append behaviour is unchanged [0.91ms]
+(pass) collecting effects does not cost the artifact index > the index survives a collect, so a revision can find the version it replaces [1.49ms]
+
+test/store/driver-preference.test.ts:
+(pass) a round trip > what is written is what is read back [0.90ms]
+(pass) a round trip > the file carries the version stamp, like meta.json [0.66ms]
+(pass) a round trip > a field left out is a field cleared, not a field kept [0.92ms]
+(pass) the file-write discipline > 0o600, like every file in the record [0.61ms]
+(pass) the file-write discipline > replaces atomically: no temporary is left behind [0.83ms]
+(pass) the file-write discipline > never touches the log [0.63ms]
+(pass) reading when there is nothing to read > no file is no preference, not an error [0.38ms]
+(pass) reading when there is nothing to read > a record that does not exist yet reads the same way [0.06ms]
+(pass) the tolerant read > unknown fields are ignored, not fatal [0.68ms]
+(pass) the tolerant read > a file that does not parse reads as no preference [0.48ms]
+(pass) the tolerant read > a harness that is not one of the four is no preference at all [0.43ms]
+(pass) the tolerant read > malformed known fields remain visible and block execution [0.63ms]
+(pass) the write guard > a harness that is not one of the four is refused, and nothing is written [0.65ms]
+(pass) the write guard > a field outside the wire-id shape is refused [0.85ms]
+(pass) the shape rules, stated once here > the four names, and only them [0.03ms]
+(pass) the shape rules, stated once here > a field is the wire-id shape: non-empty, bounded, no control characters [0.02ms]
+
+test/store/dispatch-context.test.ts:
+(pass) a newer artifact invalidates prepared dispatch even when the conversation sequence is unchanged [2.13ms]
+(pass) dispatch rechecks settings changes and ignores content-neutral cursors [1.58ms]
+(pass) dispatch rechecks folder changes and ignores content-neutral cursors [1.48ms]
+(pass) dispatch rechecks input changes and ignores content-neutral cursors [1.50ms]
+(pass) dispatch rechecks lease changes and ignores content-neutral cursors [1.24ms]
+(pass) dispatch rechecks cursor changes and ignores content-neutral cursors [1.40ms]
+(pass) dispatch rechecks range changes and ignores content-neutral cursors [1.18ms]
+
+test/store/blobs.test.ts:
+(pass) storing and reading back > what goes in comes out [0.36ms]
+(pass) storing and reading back > the name is the sha256 of the bytes [0.20ms]
+(pass) storing and reading back > the same bytes stored twice are one file [0.22ms]
+(pass) storing and reading back > different bytes are different files [0.33ms]
+(pass) storing and reading back > empty bytes are storable [0.21ms]
+(pass) storing and reading back > binary survives unchanged [0.23ms]
+(pass) a blob's name is a hash, never a path > traversal is refused on the shape of the name [0.09ms]
+(pass) a blob's name is a hash, never a path > uppercase hex is not a blob name [0.06ms]
+(pass) a blob's name is a hash, never a path > a real hash resolves inside the blob directory [0.05ms]
+(pass) a blob's name is a hash, never a path > reading an unknown blob refuses rather than resolving [0.05ms]
+(pass) the bound > a file over it is refused and nothing is written [0.47ms]
+(pass) the bound > a file exactly at the bound is stored [11.28ms]
+(pass) what a missing blob does > reading one is null, not a throw [0.15ms]
+(pass) what a missing blob does > a blob deleted after storing reads as gone [0.26ms]
+(pass) writing is atomic and private > no partial file is left behind [0.24ms]
+(pass) writing is atomic and private > a blob is readable only by its owner [0.20ms]
+(pass) writing is atomic and private > a stray part file is not mistaken for a blob [0.26ms]
+(pass) storing through the record, blob and entry together > a stored attachment leaves a blob and an entry [0.85ms]
+(pass) storing through the record, blob and entry together > the record still opens afterwards, and the entry is validated [0.77ms]
+(pass) storing through the record, blob and entry together > a file over the bound is refused and nothing is appended [0.57ms]
+(pass) storing through the record, blob and entry together > a malformed attach entry stops the record opening [0.59ms]
+(pass) storing through the record, blob and entry together > the same file attached twice is one blob and two entries [1.18ms]
+(pass) invalid attachment metadata leaves no blob or log entry [0.70ms]
+
+test/store/execution-recovery.test.ts:
+(pass) takeover reconciles a durable terminal result without applying or executing again [2.73ms]
+(pass) a recorded unsuccessful terminal event preserves partial output as a failed attempt [2.16ms]
+(pass) loss before any process evidence stays uncertain and requires explicit fresh recovery [2.50ms]
+(pass) a host without the executor lease cannot reconcile a departed worker [1.46ms]
+(pass) an acknowledged asking turn completes its attempt while preserving the question [2.03ms]
+
+test/store/artifact-links.test.ts:
+(pass) agent admission refuses a missing fragment and retains the previous version [1.26ms]
+(pass) remote validation is required for standalone agent writes [0.86ms]
+(pass) a human save during a web check wins without being overwritten [1.20ms]
+(pass) caller cancellation prevents a late append [0.87ms]
+(pass) writer cancellation prevents a late append [0.71ms]
+
+test/store/execution.test.ts:
+(pass) an attempt is durable before dispatch and cannot be started twice after reopen [2.46ms]
+(pass) legacy adoption is durable, executor-only, and cannot authorize an already applied input [1.65ms]
+
+test/store/connection-delivery.test.ts:
+(pass) a matching pre-start failure releases its launch for an explicit same-input retry [3.96ms]
+(pass) an uncertain execution cannot release its native launch as a pre-start refusal [2.09ms]
+(pass) launch refusal rejects unknown-launch evidence without changing the reservation [2.18ms]
+(pass) launch refusal rejects different-start evidence without changing the reservation [1.99ms]
+(pass) launch refusal rejects completed evidence without changing the reservation [1.92ms]
+(pass) cancelled feedback invalidates a prepared launch before its notice or attempt is saved [1.89ms]
+(pass) a prepared bound attempt and its launch notice are admitted in one durable write [2.26ms]
+(pass) headless launch selects the first eligible saved input [2.17ms]
+(pass) connection replay refuses a native offer while headless creation is unresolved [2.26ms]
+(pass) a returning native registration blocks launch before it binds or starts listening [1.64ms]
+(pass) headless launch admission rechecks the saved folder and keeps the original native target [1.76ms]
+(pass) an unresolved launch keeps its input reserved after the executor exits [1.75ms]
+(pass) two records cannot reserve the same native history even through different interfaces [2.87ms]
+(pass) departed native launch admission records one notice and fences unresolved creation [2.45ms]
+(pass) a requested native wait consumes its activation once and refuses stale selection [10.78ms]
+(pass) selection revoked during preparation leaves feedback unsent and disables the old helper [3.10ms]
+(pass) listening requires an executor lease and expires without implying native departure [1.36ms]
+(pass) a lost listener lease stops readiness before its wait deadline while the native owner stays open [1.15ms]
+(pass) a returning listener waits until every other native owner is confirmed gone [1.19ms]
+(pass) a prepared offer selects saved inputs in order without implying receipt and fences another listener [2.03ms]
+(pass) a legacy interactive attachment cannot bypass connection admission on a bound record [0.98ms]
+(pass) receipt requires the offered native generation, needs no executor lease, and is idempotent [1.91ms]
+(pass) a correlated question requires receipt and records one outcome before listening resumes [252.17ms]
+(pass) lost ownership preserves delivery and outcome uncertainty instead of reporting a closed connection [2.40ms]
+(pass) an artifact revision invalidates a prepared offer without consuming its input [2.47ms]
+(pass) a control writer can cancel only unsent feedback without taking the listener lease [2.17ms]
+(pass) status probes every native owner once and cannot hide uncertainty or competing owners behind a live listener [1.84ms]
+(pass) an interrupted listener stays disabled across later callbacks until explicit resume [2.63ms]
+(pass) a failed native ownership probe returns an unverified connection without granting readiness [1.48ms]
+(pass) publication cannot bind a record while a legacy driver is attached [1.38ms]
+(pass) first binding preserves a record's known native identity after the legacy driver detaches [1.43ms]
+(pass) a live historical owner cannot stand in for the owner of the current listener or offer [1.82ms]
+(pass) an unreadable executor lock reports unknown readiness without assuming the session closed [1.13ms]
+(pass) listener readiness requires the admitted listener process, not only a live native owner and any held lock [1.31ms]
+(pass) first binding cannot bypass an unsettled managed attempt after its attachment ends [1.79ms]
+(pass) receipt and response controls resolve their action identities atomically for repeated command writers [252.04ms]
+(pass) native control commands preserve one offer and require current registered ancestry and lifecycle [503.53ms]
+(pass) control commands report failed caller verification without appending or claiming publication [2.18ms]
+(pass) the cancellation command needs no native authority and remains limited to unsent inputs [2.78ms]
+(pass) native preparation carries the complete current document and the original comparison annotation [3.08ms]
+(pass) cancelled feedback remains in the transcript but never enters later native context [1.90ms]
+(pass) the bounded native listener waits without inference, offers FIFO feedback once, and resumes only after settlement [252.95ms]
+(pass) the verified native parent can durably interrupt its helper without owning the executor lease [3.49ms]
+(pass) the idle native listener revokes readiness as soon as its owner becomes unverified [2.23ms]
+(pass) native interruption during preparation keeps the input unsent and requires explicit listening again [4.15ms]
+(pass) a native preparation hold survives continuation while other eligible feedback proceeds [248.84ms]
+(pass) explicit native listening rechecks a comparison hold recorded by the prior execution path [3.50ms]
+(pass) a newer document or explicit listening releases the original held native input [521.71ms]
+(pass) native preparation holds unsupported historical content without dropping it or dispatching feedback [2.29ms]
+(pass) native encoding failure leaves feedback intact and permits a later preparation [1.91ms]
+(pass) native preparation holds feedback when the transport has no verified finite output limit [1.54ms]
+(pass) native preparation measures the complete encoded payload and holds oversized feedback intact [2.75ms]
+(pass) native feedback with an attachment stays held before encoding or dispatch [1.82ms]
+(pass) uninterpretable native attachment references cannot bypass complete-context admission [1.51ms]
+(pass) verified native file transport offers complete copies with current locations [128.15ms]
+(pass) native file copies are removed when final transport encoding exceeds its limit [127.96ms]
+(pass) binding during executor acquisition refuses authority and releases the acquired lock [1.53ms]
+(pass) a departed bound owner admits an explicit native worker without recording a launch [2.10ms]
+(pass) an admitted native worker attaches once on its acquired lease and preserves the bound session [2.10ms]
+(pass) cancelling the admitted input prevents native attachment and keeps later feedback queued [2.29ms]
+(pass) a replacement raw lease cannot reuse a native worker's released admission [2.04ms]
+(pass) native attachment reports unknown ownership after admission without changing the record [1.93ms]
+(pass) a returning registration during native admission releases the lock and prevents a later attach [2.72ms]
+(pass) native admission cannot attach a different harness [2.43ms]
+(pass) native dispatch rechecks a returning owner after preparation and invokes the admitted attempt once [2.87ms]
+(pass) native launch start requires its recorded session identity and retains the launch reservation [3.86ms]
+(pass) a reconnect reservation survives replay and fences native executor acquisition without taking its lease [2.64ms]
+(pass) reconnect controls report one existing request and cancel only its named wait [2.35ms]
+(pass) a reconnect reservation arriving during raw lease acquisition prevents executor authority [1.86ms]
+(pass) native admission releases its lock when the departed owner returns during acquisition [1.70ms]
+(pass) terminal ownership appearing during admission prevents executor authority [1.29ms]
+(pass) a verified listener acquires authority without recording readiness until its enable write [1.47ms]
+(pass) repeating a saved listener enable cannot grant a new executor during unresolved delivery [1.71ms]
+(pass) native presence changing to %s during acquisition releases the lock [1.50ms]
+(pass) native presence changing to %s during acquisition releases the lock [1.49ms]
+(pass) native file copies survive receipt and are removed only after their response is recorded [381.31ms]
+(pass) a new host cleans native copies after a response was saved but post-append publication failed [256.27ms]
+(pass) reconnect persists an uncancellable intent before invoking the same session once [3.45ms]
+(pass) raw reconnect intent cannot bypass registration ordering after admission [2.15ms]
+(pass) reconnect acquisition rechecks cancelled before granting authority [2.36ms]
+(pass) reconnect acquisition rechecks replaced before granting authority [2.10ms]
+(pass) reconnect acquisition rechecks owner-returned before granting authority [1.82ms]
+(pass) reconnect acquisition rechecks owner-unknown before granting authority [1.77ms]
+(pass) reconnect dispatch retains its intent when lease-lost [2.26ms]
+(pass) reconnect dispatch retains its intent when owner-returned [2.12ms]
+(pass) reconnect dispatch retains its intent when owner-unknown [1.99ms]
+(pass) reconnect dispatch retains its intent when invocation-threw [2.43ms]
+(pass) requester exit withdraws only a reconnect that never recorded launch intent [2.62ms]
+(pass) real requester death in requested phase cannot erase possible native creation [31.38ms]
+(pass) real requester death in intended phase cannot erase possible native creation [30.95ms]
+(pass) a host with an admitted reconnect lease refuses another acquisition before the lock callback [2.11ms]
+(pass) only the consumed reconnect launch can record child provenance before releasing its lease [3.13ms]
+(pass) only the verified launched child can acquire the released lease and fulfill reconnect [2.88ms]
+(pass) an owned reconnect retains a late closed result after listener fulfillment [4.00ms]
+(pass) an owned reconnect retains a late uncertain result after listener fulfillment [3.52ms]
+(pass) the verified reconnect child can select its reserved conversation after the requester releases presence [7.33ms]
+(pass) the native listener fulfills reconnect and offers saved feedback through its normal receipt boundary [4.56ms]
+(pass) requester death after start cannot release a reservation while its recorded child is alive [41.61ms]
+(pass) reconnect carries normalized HCN creation into the durable record before releasing presence [3.85ms]
+(pass) durable reconnect refusal retains only the documented HCN pre-spawn reason set [0.04ms]
+(pass) reconnect records HCN resume-unavailable only after control drains and its wrapper exits [2.75ms]
+(pass) reconnect records HCN invalid-request only after control drains and its wrapper exits [2.43ms]
+(pass) reconnect records HCN unsupported-interface only after control drains and its wrapper exits [2.69ms]
+(pass) reconnect preserves no-dispatch evidence when cancellation arrives during final admission [2.74ms]
+(pass) reconnect source preserves intent and feedback when HCN reports wrong-session [2.87ms]
+(pass) reconnect source preserves intent and feedback when HCN reports wrong-folder [2.62ms]
+(pass) reconnect source preserves intent and feedback when HCN reports wrong-interface [2.57ms]
+(pass) reconnect source preserves intent and feedback when HCN reports spawn-threw [2.36ms]
+(pass) public reconnect reserves once and preserves a closed native result [3.70ms]
+(pass) public reconnect reserves once and preserves a uncertain native result [2.78ms]
+(pass) public reconnect waits without launching while the executor lock is held [3.45ms]
+(pass) cancelling public reconnect withdraws only its pre-launch wait and keeps feedback [2.96ms]
+(pass) a duplicate public reconnect reports the existing request without invoking a native process [2.01ms]
+(pass) public reconnect directs a live author back to listening without changing the record [1.49ms]
+(pass) public reconnect no-terminal cannot reserve or invoke [1.34ms]
+(pass) public reconnect unknown-owner cannot reserve or invoke [1.96ms]
+(pass) public reconnect already-cancelled cannot reserve or invoke [0.93ms]
+(pass) public reconnect refuses the --harness override before touching a record [0.06ms]
+(pass) public reconnect refuses the --model override before touching a record
+(pass) public reconnect refuses the --resume override before touching a record
+(pass) public reconnect refuses the --cwd override before touching a record
+(pass) public reconnect refuses the --startup-prompt override before touching a record
+(pass) public reconnect refuses the --json override before touching a record
+(pass) public reconnect retains a live foreign waiter and replaces it only after verified exit [33.37ms]
+(pass) per-message delivery retains receipt when ownership is lost and leaves later feedback saved [2.85ms]
+(pass) delivery history keeps answer, question, refusal, failure and cancellation distinct after replay [507.97ms]
+(pass) only an unsent bound-native input advertises cancellation, and cancellation is repeat-safe [2.82ms]
+
+test/store/context-coverage.test.ts:
+(pass) session coverage survives A to B to A and never claims a concurrent prompt was consumed [3.84ms]
+(pass) completed output cannot retroactively authorize an offer of context it never saw [1.32ms]
+(pass) a changed native identity within the supplying turn cannot confirm the old session [1.38ms]
+(pass) a successful persistent-session turn confirms context without a process exit code [1.22ms]
+(pass) recovery confirms a completed managed attempt from its pre-dispatch offer and actual native identity [2.31ms]
+
+test/store/artifact-place.test.ts:
+(pass) a version knows where it belongs > the catalog reports a place for every version [2.26ms]
+(pass) a version knows where it belongs > a version written later has a later place [1.85ms]
+(pass) a version knows where it belongs > a version's place is the last line before it, not after it [1.80ms]
+(pass) a version knows where it belongs > a version written before anything was said sits at the start [1.36ms]
+(pass) a version knows where it belongs > the place survives reopening the record [1.55ms]
+
+test/store/tailer.test.ts:
+(pass) the shared record tailer (RFC-04 R1, step 4) > peek is lock-free: it tolerates a torn tail without repairing it and without taking the append lock [1.10ms]
+(pass) the shared record tailer (RFC-04 R1, step 4) > read takes the append lock, repairs the torn tail, and returns the revalidated fold [1.12ms]
+(pass) the shared record tailer (RFC-04 R1, step 4) > read revalidates under the lock: bytes another writer appended after the peek are included — the peek-decide-read flow a live host runs [1.00ms]
+(pass) the shared record tailer (RFC-04 R1, step 4) > followRecord triggers once immediately, follows growth from another writer, and stops on abort [48.50ms]
+(pass) the shared record tailer (RFC-04 R1, step 4) > followRecord keeps following on a filesystem where fs.watch cannot start — the poll fallback alone carries it [14.11ms]
+
+test/store/artifact-title.test.ts:
+(pass) what a title is > ordinary prose is a title [0.01ms]
+(pass) what a title is > empty is not, and neither is a non-string [0.01ms]
+(pass) what a title is > the bound is inclusive, and one past it is not a title [0.02ms]
+(pass) what a title is > control characters are refused [0.01ms]
+(pass) what a title is > a title is clearly longer than an artifactId may be
+(pass) renaming > a title is readable after it is written [1.09ms]
+(pass) renaming > it survives reopening the record [0.89ms]
+(pass) renaming > the last write wins [1.10ms]
+(pass) renaming > it creates no version of the document [0.84ms]
+(pass) renaming > the artifactId is untouched, so the agent can still revise it [0.90ms]
+(pass) renaming > an artifact nobody renamed has no title [0.69ms]
+(pass) renaming > an invalid title is refused and nothing is stored [0.67ms]
+(pass) a record the endpoint did not write > a malformed title is ignored and any earlier one stands [1.01ms]
+(pass) a record the endpoint did not write > an entry with no usable artifactId is ignored, and the record opens [0.81ms]
+(pass) a record the endpoint did not write > a title naming an artifact the record does not hold does not stop it opening [0.84ms]
+(pass) a record the endpoint did not write > a meta entry carrying a field this build does not read is harmless [1.15ms]
+(pass) a record the endpoint did not write > an entry source this build does not know is skipped, not fatal [0.98ms]
+(pass) retire is gone > a meta entry cannot be written with nothing but a retire [0.74ms]
+(pass) retire is gone > an older record's retired entry is ignored, and the artifact is ordinary [0.82ms]
+(pass) retire is gone > a title written beside a retire in the same old entry still applies [0.71ms]
+
+test/store/cursor.test.ts:
+(pass) delivery cursor (RFC-04 R3/R4 + step7) > cursor is durable and ordered after the entries it describes [2.33ms]
+(pass) delivery cursor (RFC-04 R3/R4 + step7) > it is written only after every effect it covers has been acted on - reopen before advance repeats, after advance does not [1.70ms]
+(pass) delivery cursor (RFC-04 R3/R4 + step7) > reopening does not repeat effects at or below cursor [1.62ms]
+(pass) delivery cursor (RFC-04 R3/R4 + step7) > cursor past end is corruption - refuse to drive [0.91ms]
+(pass) delivery cursor (RFC-04 R3/R4 + step7) > truncated cursor line is safe - reads as earlier position, repeat absorbed [1.25ms]
+(pass) delivery cursor (RFC-04 R3/R4 + step7) > the attach drain advances the cursor, and an already-applied input is never redelivered [1.54ms]
+(pass) delivery cursor (RFC-04 R3/R4 + step7) > cursor entry satisfies envelope - v field required [0.72ms]
+(pass) delivery cursor (RFC-04 R3/R4 + step7) > a record written before cursors existed does not replay its whole history [1.12ms]
+(pass) advancing an empty record to zero appends no cursor [0.58ms]
+
+test/store/conversation-context.test.ts:
+(pass) context quotes recorded roles and current artifact while keeping the pending request separate [0.17ms]
+(pass) context distinguishes waiting work and recorded fragments from completed messages [0.08ms]
+(pass) unclassified event content holds preparation instead of silently losing it or exporting its envelope [0.04ms]
+(pass) an unfamiliar tool result field holds context instead of exporting an empty tool result [0.02ms]
+(pass) a fresh continuation retains interrupted output and failure evidence without repeating completed deltas [0.09ms]
+
+test/store/native-registration.test.ts:
+(pass) a native listening request survives lookup but cannot cross a lifecycle refresh [1.39ms]
+(pass) an invalid selection cannot grant listening or corrupt verified receipt authority [1.08ms]
+(pass) a shared native process cannot authorize a different native thread [0.65ms]
+(pass) native registration requires positive session proof and returns the exact verified binding [0.80ms]
+(pass) a verified match binds when an unrelated registration cannot be verified [0.84ms]
+(pass) connection distinguishes registration contention from a failed record operation [0.63ms]
+(pass) registration cleanup removes only corroborated departed owners and retains unknown owners [0.84ms]
+
+test/store/context-offer.test.ts:
+(pass) transferred notes offer only referenced files and preserve distinct files with the same name [131.49ms]
+(pass) the context copy explicitly identifies a referenced blob that is no longer available [128.72ms]
+(pass) offered context is private, outside the record, and readable in bounded slices [149.08ms]
+(pass) context CLI reads its offered copy without opening the record or using HTTP [131.32ms]
+(pass) retrieval rejects traversal and symlink directories and makes UTF-8 progress [126.75ms]
+(pass) slice concatenation preserves byte order marks in recorded content [126.46ms]
+(pass) orphaned context copies are removed after process loss while a live copy survives [542.11ms]
+(pass) a context copy survives its preparing helper when the receiving process is still alive [413.98ms]
+(pass) settling one native offer preserves another offer and a different process generation [634.35ms]
+(pass) in-order reads record contiguous progress and doubtful progress counts as unread [986.13ms]
+
+test/store/deliver.test.ts:
+(pass) text goes into the input > its contents appear [0.72ms]
+(pass) text goes into the input > what the person typed is kept [0.37ms]
+(pass) text goes into the input > nothing is copied out for an inlined file [0.40ms]
+(pass) everything else is named > an image is named, never inlined [0.46ms]
+(pass) everything else is named > the named copy holds the same bytes [0.45ms]
+(pass) everything else is named > a text file too large to inline is named, not refused [0.60ms]
+(pass) everything else is named > a file claiming to be text but holding binary is named [0.45ms]
+(pass) no path inside the record reaches an agent > the offered path is outside the record [0.41ms]
+(pass) no path inside the record reaches an agent > the input never mentions the blob store [0.41ms]
+(pass) no path inside the record reaches an agent > secret is never named, and is not beside the copy [0.41ms]
+(pass) no path inside the record reaches an agent > a filename that is a path does not become one [0.40ms]
+(pass) no path inside the record reaches an agent > the copy is readable only by its owner [0.41ms]
+(pass) a blob that is gone > is reported and the turn still runs [0.32ms]
+(pass) what the input says happened > a named file is never described as read [0.44ms]
+(pass) what the input says happened > every attachment gets exactly one outcome, in order [0.54ms]
+(pass) what the input says happened > no attachments leaves the input as typed [0.13ms]
+
+ 1812 pass
+ 0 fail
+ 10118 expect() calls
+Ran 1812 tests across 161 files. [62.22s]

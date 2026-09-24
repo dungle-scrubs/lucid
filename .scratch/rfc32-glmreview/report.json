@@ -1,0 +1,36 @@
+{
+  "actual": "glm-5.3@pi",
+  "attempts": [
+    {
+      "argv": [
+        "run",
+        "pi",
+        "--json",
+        "--model",
+        "zai/glm-5.3",
+        "--effort",
+        "xhigh",
+        "--access",
+        "write",
+        "--timeout",
+        "1200",
+        "--cwd",
+        "/Users/kevin/dev/lucid",
+        "--skills",
+        "review-rfc",
+        "--prompt-file",
+        ".scratch/rfc32-glmreview/brief.md"
+      ],
+      "failure": null,
+      "notes": [],
+      "outcome": "result",
+      "route": "glm-5.3@pi"
+    }
+  ],
+  "harness": "pi",
+  "intended": "glm-5.3@pi",
+  "question": null,
+  "result": "Review complete. File written and opened: `/Users/kevin/dev/lucid/docs/rfc/32_any-session-handoff-to-lucid.review-v2.md`. No source files touched (scoped files verified byte-identical to f7d63cd throughout); evidence scripts kept at `.scratch/handoff-review-v2/`.\n\n**Findings: 12 total - 8 demonstrated, 4 observation, 0 hunch**\n\nDemonstrated:\n1. No attach step - command ends PUBLISHED_UNATTACHED (epoch=0, attached=false); RFC Design 2 step 4 / Design 3 and #306's own text put attach in T1. High.\n2. Retry equality unenforced for the continuation - same creationId + new inputId/text succeeds, queues a second task (probe: 2 inputs). High.\n3. Presence handle dropped when `openWriter` throws (handoff.ts:49-51, outside the try) - leaked in-process, `presenceHeld=true` after the throw. High for T2.\n4. Differing artifact bytes on retry refused E-HUB-03 instead of E-HUB-02. Medium.\n5. Presence contention surfaces a raw `LockError` - no refusal vocabulary, wrong lock name, leaked path. Medium.\n6. Existing record + colliding inputId + same text returns success (not `input-id-reused`), and the CLI prints \"queued\" when nothing was queued. Medium.\n7. (finding 8 in file) Portless `serverUrl` accepted, URL points at port 80. Low.\n8. (finding 11 in file) `bun run check` red at the exact commit - 2 failures, both the flaky tests already tracked as #309/T4; all 16 handoff tests pass.\n\nObservation: artifact idempotency checks bytes only (publication also checks author/contentType); `runHandoff`'s dead `settings === undefined` fallback; unknown request fields silently ignored; test-suite gaps vs #306 criteria (no crash-injection test, no bad-folder test, partial conflicting-retry coverage with codes unasserted, existing-conversation path untested, retry test would not catch a duplicated input or a leaked presence).\n\n**Cleared:** presence released on success/refusal/idempotent-retry paths; no native-publication requirement (continuation is an ordinary managed candidate); continuation enters as managed input (`requested`, attempt 0); E-COMP-06 returns existing receipt on text match and E-HUB-02 on mismatch; existing-conversation path works with fresh inputId; never-dispatched classification at exit (no attempt-started, no uncertain block); identical-retry idempotency incl. settings/workdir conflicts via creation receipt; E-HUB-04 bad-folder refusal; full payload validation incl. both multibyte sides of the code-unit limit; URL shape matches the server route; creation-to-presence gap safe on first handoff and retry; mapping/dispatch hunks match the artifact-publish pattern.",
+  "sessionId": "01a0d182-1593-71ab-81d9-1ef0d4885478",
+  "status": "ok"
+}

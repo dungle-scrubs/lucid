@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { parseHandoffRequest } from "../../src/cli/handoff-request.js";
+import { parseHandoffRequest, withUnmanagedMarker } from "../../src/cli/handoff-request.js";
 import { mapSubcommand } from "../../src/cli/mapping.js";
 
 const base = () => ({
@@ -93,14 +93,20 @@ test("a relative working directory is refused", () => {
 
 test("handoff maps request and json flags", () => {
   expect(mapSubcommand(["handoff", "--request", "req.json"])).toEqual({
+    allowUnmanaged: false,
     json: false,
     kind: "handoff",
     request: "req.json",
   });
   expect(mapSubcommand(["handoff", "--request", "req.json", "--json"])).toEqual({
+    allowUnmanaged: false,
     json: true,
     kind: "handoff",
     request: "req.json",
+  });
+  expect(mapSubcommand(["handoff", "--request", "req.json", "--allow-unmanaged"])).toMatchObject({
+    allowUnmanaged: true,
+    kind: "handoff",
   });
   expect(mapSubcommand(["handoff"])).toMatchObject({ kind: "help" });
   expect(mapSubcommand(["handoff", "--request"])).toMatchObject({ kind: "help" });
@@ -116,4 +122,18 @@ test("an unknown request field is refused", () => {
   expect(() => parseHandoffRequest({ ...base(), nativeSessionId: "foreign-session" })).toThrow(
     "Unknown handoff request field",
   );
+});
+
+test("the unmanaged marker parses; invalid values are refused", () => {
+  expect(parseHandoffRequest({ ...base(), theme: "unmanaged" }).theme).toBe("unmanaged");
+  expect(parseHandoffRequest(base()).theme).toBeUndefined();
+  for (const bad of [null, true, 0, [], {}, "UNMANAGED", "adaptive"]) {
+    expect(() => parseHandoffRequest({ ...base(), theme: bad })).toThrow("theme field");
+  }
+  // The flag supplies the marker only when the field is absent.
+  expect(withUnmanagedMarker({ ...base() }, true)).toMatchObject({ theme: "unmanaged" });
+  expect(withUnmanagedMarker({ ...base() }, false)).not.toHaveProperty("theme");
+  expect(withUnmanagedMarker({ ...base(), theme: "bogus" }, true)).toMatchObject({
+    theme: "bogus",
+  });
 });

@@ -1,0 +1,12 @@
+{
+  "task": "code-review",
+  "selection": {
+    "route": "glm-5.3@pi",
+    "harness": "pi",
+    "modelId": "zai/glm-5.3",
+    "effort": "xhigh",
+    "provider": null,
+    "hosted": true
+  },
+  "fallbacks": []
+}

@@ -1,0 +1,15 @@
+{
+  "fallbacks": [],
+  "needs": ["skills"],
+  "privacy": "normal",
+  "selection": {
+    "effort": "high",
+    "harness": "codex",
+    "hosted": true,
+    "modelId": "gpt-5.6-sol",
+    "provider": null,
+    "route": "gpt-5.6-sol@codex"
+  },
+  "stakes": "high",
+  "task": "code-review"
+}

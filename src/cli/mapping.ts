@@ -47,8 +47,18 @@ export type MappedCommand =
       readonly request: string;
     }
   | { readonly kind: "connection-status"; readonly conversationId: string; readonly json: boolean }
-  | { readonly kind: "artifact-publish"; readonly request: string; readonly json: boolean }
-  | { readonly kind: "handoff"; readonly request: string; readonly json: boolean }
+  | {
+      readonly kind: "artifact-publish";
+      readonly request: string;
+      readonly json: boolean;
+      readonly allowUnmanaged: boolean;
+    }
+  | {
+      readonly kind: "handoff";
+      readonly request: string;
+      readonly json: boolean;
+      readonly allowUnmanaged: boolean;
+    }
   | { readonly kind: "detach"; readonly conversationId: string; readonly json: boolean }
   | { readonly kind: "hcn-supervisor"; readonly argv: readonly string[] }
   | {
@@ -229,15 +239,17 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
       if (rest[0] !== "publish") return help;
       let request: string | undefined;
       let json = false;
+      let allowUnmanaged = false;
       for (let index = 1; index < rest.length; index++) {
         const flag = rest[index];
         if (flag === "--json" && !json) json = true;
+        else if (flag === "--allow-unmanaged" && !allowUnmanaged) allowUnmanaged = true;
         else if (flag === "--request" && request === undefined) {
           request = rest[++index];
           if (!request || request.startsWith("--")) return help;
         } else return help;
       }
-      return request ? { json, kind: "artifact-publish", request } : help;
+      return request ? { json, kind: "artifact-publish", request, allowUnmanaged } : help;
     }
     case "handoff": {
       const help = {
@@ -247,15 +259,17 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
       } as const;
       let request: string | undefined;
       let json = false;
+      let allowUnmanaged = false;
       for (let index = 0; index < rest.length; index++) {
         const flag = rest[index];
         if (flag === "--json" && !json) json = true;
+        else if (flag === "--allow-unmanaged" && !allowUnmanaged) allowUnmanaged = true;
         else if (flag === "--request" && request === undefined) {
           request = rest[++index];
           if (!request || request.startsWith("--")) return help;
         } else return help;
       }
-      return request ? { json, kind: "handoff", request } : help;
+      return request ? { json, kind: "handoff", request, allowUnmanaged } : help;
     }
     case "detach": {
       const help = {
