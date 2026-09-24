@@ -1,5 +1,6 @@
 import type { DefaultTreeAdapterTypes } from "parse5";
 import { parse } from "parse5";
+import { HubError } from "./hub-errors.js";
 
 /**
  * Inert head-meta reader for artifact bytes. The publish path uses this
@@ -35,4 +36,15 @@ export type DeclaredTheme = "adaptive" | "light" | "dark" | "unmanaged";
 export function declaredTheme(bytes: string): DeclaredTheme {
   const value = readHeadMeta(bytes, "lucid-theme")?.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "");
   return value === "light" || value === "dark" || value === "adaptive" ? value : "unmanaged";
+}
+
+/** Refuse unmanaged bytes with the fix named. Stores nothing by itself;
+ * callers close what they opened before calling. */
+export function refuseUnmanaged(): never {
+  throw new HubError(
+    'This document declares no lucid-theme and would render unmanaged. Add <meta name="lucid-theme" content="adaptive"> with matching color-scheme metadata, or resubmit with "theme": "unmanaged".',
+    "E-HUB-09",
+    400,
+    ["Add the lucid-theme declaration"],
+  );
 }

@@ -1,3 +1,5 @@
+import { readdirSync } from "node:fs";
+import { declaredTheme, refuseUnmanaged } from "../protocol/artifact-theme.js";
 import { HubError } from "../protocol/hub-errors.js";
 import { atomicSidecar } from "../store/atomic-file.js";
 import { openWriter } from "../store/conversation-host.js";
@@ -30,6 +32,32 @@ export async function runHandoff(
   rootDir?: string,
 ): Promise<HandoffResult> {
   const records: Conversations = conversations(rootDir);
+  // The theme guard runs before any durable write: no record shell, no
+  // receipt, no version on refusal. A creationId that resolves to an
+  // existing record is a retry; the artifact-exists exemption below
+  // decides it after opening, so fresh creations refuse here.
+  const markedUnmanaged = request.theme === "unmanaged";
+  if (request.conversationId === undefined) {
+    let prior: readonly { conversationId: string; request: unknown }[] | undefined;
+    try {
+      prior = await records.discoveryIndex.receipts(String(request.creationId));
+    } catch {
+      // An unreadable receipt index refuses later at creation; the guard
+      // stays out of its way. A missing root means no receipt exists.
+      try {
+        readdirSync(records.rootDir);
+      } catch {
+        prior = [];
+      }
+    }
+    if (
+      prior !== undefined &&
+      prior.length === 0 &&
+      declaredTheme(request.artifact.bytes) === "unmanaged" &&
+      !markedUnmanaged
+    )
+      refuseUnmanaged();
+  }
   let id: string;
   // A receipt hit means retry: the full equality rule below applies.
   // A fresh creation accepts anything the parser allows.
@@ -143,6 +171,15 @@ export async function runHandoff(
           publication: { status: "published", version: request.artifact.version },
         };
       }
+    }
+    // An already-held artifact is exempt: its policy was chosen at
+    // creation. Byte conflicts refuse before theme checks.
+    const held = host.readArtifact(request.artifact.artifactId, request.artifact.version);
+    if (!held && declaredTheme(request.artifact.bytes) === "unmanaged" && !markedUnmanaged) {
+      host.close();
+      closed = true;
+      presence.release();
+      refuseUnmanaged();
     }
     const written = await host.writeArtifact({
       artifactId: request.artifact.artifactId,
