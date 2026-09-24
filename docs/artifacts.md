@@ -108,6 +108,23 @@ Refusal excerpts are bounded so an invalid patch cannot inflate the next
 prompt without limit. See [patch policy and parser](../src/protocol/patch.ts)
 and [patch tests](../test/protocol/patch.test.ts).
 
+## Chat references to artifact locations
+
+When an agent reply refers to a specific location in the current artifact,
+it quotes the passage's exact words in a fenced `lucid-references` block
+naming the artifact, its current version, and a short label per quote. The
+log keeps the raw block; the view strips it and leaves each label bracketed
+inline so the sentence still reads. The browser resolves each quote against
+the version on screen - verbatim first, approximately when reworded - and
+renders a link only where the quote matches. Clicking travels to that block
+through the same rule as a note card: on screen lights in place, off screen
+docks a travel offer, lost or absent stays prose. Only references naming the
+version on screen are resolved; an unmatched quote renders as the prose the
+agent wrote, never a guess dressed as a fact. Bounds are 20 references per
+message and 2,000 characters per quote. See
+[chat references](../src/protocol/chat-references.ts) and
+[chat reference tests](../test/protocol/chat-references.test.ts).
+
 ## Reading, saving, and restoring
 
 `/c/:conversationId/:artifactId/:version` addresses a version. Omitting the

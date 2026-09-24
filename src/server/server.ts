@@ -52,6 +52,7 @@ import { conversations } from "../cli/record-addressing.js";
 import { ownerPresence, terminalPresence } from "../process-owner.js";
 import { detectAnnotationBatch } from "../protocol/annotations.js";
 import { isTextBytes, sniffImageType, withinAttachmentBound } from "../protocol/attachment.js";
+import { detectChatReferences } from "../protocol/chat-references.js";
 import { EventKind } from "../protocol/events.js";
 import { executionViews } from "../protocol/execution-view.js";
 import { isWireId, TEXT_MAX } from "../protocol/frames.js";
@@ -651,6 +652,15 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
               });
             }
           }
+          // Refs ride beside their line, joined on seq like annotation
+          // batches. The raw fence stays in the log; the view strips it.
+          const refsBySeq = new Map<number, unknown>();
+          for (const e of snapshot.transcript.events) {
+            const text = (e.event as { text?: unknown }).text;
+            if (typeof text !== "string" || !text.includes("lucid-references")) continue;
+            const blocks = detectChatReferences(text);
+            if (blocks.length > 0) refsBySeq.set(e.seq, blocks);
+          }
           const nativeRequired = requiresNativeConnection(snapshot.state);
           const deliveries = new Map(
             (nativeRequired
@@ -689,6 +699,9 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
               : {}),
             ...(line.seq !== undefined && batchBySeq.has(line.seq)
               ? { batch: batchBySeq.get(line.seq) }
+              : {}),
+            ...(line.seq !== undefined && refsBySeq.has(line.seq)
+              ? { refs: refsBySeq.get(line.seq) }
               : {}),
             ...(line.kind === "human" && line.seq !== undefined && deliveryBySeq.get(line.seq)
               ? { delivery: deliveryBySeq.get(line.seq) }

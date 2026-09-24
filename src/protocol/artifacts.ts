@@ -63,7 +63,17 @@ lucid applies the edits and stores the whole resulting document, exactly as if y
 - A patch is a revision, never a creation. \`replaces\` must name an existing version, so the first emission of any document is always the whole form.
 - If any edit fails the whole patch is refused and nothing is stored. The refusal says which edit and why, so fix that edit and send it again. Nothing is ever half-applied.
 
-Emitting the whole document is always allowed and is never wrong. Use it when the document is short, when you are unsure what the current version holds, or when one edit needs to build on another. A patch that has to guess costs more than the document it was avoiding.`;
+Emitting the whole document is always allowed and is never wrong. Use it when the document is short, when you are unsure what the current version holds, or when one edit needs to build on another. A patch that has to guess costs more than the document it was avoiding.
+
+When your chat reply refers to a specific location in the current artifact, quote its exact words so the reader can jump there. Append a fenced block tagged lucid-references naming the artifact, its current version, and each passage you mean:
+
+\`\`\`lucid-references
+{"artifactId": "<id>", "version": <current version>, "refs": [{"quote": "<exact words from the document>", "label": "<short name>"}]}
+\`\`\`
+
+- \`quote\` — exact words from the document, as they appear. The reader's browser matches them against the version on screen; a quote that no longer matches renders as plain prose, never as a link to the wrong place.
+- \`label\` — the short name shown inline, e.g. "Next survey section". Keep prose and label in agreement: write "see the [Next survey section]" and the bracketed label becomes the link.
+- Quote only what you need, at most twenty references per message. Never quote document bytes outside this block to point at a location: prose paraphrase cannot be matched and is left as prose.`;
 
 /** What the body after the header is.
  *

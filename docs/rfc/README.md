@@ -1,5 +1,11 @@
 # Active RFCs
 
+RFC 32 drafts [any-session handoff to Lucid](32_any-session-handoff-to-lucid.rfc.md).
+It is a draft: any plain session supplies artifact plus continuation text, one local command creates the record and attaches, and the source holds through a 30-minute review window.
+
+RFC 31 drafts [idle headless-session release](31_idle-headless-session-release.rfc.md).
+It is a draft: a parked `headless-session` run holds presence forever and blocks queued managed work. Terminal-owned run behavior and the grace period are unresolved.
+
 RFC 30 defines [native feedback context by reference](30_native-feedback-context-by-reference.rfc.md).
 It is accepted for implementation after two Muse review passes and amends RFC 26's transport-limit rule. Claude Code is measured and enabled; Codex keeps inline-only delivery until its own slice is measured.
 
@@ -51,7 +57,7 @@ settings`). Its proposal and v1 review are preserved in the merge; current
 contracts live in [drivers](../drivers.md) for the store source and
 served choices.
 
-The highest allocated RFC number is **30**. The next RFC is **31**.
+The highest allocated RFC number is **32**. The next RFC is **33**.
 RFC 24 was allocated to Claude startup compatibility; RFC 25 is allocated to
 automatic recovery in concurrent work. Their numbers remain reserved.
 Never reset numbering because completed files have been removed. Before

@@ -48,6 +48,7 @@ export type MappedCommand =
     }
   | { readonly kind: "connection-status"; readonly conversationId: string; readonly json: boolean }
   | { readonly kind: "artifact-publish"; readonly request: string; readonly json: boolean }
+  | { readonly kind: "handoff"; readonly request: string; readonly json: boolean }
   | { readonly kind: "hcn-supervisor"; readonly argv: readonly string[] }
   | {
       readonly kind: "context";
@@ -236,6 +237,24 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
         } else return help;
       }
       return request ? { json, kind: "artifact-publish", request } : help;
+    }
+    case "handoff": {
+      const help = {
+        kind: "help",
+        message:
+          "usage: lucid handoff --request FILE [--json]\nCreate a record from artifact bytes plus continuation text and return its artifact URL. The continuation dispatches as the record's first task. This does not start a native process.",
+      } as const;
+      let request: string | undefined;
+      let json = false;
+      for (let index = 0; index < rest.length; index++) {
+        const flag = rest[index];
+        if (flag === "--json" && !json) json = true;
+        else if (flag === "--request" && request === undefined) {
+          request = rest[++index];
+          if (!request || request.startsWith("--")) return help;
+        } else return help;
+      }
+      return request ? { json, kind: "handoff", request } : help;
     }
     case "context": {
       const help = {
