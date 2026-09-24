@@ -1,6 +1,6 @@
 import { isAbsolute } from "node:path";
 import { readUserConfig } from "../config/user-config.js";
-import { declaredTheme } from "../protocol/artifact-theme.js";
+import { declaredTheme, refuseUnmanaged } from "../protocol/artifact-theme.js";
 import type { NativeBinding } from "../protocol/connection.js";
 import { PUBLICATION_MESSAGE_MAX } from "../protocol/connection.js";
 import { settingsShape } from "../protocol/driver-settings.js";
@@ -71,17 +71,6 @@ export type PublicationConnector = (
 export function withUnmanagedMarker(value: unknown, allow: boolean): unknown {
   if (!allow || !object(value) || value.theme !== undefined) return value;
   return { ...value, theme: "unmanaged" };
-}
-
-/** Refuse unmanaged bytes with the fix named. Stores nothing by itself;
- * callers close what they opened before calling. */
-export function refuseUnmanaged(): never {
-  throw new HubError(
-    'This document declares no lucid-theme and would render unmanaged. Add <meta name="lucid-theme" content="adaptive"> with matching color-scheme metadata, or resubmit with "theme": "unmanaged".',
-    "E-HUB-09",
-    400,
-    ["Add the lucid-theme declaration"],
-  );
 }
 
 /** Publication and connection have separate results. A connection failure cannot undo a document. */
