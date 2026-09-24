@@ -26,6 +26,8 @@ export interface HandoffRequest {
   readonly creationId?: string;
   readonly serverUrl: string;
   readonly settings: Settings;
+  /** Present only when the caller intends an unmanaged document. */
+  readonly theme?: "unmanaged";
   readonly workingDirectory: string | null;
 }
 
@@ -47,6 +49,13 @@ export async function readHandoffRequest(path: string): Promise<unknown> {
   }
 }
 
+/** The flag supplies the marker only when the field is absent. An invalid
+ * field value stays invalid; the flag MUST NOT conceal it. */
+export function withUnmanagedMarker(value: unknown, allow: boolean): unknown {
+  if (!allow || !object(value) || value.theme !== undefined) return value;
+  return { ...value, theme: "unmanaged" };
+}
+
 /** Validate the parsed handoff request. Lengths are UTF-16 code units, the unit the host compares. */
 const KNOWN_FIELDS = new Set([
   "artifact",
@@ -55,6 +64,7 @@ const KNOWN_FIELDS = new Set([
   "conversationId",
   "serverUrl",
   "settings",
+  "theme",
   "workingDirectory",
 ]);
 
@@ -66,6 +76,12 @@ export function parseHandoffRequest(value: unknown): HandoffRequest {
         "Remove the unknown field",
       ]);
   const { artifact, continuation, creationId, conversationId, workingDirectory, serverUrl } = value;
+  // The unmanaged marker is an exact string or nothing. An invalid value
+  // is malformed input, and no flag may conceal it.
+  if (value.theme !== undefined && value.theme !== "unmanaged")
+    throw new HubError('The theme field accepts only "unmanaged".', "E-HUB-03", 400, [
+      "Remove the theme field",
+    ]);
   if (
     (typeof creationId !== "string" || !isWireId(creationId)) &&
     (typeof conversationId !== "string" || !validConversationId(conversationId))
@@ -153,6 +169,7 @@ export function parseHandoffRequest(value: unknown): HandoffRequest {
       : { creationId: creationId as string }),
     serverUrl,
     settings,
+    ...(value.theme === undefined ? {} : { theme: "unmanaged" as const }),
     workingDirectory: workingDirectory as string | null,
   };
 }

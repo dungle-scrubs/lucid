@@ -1,0 +1,15 @@
+{
+  "fallbacks": [],
+  "needs": ["skills"],
+  "privacy": "normal",
+  "selection": {
+    "effort": "high",
+    "harness": "codex",
+    "hosted": true,
+    "modelId": "gpt-6-astra",
+    "provider": null,
+    "route": "gpt-6-astra@codex"
+  },
+  "stakes": "high",
+  "task": "plan"
+}

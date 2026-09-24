@@ -313,10 +313,12 @@ export const dispatch = async (
     return { kind: "connection-status" };
   }
   if (mapped.kind === "artifact-publish") {
-    const { publishArtifact, readPublicationRequest } = await import("./artifact-publish.js");
+    const { publishArtifact, readPublicationRequest, withUnmanagedMarker } = await import(
+      "./artifact-publish.js"
+    );
     const claudeSession = await commandClaudeSession(deps);
     const result = await publishArtifact(
-      await readPublicationRequest(mapped.request),
+      withUnmanagedMarker(await readPublicationRequest(mapped.request), mapped.allowUnmanaged),
       deps.rootDir,
       deps.nativeAuthority,
       claudeSession
@@ -334,9 +336,13 @@ export const dispatch = async (
   }
   if (mapped.kind === "handoff") {
     const { runHandoff } = await import("./handoff.js");
-    const { parseHandoffRequest, readHandoffRequest } = await import("./handoff-request.js");
+    const { parseHandoffRequest, readHandoffRequest, withUnmanagedMarker } = await import(
+      "./handoff-request.js"
+    );
     const result = await runHandoff(
-      parseHandoffRequest(await readHandoffRequest(mapped.request)),
+      parseHandoffRequest(
+        withUnmanagedMarker(await readHandoffRequest(mapped.request), mapped.allowUnmanaged),
+      ),
       deps.rootDir,
     );
     (deps.onOutput ?? console.log)(
