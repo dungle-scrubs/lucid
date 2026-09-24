@@ -14,6 +14,7 @@
  */
 
 import { version } from "../../package.json";
+import { HubError } from "../protocol/hub-errors.js";
 import { runCli } from "./dispatch.js";
 import { requestNaming } from "./naming.js";
 
@@ -36,6 +37,12 @@ const run = async (): Promise<void> => {
 };
 
 run().catch((e) => {
-  console.error(e instanceof Error ? e.message : String(e));
+  // Machine callers match on code without parsing prose: with --json,
+  // a HubError serializes as code plus message on stderr with exit 1.
+  if (e instanceof HubError && process.argv.includes("--json")) {
+    console.error(JSON.stringify({ code: e.code, message: e.message }));
+  } else {
+    console.error(e instanceof Error ? e.message : String(e));
+  }
   process.exit(1);
 });

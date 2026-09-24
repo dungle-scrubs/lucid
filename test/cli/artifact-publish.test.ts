@@ -21,7 +21,8 @@ test("publication remains readable and retries the same record when connection n
       JSON.stringify({
         artifact: {
           artifactId: "flow",
-          bytes: "<h1>Continuity</h1>",
+          bytes:
+            '<html><head><meta name="lucid-theme" content="adaptive"></head><body><h1>Continuity</h1></body></html>',
           contentType: "text/html",
           version: 1,
         },
@@ -52,7 +53,7 @@ test("publication remains readable and retries the same record when connection n
     expect(catalog.list().identities.size).toBe(1);
     const host = openWriter(catalog.dirFor(first.conversationId));
     try {
-      expect(host.readArtifact("flow", 1)?.bytes).toBe("<h1>Continuity</h1>");
+      expect(host.readArtifact("flow", 1)?.bytes).toContain("<h1>Continuity</h1>");
       expect(host.artifactHeads().get("flow")).toBe(1);
     } finally {
       host.close();
@@ -84,7 +85,8 @@ test("publication binds verified registration and detects an open native session
       {
         artifact: {
           artifactId: "flow",
-          bytes: "<h1>Bound</h1>",
+          bytes:
+            '<html><head><meta name="lucid-theme" content="adaptive"></head><body><h1>Bound</h1></body></html>',
           contentType: "text/html",
           version: 1,
         },
@@ -110,7 +112,7 @@ test("publication binds verified registration and detects an open native session
     const host = openWriter(conversations(root).dirFor(result.conversationId));
     try {
       expect(host.state().connection?.binding.nativeSessionId).toBe("native-author");
-      expect(host.readArtifact("flow", 1)?.bytes).toBe("<h1>Bound</h1>");
+      expect(host.readArtifact("flow", 1)?.bytes).toContain("<h1>Bound</h1>");
     } finally {
       host.close();
     }
@@ -141,7 +143,8 @@ test("a different artifact working folder refuses connection while preserving pu
       {
         artifact: {
           artifactId: "flow",
-          bytes: "<h1>Keep this</h1>",
+          bytes:
+            '<html><head><meta name="lucid-theme" content="adaptive"></head><body><h1>Keep this</h1></body></html>',
           contentType: "text/html",
           version: 1,
         },
@@ -164,7 +167,7 @@ test("a different artifact working folder refuses connection while preserving pu
     const host = openWriter(conversations(root).dirFor(result.conversationId));
     try {
       expect(host.state().connection).toBeNull();
-      expect(host.readArtifact("flow", 1)?.bytes).toBe("<h1>Keep this</h1>");
+      expect(host.readArtifact("flow", 1)?.bytes).toContain("<h1>Keep this</h1>");
     } finally {
       host.close();
     }
@@ -223,7 +226,8 @@ test("unverified native ownership remains unknown in the publication result", as
       {
         artifact: {
           artifactId: "flow",
-          bytes: "<h1>Keep this</h1>",
+          bytes:
+            '<html><head><meta name="lucid-theme" content="adaptive"></head><body><h1>Keep this</h1></body></html>',
           contentType: "text/html",
           version: 1,
         },
@@ -254,7 +258,8 @@ test("failed native publication holds saved feedback and retains its cause after
       {
         artifact: {
           artifactId: "flow",
-          bytes: "<h1>Keep feedback here</h1>",
+          bytes:
+            '<html><head><meta name="lucid-theme" content="adaptive"></head><body><h1>Keep feedback here</h1></body></html>',
           contentType: "text/html",
           version: 1,
         },
@@ -287,7 +292,7 @@ test("failed native publication holds saved feedback and retains its cause after
     try {
       expect(managedCandidates(dir, reopened.state())).toEqual([]);
       expect(reopened.state().inputs.map((input) => input.id)).toEqual(["saved-feedback"]);
-      expect(reopened.readArtifact("flow", 1)?.bytes).toBe("<h1>Keep feedback here</h1>");
+      expect(reopened.readArtifact("flow", 1)?.bytes).toContain("<h1>Keep feedback here</h1>");
       expect(readConnection(dir)).toMatchObject({
         actions: ["setup-instructions"],
         nativeConnectionRequired: true,
@@ -328,7 +333,8 @@ test("failure to persist diagnostics preserves the successful publication result
       {
         artifact: {
           artifactId: "flow",
-          bytes: "<h1>Saved before fault</h1>",
+          bytes:
+            '<html><head><meta name="lucid-theme" content="adaptive"></head><body><h1>Saved before fault</h1></body></html>',
           contentType: "text/html",
           version: 1,
         },
@@ -362,7 +368,7 @@ test("failure to persist diagnostics preserves the successful publication result
     faulted = false;
     const host = openWriter(paths.dir);
     try {
-      expect(host.readArtifact("flow", 1)?.bytes).toBe("<h1>Saved before fault</h1>");
+      expect(host.readArtifact("flow", 1)?.bytes).toContain("<h1>Saved before fault</h1>");
       expect(readConnection(paths.dir)).toMatchObject({
         nativeConnectionRequired: true,
         reason: "publication-connection-incomplete",
@@ -394,7 +400,8 @@ test("an interrupted native publication remains held and repair preserves saved 
     const request = {
       artifact: {
         artifactId: "flow",
-        bytes: "<h1>Recovered draft</h1>",
+        bytes:
+          '<html><head><meta name="lucid-theme" content="adaptive"></head><body><h1>Recovered draft</h1></body></html>',
         contentType: "text/html",
         version: 1,
       },
@@ -413,7 +420,14 @@ test("an interrupted native publication remains held and repair preserves saved 
     ).toEqual(first);
     await expect(
       publishArtifact(
-        { ...request, artifact: { ...request.artifact, bytes: "<h1>Conflicting version</h1>" } },
+        {
+          ...request,
+          artifact: {
+            ...request.artifact,
+            bytes:
+              '<html><head><meta name="lucid-theme" content="adaptive"></head><body><h1>Conflicting version</h1></body></html>',
+          },
+        },
         root,
       ),
     ).rejects.toMatchObject({ status: 409 });
@@ -426,5 +440,86 @@ test("an interrupted native publication remains held and repair preserves saved 
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("unmanaged bytes are refused E-HUB-09 with the fix named; nothing is stored", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-theme-refuse-"));
+  try {
+    const request = {
+      artifact: {
+        artifactId: "flow",
+        bytes: "<h1>Fixed light colors, no declaration</h1>",
+        contentType: "text/html",
+        version: 1,
+      },
+      creationId: "theme-refused",
+      serverUrl: "http://127.0.0.1:17454",
+      settings: {
+        effort: "high",
+        harness: "codex",
+        model: "test-model",
+        profile: "headless-turn",
+      },
+      workingDirectory: root,
+    };
+    const failure = await publishArtifact(request, root).catch((cause: unknown) => cause);
+    expect(failure).toMatchObject({ code: "E-HUB-09", status: 400 });
+    expect((failure as Error).message).toContain("lucid-theme");
+    // Nothing stored: no record shell, no receipt, no version.
+    expect(conversations(root).list().identities.size).toBe(0);
+    // The marked request publishes unchanged. A fresh creation ID keeps the
+    // earlier refusal's empty state out of the count below.
+    const marked = await publishArtifact(
+      { ...request, creationId: "theme-marked", theme: "unmanaged" },
+      root,
+    );
+    expect(marked.publication.status).toBe("published");
+    // An invalid marker is malformed input, refused before the guard.
+    await expect(publishArtifact({ ...request, theme: "adaptive" }, root)).rejects.toMatchObject({
+      code: "E-HUB-03",
+    });
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("managed bytes publish; malformed bytes refuse without throwing", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-theme-managed-"));
+  try {
+    const managed = {
+      artifact: {
+        artifactId: "flow",
+        bytes:
+          '<html><head><meta name="lucid-theme" content="adaptive"></head><body><h1>Both palettes</h1></body></html>',
+        contentType: "text/html",
+        version: 1,
+      },
+      creationId: "theme-managed",
+      serverUrl: "http://127.0.0.1:17454",
+      settings: {
+        effort: "high",
+        harness: "codex",
+        model: "test-model",
+        profile: "headless-turn",
+      },
+      workingDirectory: root,
+    };
+    const result = await publishArtifact(managed, root);
+    expect(result.publication.status).toBe("published");
+    // Hostile bytes read unmanaged and refuse E-HUB-09, never an
+    // unclassified throw.
+    await expect(
+      publishArtifact(
+        {
+          ...managed,
+          artifact: { ...managed.artifact, bytes: "not html at all {{{" },
+          creationId: "theme-hostile",
+        },
+        root,
+      ),
+    ).rejects.toMatchObject({ code: "E-HUB-09" });
+  } finally {
+    rmSync(root, { force: true, recursive: true });
   }
 });
