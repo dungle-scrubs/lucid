@@ -49,6 +49,15 @@ export async function runManagedWorker(
   const dir = conversations(root).dirFor(conversationId);
   const initial = viewConversation(dir);
   if (!workerCandidates(dir, initial.state, initial.artifactHeads).includes(inputId)) return;
+  // Reads that can throw (record metadata, user config) run before the
+  // open so a failure never leaves an attached source without cleanup.
+  let marked = false;
+  try {
+    marked = readRecordMetadata(dir).handoff === true;
+  } catch {
+    /* Missing metadata means no marker; the open still reports the cause. */
+  }
+  const configuredHoldMs = marked ? readUserConfig().holdMinutes * 60_000 : undefined;
   let running: Awaited<ReturnType<typeof openDrivenConversation>>;
   try {
     running = await openDrivenConversation({
@@ -73,12 +82,11 @@ export async function runManagedWorker(
   // keeps busy-reset semantics unchanged.
   // lastActivityAt seeds the clock so a restarted worker honors the elapsed
   // hold instead of restarting the full window.
-  const marked = readRecordMetadata(dir).handoff === true;
   const holdMode = deps.holdMs !== undefined || marked;
-  const holdMs =
-    deps.holdMs ?? (marked ? readUserConfig().holdMinutes * 60_000 : (deps.idleMs ?? 3000));
+  const holdMs = deps.holdMs ?? configuredHoldMs ?? deps.idleMs ?? 3000;
   const graceMs = deps.detachGraceMs ?? 30_000;
-  let idleSince = Math.max(now(), running.host.state().lastActivityAt);
+  const openedActivity = running.host.state().lastActivityAt;
+  let idleSince = openedActivity > 0 ? openedActivity : now();
   let activity = holdActivity(running.host.snapshot().transcript);
   let detachSince: number | undefined;
   let stopped = false;
@@ -125,13 +133,15 @@ export async function runManagedWorker(
           break;
         }
       } else if (holdMode) {
-        // Timeout mirrors explicit detach: yield at a boundary, abort past
-        // grace. An active turn at expiry starts the grace clock.
+        // Timeout enters the same boundary path as explicit detach: at the
+        // hold bound new input stops and the source leaves at the turn
+        // boundary; past the grace bound the worker aborts (shutdown).
+        if (detachSince === undefined && now() - idleSince >= holdMs) detachSince = now();
         if (!busy && now() - idleSince >= holdMs) {
           if (!running.detachYield()) running.abort();
           break;
         }
-        if (busy && now() - idleSince >= holdMs + graceMs) {
+        if (busy && detachSince !== undefined && now() - detachSince >= graceMs) {
           running.abort();
           break;
         }

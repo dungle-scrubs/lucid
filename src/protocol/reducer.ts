@@ -137,7 +137,9 @@ export interface ChannelState {
   readonly nativePublication: import("./connection.js").NativePublication | null;
   /** Explicit detach intent for a review hold. Set once by a hold-released
    * fact; a repeat with the same action id is idempotent, a reused id with
-   * different content is refused. Survives until the holder detaches. */
+   * different content is refused. Survives until the holder detaches, at
+   * which point the detach transition clears it; inputs accepted meanwhile
+   * stay queued behind it. */
   readonly holdRelease: { readonly actionId: string; readonly at: number } | null;
   /** Latest durable activity time: last accepted input or lossless event.
    * Heartbeats, acks, detach frames, and droppable deltas never move it. */
@@ -1004,9 +1006,19 @@ const reducePostAttach = (
       // The departing writer can never finish its turn - abort it now
       // rather than leaving a dangling turn no writer could ever end. Its
       // in-flight inputs die with it for the same reason: no terminal
-      // event of theirs can ever be folded (RFC-04 P2).
+      // event of theirs can ever be folded (RFC-04 P2). A completed
+      // detach also ends an explicit review-hold release: the next
+      // accepted input reopens the record.
       return accepted(
-        { ...state, seq, attachment: null, turn: null, inFlightInputs: 0, questionOpen: null },
+        {
+          ...state,
+          seq,
+          attachment: null,
+          turn: null,
+          inFlightInputs: 0,
+          questionOpen: null,
+          holdRelease: null,
+        },
         frame,
         now,
         state.turn === null ? NO_EFFECTS : [{ type: "abort-turn", turnId: state.turn.turnId }],
@@ -1121,15 +1133,17 @@ export const enqueueInput = (
     input.mode === "answer" && state.questionOpen !== null
       ? { ...state.questionOpen, answeringInputId: input.id }
       : state.questionOpen;
+  // A detached record stays detached until its holder leaves: inputs
+  // accepted while a release is recorded stay queued behind it. The
+  // worker's own detach frame clears the release when the source leaves.
+  const releaseHeld = state.holdRelease !== null && state.attachment !== null;
   return accepted(
     {
       ...state,
       seq: queued.seq,
       lastActivityAt: now,
       inputs,
-      // A later accepted input reopens a detached record: the hold
-      // release clears and the hold clock restarts.
-      holdRelease: null,
+      ...(releaseHeld ? {} : { holdRelease: null }),
       questionOpen,
       contextContent: recordContextContent(state.contextContent, "input", input.id, queued.seq),
     },

@@ -333,15 +333,25 @@ export function observeConnection(
       reason: null,
       state: "hold-detaching",
     };
-  if (!binding && state.holdRelease && !executorPresent)
+  if (!binding && state.holdRelease && executorPresent === false)
     return {
       message: "The handoff session detached. Saved feedback remains in this conversation.",
       reason: null,
       state: "closed",
     };
-  if (!binding && !state.holdRelease && executorPresent === false && observation.handoff === true)
+  if (
+    !binding &&
+    !state.holdRelease &&
+    executorPresent === false &&
+    observation.handoff === true &&
+    observation.holdMs !== undefined &&
+    state.lastActivityAt > 0 &&
+    state.epoch > 0 &&
+    now - state.lastActivityAt >= observation.holdMs
+  )
     return {
-      message: "The handoff hold lapsed. Saved feedback remains in this conversation.",
+      message:
+        "The handoff hold lapsed. Saved feedback remains in this conversation. Send a new input to resume.",
       reason: null,
       state: "closed",
     };

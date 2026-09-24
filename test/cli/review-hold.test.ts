@@ -118,13 +118,40 @@ test("detach writes holdRelease and the projection shows detaching then gone", a
   const { createConversationRecord } = await import("../../src/store/store.js");
   const root = realpathSync(mkdtempSync(join(tmpdir(), "lucid-detach-")));
   try {
-    const { paths } = createConversationRecord(root, "held", { workingDirectory: root });
+    const { paths, secret } = createConversationRecord(root, "held", {
+      workingDirectory: root,
+    });
     const dir = paths.dir;
     const { readRecordMetadata } = await import("../../src/store/record-identity.js");
     const { atomicSidecar } = await import("../../src/store/atomic-file.js");
     const { pathsForDir } = await import("../../src/store/errors.js");
     const meta = readRecordMetadata(dir);
     atomicSidecar(pathsForDir(dir).metaPath, { ...meta, handoff: true });
+    // A past attachment proves a hold existed: attach then detach so epoch
+    // advances past zero before the durable release is requested.
+    const { openConversation } = await import("../../src/store/conversation-host.js");
+    const { attach } = await import("../protocol/helpers.js");
+    const { encodeFrame } = await import("../../src/protocol/frames.js");
+    const seeder = openConversation(dir, {
+      now: () => 1_000,
+      presence: () => undefined,
+      executorLease: () => true,
+      onEffect: () => {},
+      onRecord: () => {},
+    });
+    try {
+      const attached = seeder.handleFrame(
+        encodeFrame(attach({ conversationId: "held", secret, profile: "headless-turn" })),
+      );
+      if (attached.verdict !== "accepted")
+        throw new Error(`seed attach refused: ${attached.verdict}`);
+      const left = seeder.handleFrame(
+        JSON.stringify({ kind: "detach", epoch: 1, reason: "shutdown" }),
+      );
+      if (left.verdict !== "accepted") throw new Error(`seed detach refused: ${left.verdict}`);
+    } finally {
+      seeder.close();
+    }
     const first = requestDetach(root, "held");
     expect(first.message).toContain("Detach requested");
     const repeat = requestDetach(root, "held");

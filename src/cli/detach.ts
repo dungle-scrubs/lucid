@@ -19,7 +19,7 @@ export function requestDetach(rootDir: string | undefined, conversationId: strin
   const host = openWriter(dir, {});
   try {
     const state = host.state();
-    if (state.nativeSessions !== undefined && Object.keys(state.nativeSessions).length > 0)
+    if (state.connection?.binding !== undefined || state.nativePublication !== null)
       throw new HubError(
         "This conversation is natively bound; there is no review hold to release.",
         "E-HUB-03",
@@ -33,7 +33,9 @@ export function requestDetach(rootDir: string | undefined, conversationId: strin
     }
     if (state.holdRelease !== null)
       return { conversationId, message: "The hold is already released." };
-    if (!handoff)
+    // The marker proves handoff origin; a past attachment proves a hold
+    // existed to release. A marked record no worker ever joined refuses.
+    if (!handoff || state.epoch === 0)
       throw new HubError(
         "This conversation never held a review hold; there is nothing to release.",
         "E-HUB-03",

@@ -20,6 +20,7 @@ export class CreationError extends Error {
 export interface CreationRequest {
   readonly settings?: Partial<Settings>;
   readonly workingDirectory: string | null;
+  readonly handoff?: boolean;
 }
 /** One root lock serializes cold receipt lookup and atomic publication across processes. */
 export async function createWithReceipt(
@@ -81,6 +82,7 @@ export async function createWithReceipt(
         workingDirectory: request.workingDirectory,
         creation: { id, request },
         preference: { v: 1, revision: 1, ...preference },
+        ...(request.handoff === true ? { handoff: true as const } : {}),
       });
     } catch (error) {
       if (error instanceof WorkingFolderError) throw error;

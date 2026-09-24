@@ -40,6 +40,8 @@ export interface CreateRecordOptions {
   readonly workingDirectory?: string | null;
   readonly preference?: import("./driver-preference.js").DriverPreference;
   readonly creation?: { readonly id: string; readonly request: unknown };
+  /** Stamped into meta.json with the record shell. Marks handoff origin. */
+  readonly handoff?: boolean;
 }
 
 const SECRET_BYTES = 32;
@@ -85,6 +87,7 @@ export const createConversationRecord = (
             }
           : {}),
         ...(options.creation ? { creation: options.creation } : {}),
+        ...(options.handoff === true ? { handoff: true } : {}),
       }),
       {
         mode: 0o600,

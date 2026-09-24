@@ -50,7 +50,7 @@ export async function runHandoff(
       const created = await createWithReceipt(
         records.rootDir,
         String(request.creationId),
-        { settings, workingDirectory: request.workingDirectory },
+        { settings, workingDirectory: request.workingDirectory, handoff: true },
         async () => settings,
         records.discoveryIndex,
       );
@@ -62,10 +62,11 @@ export async function runHandoff(
     }
   }
   const dir = commandRecordDir(records, id);
-  // Fresh handoff creations carry the marker the worker reads to engage
-  // the review hold. Retries and existing-record handoffs keep whatever
-  // marker (or none) the record already holds.
-  if (!isRetry)
+  // A retry that finds a record from before the marker existed heals it:
+  // the marker only labels handoff origin, which this command proves by
+  // running. Existing-record handoffs naming another record's ID keep
+  // whatever marker that record holds.
+  if (request.conversationId === undefined)
     withRecordLock(pathsForDir(dir), id, () => {
       const meta = readRecordMetadata(dir);
       if (meta.handoff !== true)
