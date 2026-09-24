@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runHandoff } from "../../src/cli/handoff.js";
@@ -17,7 +17,8 @@ const requestFile = (dir: string, overrides: Record<string, unknown> = {}) => {
     JSON.stringify({
       artifact: {
         artifactId: "walkthrough",
-        bytes: "<h1>Handoff</h1>",
+        bytes:
+          '<html><head><meta name="lucid-theme" content="adaptive"></head><body><h1>Handoff</h1></body></html>',
         contentType: "text/html",
         version: 1,
       },
@@ -50,7 +51,7 @@ test("handoff round trip: record, artifact, continuation, URL", async () => {
     expect(result.continuation.inputId).toBe("continue-1");
     const host = openWriter(conversations(records).dirFor(result.conversationId));
     try {
-      expect(host.readArtifact("walkthrough", 1)?.bytes).toBe("<h1>Handoff</h1>");
+      expect(host.readArtifact("walkthrough", 1)?.bytes).toContain("<h1>Handoff</h1>");
       const inputs = host.snapshot().transcript.inputs;
       expect(inputs.some((input) => input.id === "continue-1")).toBe(true);
       expect(
@@ -139,7 +140,7 @@ test("a completed handoff stays readable and eligible before attach", async () =
     const dir = conversations(records).dirFor(first.conversationId);
     const host = openWriter(dir);
     try {
-      expect(host.readArtifact("walkthrough", 1)?.bytes).toBe("<h1>Handoff</h1>");
+      expect(host.readArtifact("walkthrough", 1)?.bytes).toContain("<h1>Handoff</h1>");
       expect(managedCandidates(dir, host.state(), host.artifactHeads())).toContain("continue-1");
     } finally {
       host.close();
@@ -239,6 +240,39 @@ test("identical retry appends no second input", async () => {
     } finally {
       host.close();
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("unmanaged handoff is refused E-HUB-09; nothing is stored", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-handoff-theme-"));
+  try {
+    const records = join(root, "records");
+    const { parseHandoffRequest: parse, readHandoffRequest: read } = await import(
+      "../../src/cli/handoff-request.js"
+    );
+    const path = requestFile(root, { creationId: "handoff-unmanaged-1" });
+    const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    raw.artifact = {
+      ...(raw.artifact as Record<string, unknown>),
+      bytes: "<h1>Fixed light colors, no declaration</h1>",
+    };
+    writeFileSync(path, JSON.stringify(raw));
+    const failure = await runHandoff(parse(await read(path)), records).then(
+      () => null,
+      (cause: unknown) => cause,
+    );
+    expect(failure).toMatchObject({ code: "E-HUB-09", status: 400 });
+    expect((failure as Error).message).toContain("lucid-theme");
+    // Nothing stored: the records root was never created.
+    expect(existsSync(records)).toBe(false);
+    // The marked request proceeds unchanged.
+    raw.theme = "unmanaged";
+    raw.creationId = "handoff-marked-1";
+    writeFileSync(path, JSON.stringify(raw));
+    const marked = await runHandoff(parse(await read(path)), records);
+    expect(marked.publication.status).toBe("published");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
