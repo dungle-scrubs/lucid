@@ -1,8 +1,11 @@
+import { readUserConfig } from "../config/user-config.js";
+import { classOfEventKind } from "../protocol/events.js";
 import { appliedRecovery } from "../protocol/execution.js";
 import { HubError } from "../protocol/hub-errors.js";
 import { viewConversation } from "../store/conversation-host.js";
 import { LockError } from "../store/flock.js";
 import { workerCandidates } from "../store/managed-readiness.js";
+import { readRecordMetadata } from "../store/record-identity.js";
 import { requestBackgroundWorker } from "./background-worker.js";
 import { conversations } from "./record-addressing.js";
 import type { RuntimeDeps } from "./runtime.js";
@@ -17,6 +20,24 @@ export function requestManagedWorker(root: string, conversationId: string, input
 export interface ManagedWorkerDeps extends RuntimeDeps {
   readonly idleMs?: number;
   readonly tickMs?: number;
+  /** Review-hold length. Defaults to the configured hold or 30 minutes. */
+  readonly holdMs?: number;
+  /** Detach intent observed by the caller. When true, the hold ends at the turn boundary. */
+  readonly detachRequested?: () => boolean;
+  /** Abort grace after detach intent with an active turn. Defaults to 30 seconds. */
+  readonly detachGraceMs?: number;
+}
+
+/** Durable activity: accepted inputs plus lossless events. Heartbeats, acks,
+ * and detach frames never enter the transcript, so they cannot extend the hold. */
+export function holdActivity(
+  transcript: Pick<import("../store/log.js").Transcript, "events" | "inputs">,
+): number {
+  const live = transcript.inputs.filter((input) => input.status !== "cancelled").length;
+  const lossless = transcript.events.filter(
+    (row) => classOfEventKind((row.event as { kind?: unknown }).kind) === "lossless",
+  ).length;
+  return live + lossless;
 }
 
 export async function runManagedWorker(
@@ -28,6 +49,15 @@ export async function runManagedWorker(
   const dir = conversations(root).dirFor(conversationId);
   const initial = viewConversation(dir);
   if (!workerCandidates(dir, initial.state, initial.artifactHeads).includes(inputId)) return;
+  // Reads that can throw (record metadata, user config) run before the
+  // open so a failure never leaves an attached source without cleanup.
+  let marked = false;
+  try {
+    marked = readRecordMetadata(dir).handoff === true;
+  } catch {
+    /* Missing metadata means no marker; the open still reports the cause. */
+  }
+  const configuredHoldMs = marked ? readUserConfig().holdMinutes * 60_000 : undefined;
   let running: Awaited<ReturnType<typeof openDrivenConversation>>;
   try {
     running = await openDrivenConversation({
@@ -47,7 +77,18 @@ export async function runManagedWorker(
   }
   if (running.kind !== "running") return;
   const now = deps.now ?? Date.now;
-  let idleSince = now();
+  // Hold mode engages two ways: an explicit holdMs dep, or a handoff-marked
+  // record with the configured window. Otherwise the legacy idleMs path
+  // keeps busy-reset semantics unchanged.
+  // lastActivityAt seeds the clock so a restarted worker honors the elapsed
+  // hold instead of restarting the full window.
+  const holdMode = deps.holdMs !== undefined || marked;
+  const holdMs = deps.holdMs ?? configuredHoldMs ?? deps.idleMs ?? 3000;
+  const graceMs = deps.detachGraceMs ?? 30_000;
+  const openedActivity = running.host.state().lastActivityAt;
+  let idleSince = openedActivity > 0 ? openedActivity : now();
+  let activity = holdActivity(running.host.snapshot().transcript);
+  let detachSince: number | undefined;
   let stopped = false;
   void running.done.then(
     () => {
@@ -69,8 +110,43 @@ export async function runManagedWorker(
         })
       )
         break;
-      if (busy) idleSince = now();
-      else if (now() - idleSince >= (deps.idleMs ?? 3000)) break;
+      const seen = holdMode ? holdActivity(running.host.snapshot().transcript) : activity;
+      if (seen > activity) {
+        activity = seen;
+        idleSince = now();
+      }
+      // Durable detach intent outranks the local flag: a `lucid detach`
+      // in another process lands here through the log.
+      const released = running.host.state().holdRelease !== null;
+      if ((released || deps.detachRequested?.() === true) && detachSince === undefined)
+        detachSince = now();
+      if (detachSince !== undefined) {
+        // Explicit detach: new work stops at once; the source leaves with
+        // yield at the turn boundary, or by abort past the grace bound
+        // (shutdown, not yield).
+        if (!busy) {
+          if (!running.detachYield()) running.abort();
+          break;
+        }
+        if (now() - detachSince >= graceMs) {
+          running.abort();
+          break;
+        }
+      } else if (holdMode) {
+        // Timeout enters the same boundary path as explicit detach: at the
+        // hold bound new input stops and the source leaves at the turn
+        // boundary; past the grace bound the worker aborts (shutdown).
+        if (detachSince === undefined && now() - idleSince >= holdMs) detachSince = now();
+        if (!busy && now() - idleSince >= holdMs) {
+          if (!running.detachYield()) running.abort();
+          break;
+        }
+        if (busy && detachSince !== undefined && now() - detachSince >= graceMs) {
+          running.abort();
+          break;
+        }
+      } else if (busy) idleSince = now();
+      else if (now() - idleSince >= holdMs) break;
       await Bun.sleep(deps.tickMs ?? 100);
     }
   } finally {

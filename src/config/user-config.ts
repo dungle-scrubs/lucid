@@ -11,6 +11,8 @@ export interface ConfigLocation {
 }
 export interface UserConfig {
   readonly defaults: Settings;
+  /** Review-hold length in minutes. Default 30, cap 480. */
+  readonly holdMinutes: number;
   readonly path: string;
   readonly recordsDir: string;
 }
@@ -23,6 +25,8 @@ const BUILT_INS: Settings = {
   model: "opus",
   profile: "headless-turn",
 };
+export const HOLD_MINUTES_DEFAULT = 30;
+export const HOLD_MINUTES_MAX = 480;
 
 export function readUserConfig(location: ConfigLocation = {}): UserConfig {
   const home = location.home ?? homedir();
@@ -33,7 +37,12 @@ export function readUserConfig(location: ConfigLocation = {}): UserConfig {
     text = readFileSync(path, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT")
-      return { defaults: { ...BUILT_INS }, path, recordsDir: join(home, ".lucid/records") };
+      return {
+        defaults: { ...BUILT_INS },
+        holdMinutes: HOLD_MINUTES_DEFAULT,
+        path,
+        recordsDir: join(home, ".lucid/records"),
+      };
     throw new ConfigurationError(`Cannot read ${path}. Check its permissions.`);
   }
   let config: Record<string, unknown>;
@@ -47,7 +56,8 @@ export function readUserConfig(location: ConfigLocation = {}): UserConfig {
   };
   if (config.version !== 1) fail("version must be 1");
   for (const key of Object.keys(config))
-    if (!["version", "records_dir", "defaults"].includes(key)) fail(`unknown field ${key}`);
+    if (!["version", "records_dir", "defaults", "hold_minutes"].includes(key))
+      fail(`unknown field ${key}`);
   const defaults = config.defaults ?? {};
   if (typeof defaults !== "object" || Array.isArray(defaults)) fail("defaults must be a table");
   for (const [key, value] of Object.entries(defaults)) {
@@ -65,7 +75,16 @@ export function readUserConfig(location: ConfigLocation = {}): UserConfig {
       : rawRoot;
   if (typeof recordsDir !== "string" || !isAbsolute(recordsDir))
     return fail("records_dir must be an absolute path or begin with ~/");
-  return { defaults: selected, path, recordsDir };
+  const rawHold: unknown = config.hold_minutes ?? HOLD_MINUTES_DEFAULT;
+  if (
+    typeof rawHold !== "number" ||
+    !Number.isSafeInteger(rawHold) ||
+    (rawHold as number) < 1 ||
+    (rawHold as number) > HOLD_MINUTES_MAX
+  )
+    fail("hold_minutes must be an integer from 1 to 480");
+  const holdMinutes = rawHold as number;
+  return { defaults: selected, holdMinutes, path, recordsDir };
 }
 export function resolveRecordRoot(
   explicit: string | undefined,

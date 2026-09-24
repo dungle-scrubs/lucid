@@ -1,9 +1,12 @@
 import { HubError } from "../protocol/hub-errors.js";
+import { atomicSidecar } from "../store/atomic-file.js";
 import { openWriter } from "../store/conversation-host.js";
 import { createWithReceipt } from "../store/creation.js";
+import { pathsForDir } from "../store/errors.js";
 import { LockError } from "../store/flock.js";
 import { acquirePresence } from "../store/presence.js";
 import { WorkingFolderError } from "../store/project-directory.js";
+import { readRecordMetadata, withRecordLock } from "../store/record-identity.js";
 import type { HandoffRequest } from "./handoff-request.js";
 import type { Conversations } from "./record-addressing.js";
 import { commandRecordDir, conversations } from "./record-addressing.js";
@@ -47,7 +50,7 @@ export async function runHandoff(
       const created = await createWithReceipt(
         records.rootDir,
         String(request.creationId),
-        { settings, workingDirectory: request.workingDirectory },
+        { settings, workingDirectory: request.workingDirectory, handoff: true },
         async () => settings,
         records.discoveryIndex,
       );
@@ -59,6 +62,16 @@ export async function runHandoff(
     }
   }
   const dir = commandRecordDir(records, id);
+  // A retry that finds a record from before the marker existed heals it:
+  // the marker only labels handoff origin, which this command proves by
+  // running. Existing-record handoffs naming another record's ID keep
+  // whatever marker that record holds.
+  if (request.conversationId === undefined)
+    withRecordLock(pathsForDir(dir), id, () => {
+      const meta = readRecordMetadata(dir);
+      if (meta.handoff !== true)
+        atomicSidecar(pathsForDir(dir).metaPath, { ...meta, handoff: true });
+    });
   // Presence is the race guard across the appends below. Both acquisitions
   // sit inside the try so every throw path releases exactly what it holds:
   // a failed acquire holds nothing, a failed open releases presence.

@@ -948,6 +948,9 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
       return { fact, result: decide() };
     }
     const cancellation = fact?.kind === "input-cancelled";
+    // Hold release rides the same local trust as cancellation: the filesystem
+    // boundary authorizes it, not a native binding. Handoff records have none.
+    const holdRelease = fact?.kind === "hold-released";
     const disabling = fact?.kind === "listener-disabled";
     const registration = fact ? connectionRegistration(state.connection, fact) : undefined;
     const needsExecutor =
@@ -963,12 +966,13 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
       (!requireLease || deps.executorLease());
     const settlement =
       cancellation ||
+      holdRelease ||
       disabling ||
       fact?.kind === "receipt-confirmed" ||
       fact?.kind === "offer-outcome";
     let authority: NativeBinding | null = null;
-    let verified = cancellation || helperDisabling;
-    if (!cancellation && !helperDisabling) {
+    let verified = cancellation || holdRelease || helperDisabling;
+    if (!cancellation && !holdRelease && !helperDisabling) {
       try {
         authority = parseNativeBinding(deps.connectionAuthority?.());
         verified =

@@ -112,6 +112,7 @@ export type DispatchResult =
   | { readonly kind: "connection-status" }
   | { readonly kind: "artifact-publish" }
   | { readonly kind: "handoff" }
+  | { readonly kind: "detach" }
   | { readonly kind: "hcn-supervisor" }
   | { readonly kind: "context" }
   | { readonly kind: "name-titles" }
@@ -303,8 +304,11 @@ export const dispatch = async (
   }
   if (mapped.kind === "connection-status") {
     const { readConnection } = await import("../store/connection-view.js");
+    const { readUserConfig } = await import("../config/user-config.js");
     const records = (deps.conversationsFactory ?? conversations)(deps.rootDir);
-    const result = readConnection(commandRecordDir(records, mapped.conversationId));
+    const result = readConnection(commandRecordDir(records, mapped.conversationId), {
+      holdMs: readUserConfig().holdMinutes * 60_000,
+    });
     (deps.onOutput ?? console.log)(mapped.json ? JSON.stringify(result) : result.message);
     return { kind: "connection-status" };
   }
@@ -346,6 +350,12 @@ export const dispatch = async (
           ].join("\n"),
     );
     return { kind: "handoff" };
+  }
+  if (mapped.kind === "detach") {
+    const { requestDetach } = await import("./detach.js");
+    const result = requestDetach(deps.rootDir, mapped.conversationId);
+    (deps.onOutput ?? console.log)(mapped.json ? JSON.stringify(result) : result.message);
+    return { kind: "detach" };
   }
   if (mapped.kind === "context") {
     const { readOfferedContext } = await import("../store/context-offer.js");
