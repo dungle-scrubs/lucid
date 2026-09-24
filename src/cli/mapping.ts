@@ -416,7 +416,7 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
       return {
         kind: "help",
         message:
-          "usage: lucid <send|watch|run|chat|serve|reconnect|connection|artifact|announce|inject|context> [...]",
+          "usage: lucid <send|watch|run|chat|serve|reconnect|connection|artifact|announce|inject|context|handoff|detach> [...]",
       };
     default:
       return { kind: "help", message: `unknown command: ${cmd}` };

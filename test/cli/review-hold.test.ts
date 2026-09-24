@@ -120,6 +120,11 @@ test("detach writes holdRelease and the projection shows detaching then gone", a
   try {
     const { paths } = createConversationRecord(root, "held", { workingDirectory: root });
     const dir = paths.dir;
+    const { readRecordMetadata } = await import("../../src/store/record-identity.js");
+    const { atomicSidecar } = await import("../../src/store/atomic-file.js");
+    const { pathsForDir } = await import("../../src/store/errors.js");
+    const meta = readRecordMetadata(dir);
+    atomicSidecar(pathsForDir(dir).metaPath, { ...meta, handoff: true });
     const first = requestDetach(root, "held");
     expect(first.message).toContain("Detach requested");
     const repeat = requestDetach(root, "held");
@@ -155,6 +160,11 @@ test("hold-connected shows the countdown while presence is held", async () => {
   try {
     const { paths } = createConversationRecord(root, "held", { workingDirectory: root });
     const dir = paths.dir;
+    const { readRecordMetadata } = await import("../../src/store/record-identity.js");
+    const { atomicSidecar } = await import("../../src/store/atomic-file.js");
+    const { pathsForDir } = await import("../../src/store/errors.js");
+    const meta = readRecordMetadata(dir);
+    atomicSidecar(pathsForDir(dir).metaPath, { ...meta, handoff: true });
     const host = openWriter(dir);
     try {
       host.acceptInput({ id: "task-1", text: "Review.", mode: "queue" }, { managed: true });
@@ -181,6 +191,11 @@ test("hold-released repeats idempotently and conflicts on reuse", async () => {
   try {
     const { paths } = createConversationRecord(root, "held", { workingDirectory: root });
     const dir = paths.dir;
+    const { readRecordMetadata } = await import("../../src/store/record-identity.js");
+    const { atomicSidecar } = await import("../../src/store/atomic-file.js");
+    const { pathsForDir } = await import("../../src/store/errors.js");
+    const meta = readRecordMetadata(dir);
+    atomicSidecar(pathsForDir(dir).metaPath, { ...meta, handoff: true });
     const host = openWriter(dir);
     try {
       const actionId = crypto.randomUUID();
@@ -195,4 +210,68 @@ test("hold-released repeats idempotently and conflicts on reuse", async () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("detach refuses on a record that never held a hold", async () => {
+  const { requestDetach } = await import("../../src/cli/detach.js");
+  const { createConversationRecord } = await import("../../src/store/store.js");
+  const { HubError } = await import("../../src/protocol/hub-errors.js");
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "lucid-detachref-")));
+  try {
+    createConversationRecord(root, "plain", { workingDirectory: root });
+    let issue: unknown;
+    try {
+      requestDetach(root, "plain");
+    } catch (cause) {
+      issue = cause;
+    }
+    expect(issue).toBeInstanceOf(HubError);
+    expect((issue as { message: string }).message).toContain("never held");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a plain record with held presence is not labeled a handoff hold", async () => {
+  const { readConnection } = await import("../../src/store/connection-view.js");
+  const { acquirePresence } = await import("../../src/store/presence.js");
+  const { createConversationRecord } = await import("../../src/store/store.js");
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "lucid-plainhold-")));
+  try {
+    const { paths } = createConversationRecord(root, "plain", { workingDirectory: root });
+    const presence = acquirePresence(paths.dir, "plain");
+    try {
+      const status = readConnection(paths.dir, { holdMs: 30 * 60_000 });
+      expect(status.state).not.toBe("hold-connected");
+    } finally {
+      presence.release();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("droppable events never extend the hold clock", () => {
+  const transcript = {
+    inputs: [{ status: "queued" }, { status: "cancelled" }],
+    events: [
+      { event: { kind: "token" } },
+      { event: { kind: "progress" } },
+      { event: { kind: "context" } },
+      { event: { kind: "message" } },
+      { event: { kind: "tool" } },
+    ],
+  };
+  // One live input plus the two lossless events; the droppable kinds
+  // (token, progress, context) and the cancelled input do not count.
+  expect(holdActivity(transcript as never)).toBe(3);
+});
+
+test("detach maps through the subcommand seam", async () => {
+  const { mapSubcommand } = await import("../../src/cli/mapping.js");
+  const mapped = mapSubcommand(["detach", "abc123"]);
+  expect(mapped.kind).toBe("detach");
+  if (mapped.kind === "detach") expect(mapped.conversationId).toBe("abc123");
+  const help = mapSubcommand(["detach"]);
+  expect(help.kind).toBe("help");
 });

@@ -1,9 +1,11 @@
+import { readUserConfig } from "../config/user-config.js";
 import { classOfEventKind } from "../protocol/events.js";
 import { appliedRecovery } from "../protocol/execution.js";
 import { HubError } from "../protocol/hub-errors.js";
 import { viewConversation } from "../store/conversation-host.js";
 import { LockError } from "../store/flock.js";
 import { workerCandidates } from "../store/managed-readiness.js";
+import { readRecordMetadata } from "../store/record-identity.js";
 import { requestBackgroundWorker } from "./background-worker.js";
 import { conversations } from "./record-addressing.js";
 import type { RuntimeDeps } from "./runtime.js";
@@ -66,13 +68,17 @@ export async function runManagedWorker(
   }
   if (running.kind !== "running") return;
   const now = deps.now ?? Date.now;
-  // Hold mode (explicit holdMs) tracks durable log appends, not busy-state:
-  // preparation counting as busy inside the source must not extend a review
-  // hold. The legacy idleMs path keeps busy-reset semantics unchanged.
-  const holdMode = deps.holdMs !== undefined;
-  const holdMs = deps.holdMs ?? deps.idleMs ?? 3000;
+  // Hold mode engages two ways: an explicit holdMs dep, or a handoff-marked
+  // record with the configured window. Otherwise the legacy idleMs path
+  // keeps busy-reset semantics unchanged.
+  // lastActivityAt seeds the clock so a restarted worker honors the elapsed
+  // hold instead of restarting the full window.
+  const marked = readRecordMetadata(dir).handoff === true;
+  const holdMode = deps.holdMs !== undefined || marked;
+  const holdMs =
+    deps.holdMs ?? (marked ? readUserConfig().holdMinutes * 60_000 : (deps.idleMs ?? 3000));
   const graceMs = deps.detachGraceMs ?? 30_000;
-  let idleSince = now();
+  let idleSince = Math.max(now(), running.host.state().lastActivityAt);
   let activity = holdActivity(running.host.snapshot().transcript);
   let detachSince: number | undefined;
   let stopped = false;
@@ -96,8 +102,8 @@ export async function runManagedWorker(
         })
       )
         break;
-      const seen = holdActivity(running.host.snapshot().transcript);
-      if (seen !== activity) {
+      const seen = holdMode ? holdActivity(running.host.snapshot().transcript) : activity;
+      if (seen > activity) {
         activity = seen;
         idleSince = now();
       }
@@ -107,15 +113,28 @@ export async function runManagedWorker(
       if ((released || deps.detachRequested?.() === true) && detachSince === undefined)
         detachSince = now();
       if (detachSince !== undefined) {
-        // Explicit detach: new work stops at once; the source leaves at the
-        // turn boundary, or by abort past the grace bound (shutdown, not yield).
-        if (!busy) break;
+        // Explicit detach: new work stops at once; the source leaves with
+        // yield at the turn boundary, or by abort past the grace bound
+        // (shutdown, not yield).
+        if (!busy) {
+          if (!running.detachYield()) running.abort();
+          break;
+        }
         if (now() - detachSince >= graceMs) {
           running.abort();
           break;
         }
       } else if (holdMode) {
-        if (!busy && now() - idleSince >= holdMs) break;
+        // Timeout mirrors explicit detach: yield at a boundary, abort past
+        // grace. An active turn at expiry starts the grace clock.
+        if (!busy && now() - idleSince >= holdMs) {
+          if (!running.detachYield()) running.abort();
+          break;
+        }
+        if (busy && now() - idleSince >= holdMs + graceMs) {
+          running.abort();
+          break;
+        }
       } else if (busy) idleSince = now();
       else if (now() - idleSince >= holdMs) break;
       await Bun.sleep(deps.tickMs ?? 100);

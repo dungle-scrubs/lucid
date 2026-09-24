@@ -60,6 +60,12 @@ test("handoff round trip: record, artifact, continuation, URL", async () => {
           host.artifactHeads(),
         ),
       ).toContain("continue-1");
+      // The record carries the handoff marker the worker reads to engage
+      // the review hold.
+      const { readRecordMetadata } = await import("../../src/store/record-identity.js");
+      expect(readRecordMetadata(conversations(records).dirFor(result.conversationId)).handoff).toBe(
+        true,
+      );
     } finally {
       host.close();
     }

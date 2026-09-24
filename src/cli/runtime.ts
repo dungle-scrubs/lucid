@@ -128,6 +128,10 @@ export interface RunningConversation {
   readonly done: Promise<void>;
   /** Abort the conversation: detaches the source and releases presence once. */
   abort(): void;
+  /** Detach with reason yield at the turn boundary. Returns false when the
+   * frame was refused (for example, a turn is running), in which case the
+   * caller falls back to abort. */
+  detachYield(): boolean;
   /** Whether the presence lock is still held. */
   readonly presenceHeld: () => boolean;
 }
@@ -826,6 +830,16 @@ export const openDrivenConversation = async (
     profile,
     done,
     abort,
+    detachYield: () => {
+      try {
+        const result = host.handleFrame(
+          JSON.stringify({ kind: "detach", epoch: host.state().epoch, reason: "yield" }),
+        );
+        return result.verdict === "accepted";
+      } catch {
+        return false;
+      }
+    },
     presenceHeld: () => presence.held() && !released,
   };
 };

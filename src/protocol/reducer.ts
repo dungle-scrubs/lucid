@@ -1127,6 +1127,9 @@ export const enqueueInput = (
       seq: queued.seq,
       lastActivityAt: now,
       inputs,
+      // A later accepted input reopens a detached record: the hold
+      // release it answers clears, and the hold clock restarts (F6).
+      holdRelease: null,
       questionOpen,
       contextContent: recordContextContent(state.contextContent, "input", input.id, queued.seq),
     },

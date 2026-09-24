@@ -28,6 +28,7 @@ import { viewConversation } from "./conversation-host.js";
 import { preferenceState } from "./driver-preference.js";
 import { nativeInputViews } from "./native-input-view.js";
 import { presenceHeld } from "./presence.js";
+import { readRecordMetadata } from "./record-identity.js";
 
 const OWNER_CONFLICT = connectionFailure(
   "native-identity-conflict",
@@ -56,6 +57,8 @@ export function observeConnection(
     readonly ownerPresence: (owner: ProcessOwner) => boolean | undefined;
     /** Review-hold window for the countdown. Absent means no countdown. */
     readonly holdMs?: number;
+    /** True when the record was created by handoff. Drives hold labeling. */
+    readonly handoff?: boolean;
   },
 ): ConnectionStatus {
   const { executorPresent, now, ownerPresence: probe } = observation;
@@ -324,7 +327,7 @@ export function observeConnection(
   // Review hold (RFC 32): a bindingless record whose holder is present.
   // holdRelease set + presence held = detaching; set + released = gone
   // (the existing closed branch below); unset + presence held = connected.
-  if (!binding && state.holdRelease && executorPresent)
+  if (!binding && state.holdRelease && executorPresent === true)
     return {
       message: "Detach requested. The source leaves at the turn boundary; new inputs are held.",
       reason: null,
@@ -336,7 +339,13 @@ export function observeConnection(
       reason: null,
       state: "closed",
     };
-  if (!binding && !state.holdRelease && executorPresent === true) {
+  if (!binding && !state.holdRelease && executorPresent === false && observation.handoff === true)
+    return {
+      message: "The handoff hold lapsed. Saved feedback remains in this conversation.",
+      reason: null,
+      state: "closed",
+    };
+  if (!binding && !state.holdRelease && executorPresent === true && observation.handoff === true) {
     const remaining =
       observation.holdMs !== undefined && state.lastActivityAt > 0
         ? Math.max(0, observation.holdMs - (now - state.lastActivityAt))
@@ -392,6 +401,12 @@ export function readConnection(
   } = {},
 ): ConnectionProjection {
   const { state, transcript } = viewConversation(dir);
+  let handoff = false;
+  try {
+    handoff = readRecordMetadata(dir).handoff === true;
+  } catch {
+    /* Unreadable metadata means no marker. */
+  }
   const binding = state.connection?.binding;
   const observedAt = (deps.now ?? Date.now)();
   const status = observeConnection(state, {
@@ -402,6 +417,7 @@ export function readConnection(
     now: observedAt,
     ownerPresence: deps.ownerPresence ?? ownerPresence,
     ...(deps.holdMs === undefined ? {} : { holdMs: deps.holdMs }),
+    ...(handoff ? { handoff: true as const } : {}),
   });
   return {
     ...status,
