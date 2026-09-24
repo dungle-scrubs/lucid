@@ -54,6 +54,8 @@ export function observeConnection(
     readonly executorPresent: boolean | undefined;
     readonly now: number;
     readonly ownerPresence: (owner: ProcessOwner) => boolean | undefined;
+    /** Review-hold window for the countdown. Absent means no countdown. */
+    readonly holdMs?: number;
   },
 ): ConnectionStatus {
   const { executorPresent, now, ownerPresence: probe } = observation;
@@ -319,6 +321,35 @@ export function observeConnection(
         state: "listening",
       };
   }
+  // Review hold (RFC 32): a bindingless record whose holder is present.
+  // holdRelease set + presence held = detaching; set + released = gone
+  // (the existing closed branch below); unset + presence held = connected.
+  if (!binding && state.holdRelease && executorPresent)
+    return {
+      message: "Detach requested. The source leaves at the turn boundary; new inputs are held.",
+      reason: null,
+      state: "hold-detaching",
+    };
+  if (!binding && state.holdRelease && !executorPresent)
+    return {
+      message: "The handoff session detached. Saved feedback remains in this conversation.",
+      reason: null,
+      state: "closed",
+    };
+  if (!binding && !state.holdRelease && executorPresent === true) {
+    const remaining =
+      observation.holdMs !== undefined && state.lastActivityAt > 0
+        ? Math.max(0, observation.holdMs - (now - state.lastActivityAt))
+        : undefined;
+    return {
+      message:
+        remaining !== undefined
+          ? `Handoff session connected and holding. ${Math.ceil(remaining / 60_000)} minutes left.`
+          : "Handoff session connected and holding.",
+      reason: null,
+      state: "hold-connected",
+    };
+  }
   return !binding
     ? {
         message:
@@ -357,6 +388,7 @@ export function readConnection(
   deps: {
     readonly now?: () => number;
     readonly ownerPresence?: (owner: ProcessOwner) => boolean | undefined;
+    readonly holdMs?: number;
   } = {},
 ): ConnectionProjection {
   const { state, transcript } = viewConversation(dir);
@@ -364,11 +396,12 @@ export function readConnection(
   const observedAt = (deps.now ?? Date.now)();
   const status = observeConnection(state, {
     executorPresent:
-      currentListener(state.connection) || hasUnsettledLaunch(state.connection)
+      currentListener(state.connection) || hasUnsettledLaunch(state.connection) || !binding
         ? presenceHeld(dir)
         : false,
     now: observedAt,
     ownerPresence: deps.ownerPresence ?? ownerPresence,
+    ...(deps.holdMs === undefined ? {} : { holdMs: deps.holdMs }),
   });
   return {
     ...status,

@@ -18,6 +18,8 @@ export interface ConnectionStatus {
     | "cleanup"
     | "reconnect-waiting"
     | "resume-failed"
+    | "hold-connected"
+    | "hold-detaching"
     | "closed";
 }
 

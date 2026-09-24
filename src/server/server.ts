@@ -1,4 +1,4 @@
-import { ConfigurationError } from "../config/user-config.js";
+import { ConfigurationError, readUserConfig } from "../config/user-config.js";
 import { comparisonMetadata } from "../protocol/comparison-note.js";
 import { requiresNativeConnection } from "../protocol/connection.js";
 import {
@@ -568,7 +568,14 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
         if (connection && req.method === "GET") {
           const id = decodeURIComponent(connection[1] ?? "");
           if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
-          return json(connectionControls(readConnection(dirForRequest(id)), records.rootDir));
+          return json(
+            connectionControls(
+              readConnection(dirForRequest(id), {
+                holdMs: readUserConfig(opts.configLocation).holdMinutes * 60_000,
+              }),
+              records.rootDir,
+            ),
+          );
         }
 
         const read = path.match(/^\/api\/conversations\/([^/]+)\/?$/);

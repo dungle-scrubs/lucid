@@ -340,6 +340,7 @@ export function hasUnsettledPublicationDelivery(state: ChannelState): boolean {
 
 export type ConnectionFact =
   | { readonly actionId: string; readonly kind: "publication-requested" }
+  | { readonly actionId: string; readonly kind: "hold-released" }
   | {
       readonly actionId: string;
       readonly kind: "publication-connection-failed";
@@ -627,6 +628,7 @@ function parseInteractiveResult(value: unknown): InteractiveResult | null {
 export function parseConnectionFact(value: unknown): ConnectionFact | null {
   if (!object(value) || !connectionId(value.actionId)) return null;
   if (value.kind === "publication-requested") return { actionId: value.actionId, kind: value.kind };
+  if (value.kind === "hold-released") return { actionId: value.actionId, kind: value.kind };
   if (value.kind === "publication-connection-failed") {
     if (
       typeof value.reason !== "string" ||
@@ -993,7 +995,9 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
   if (!fact) return refuseConnection(state, now, "invalid-connection");
   const serialized = JSON.stringify(fact);
   const prior =
-    state.connection?.actions[fact.actionId] ?? state.nativePublication?.actions[fact.actionId];
+    state.connection?.actions[fact.actionId] ??
+    state.nativePublication?.actions[fact.actionId] ??
+    (state.holdRelease?.actionId === fact.actionId ? serialized : undefined);
   if (prior !== undefined && prior !== serialized)
     return refuseConnection(state, now, "connection-conflict");
   let next = state;
@@ -1033,6 +1037,9 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
         },
         seq: state.seq + 1,
       };
+    } else if (fact.kind === "hold-released") {
+      if (state.holdRelease) return refuseConnection(state, now, "connection-conflict");
+      next = { ...state, holdRelease: { actionId: fact.actionId, at: now }, seq: state.seq + 1 };
     } else if (fact.kind === "bound") {
       if (
         !state.connection &&

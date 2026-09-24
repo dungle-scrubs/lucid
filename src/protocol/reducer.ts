@@ -135,6 +135,13 @@ export interface ChannelState {
   readonly approvals: Readonly<Record<string, import("./native-approvals.js").ApprovalState>>;
   readonly approvalRevision: number;
   readonly nativePublication: import("./connection.js").NativePublication | null;
+  /** Explicit detach intent for a review hold. Set once by a hold-released
+   * fact; a repeat with the same action id is idempotent, a reused id with
+   * different content is refused. Survives until the holder detaches. */
+  readonly holdRelease: { readonly actionId: string; readonly at: number } | null;
+  /** Latest durable activity time: last accepted input or lossless event.
+   * Heartbeats, acks, detach frames, and droppable deltas never move it. */
+  readonly lastActivityAt: number;
   readonly connection: import("./connection.js").ConnectionState | null;
   readonly conversationId: string;
   /** Minted by the host at record creation (D-004); checked only at attach. */
@@ -310,6 +317,8 @@ export const initialChannelState = (init: {
   approvalRevision: 0,
   connection: null,
   nativePublication: null,
+  holdRelease: null,
+  lastActivityAt: 0,
   conversationId: init.conversationId,
   secret: init.secret,
   seq: 0,
@@ -849,6 +858,9 @@ const reducePostAttach = (
             ? state.seenTurns
             : { ...state.seenTurns, [frame.turnId]: true as const },
           credits: droppable ? state.credits - 1 : state.credits,
+          // Only lossless events move the activity clock. Token, progress,
+          // and context deltas are unrecorded live output, not activity.
+          ...(droppable ? {} : { lastActivityAt: now }),
           // A turn's terminal event retires one in-flight input (RFC-04
           // P2): turns finish in order, so count-down by one is exact, and
           // non-terminal kinds leave the backlog alone.
@@ -1113,6 +1125,7 @@ export const enqueueInput = (
     {
       ...state,
       seq: queued.seq,
+      lastActivityAt: now,
       inputs,
       questionOpen,
       contextContent: recordContextContent(state.contextContent, "input", input.id, queued.seq),

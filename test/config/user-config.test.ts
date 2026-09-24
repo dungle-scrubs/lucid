@@ -67,3 +67,26 @@ test("invalid configuration is reported rather than replaced by defaults", () =>
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("hold_minutes defaults, validates, and rejects out of range", () => {
+  const home = mkdtempSync(join(tmpdir(), "lucid-config-hold-"));
+  const folder = join(home, ".config/lucid");
+  mkdirSync(folder, { recursive: true });
+  try {
+    writeFileSync(join(folder, "config.toml"), "version = 1\n");
+    expect(readUserConfig({ home, xdgConfigHome: "" }).holdMinutes).toBe(30);
+    writeFileSync(join(folder, "config.toml"), "version = 1\nhold_minutes = 60\n");
+    expect(readUserConfig({ home, xdgConfigHome: "" }).holdMinutes).toBe(60);
+    for (const bad of [
+      "version = 1\nhold_minutes = 0\n",
+      "version = 1\nhold_minutes = 481\n",
+      "version = 1\nhold_minutes = 1.5\n",
+      'version = 1\nhold_minutes = "hour"\n',
+    ]) {
+      writeFileSync(join(folder, "config.toml"), bad);
+      expect(() => readUserConfig({ home, xdgConfigHome: "" })).toThrow("hold_minutes");
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});

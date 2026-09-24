@@ -49,6 +49,7 @@ export type MappedCommand =
   | { readonly kind: "connection-status"; readonly conversationId: string; readonly json: boolean }
   | { readonly kind: "artifact-publish"; readonly request: string; readonly json: boolean }
   | { readonly kind: "handoff"; readonly request: string; readonly json: boolean }
+  | { readonly kind: "detach"; readonly conversationId: string; readonly json: boolean }
   | { readonly kind: "hcn-supervisor"; readonly argv: readonly string[] }
   | {
       readonly kind: "context";
@@ -255,6 +256,19 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
         } else return help;
       }
       return request ? { json, kind: "handoff", request } : help;
+    }
+    case "detach": {
+      const help = {
+        kind: "help",
+        message:
+          "usage: lucid detach CONVERSATION [--json]\nEnd the review hold: new inputs are held and the source leaves at the turn boundary.",
+      } as const;
+      const id = rest[0];
+      if (!id || !validConversationId(id)) return help;
+      if (rest.length === 1) return { kind: "detach", conversationId: id, json: false };
+      if (rest.length === 2 && rest[1] === "--json")
+        return { kind: "detach", conversationId: id, json: true };
+      return help;
     }
     case "context": {
       const help = {
