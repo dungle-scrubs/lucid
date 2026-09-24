@@ -419,6 +419,13 @@ are ignored. Parsing is inert and never infers support from colors, styles,
 or prose. A standard `color-scheme` declaration alone does not opt into Lucid
 synchronization. The policy belongs to the version being viewed.
 
+The publish path refuses unmanaged documents at creation unless the request
+carries `"theme": "unmanaged"`. Both `lucid artifact publish` and
+`lucid handoff` enforce this with `--allow-unmanaged` supplying the marker
+from the terminal. The marker covers one request; it is never stored. A
+refusal names the fix and stores nothing, so correcting the bytes or adding
+the marker and resubmitting starts clean.
+
 | Declaration | Embedding frame scheme |
 |---|---|
 | `adaptive` | Application's resolved light or dark |

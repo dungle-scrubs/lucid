@@ -234,7 +234,7 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
       const help = {
         kind: "help",
         message:
-          "usage: lucid artifact publish --request FILE [--json]\nPublish HTML and return its exact conversation ID, artifact URL, and separate connection result. This does not start a native process.",
+          "usage: lucid artifact publish --request FILE [--allow-unmanaged] [--json]\nPublish HTML and return its exact conversation ID, artifact URL, and separate connection result. Documents without a lucid-theme declaration are refused unless --allow-unmanaged is given. This does not start a native process.",
       } as const;
       if (rest[0] !== "publish") return help;
       let request: string | undefined;
@@ -255,7 +255,7 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
       const help = {
         kind: "help",
         message:
-          "usage: lucid handoff --request FILE [--json]\nCreate a record from artifact bytes plus continuation text and return its artifact URL. The continuation dispatches as the record's first task. This does not start a native process.",
+          "usage: lucid handoff --request FILE [--allow-unmanaged] [--json]\nCreate a record from artifact bytes plus continuation text and return its artifact URL. Documents without a lucid-theme declaration are refused unless --allow-unmanaged is given. The continuation dispatches as the record's first task. This does not start a native process.",
       } as const;
       let request: string | undefined;
       let json = false;
