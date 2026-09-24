@@ -1,9 +1,10 @@
 import { isAbsolute } from "node:path";
 import { readUserConfig } from "../config/user-config.js";
+import { declaredTheme } from "../protocol/artifact-theme.js";
 import type { NativeBinding } from "../protocol/connection.js";
 import { PUBLICATION_MESSAGE_MAX } from "../protocol/connection.js";
 import { settingsShape } from "../protocol/driver-settings.js";
-import { isWireId } from "../protocol/frames.js";
+import { ARTIFACT_BYTES_MAX, isWireId } from "../protocol/frames.js";
 import { HubError } from "../protocol/hub-errors.js";
 import type { ConnectionStatus } from "../store/connection-view.js";
 import { connectionFailure, observeConnection } from "../store/connection-view.js";
@@ -72,6 +73,17 @@ export function withUnmanagedMarker(value: unknown, allow: boolean): unknown {
   return { ...value, theme: "unmanaged" };
 }
 
+/** Refuse unmanaged bytes with the fix named. Stores nothing by itself;
+ * callers close what they opened before calling. */
+export function refuseUnmanaged(): never {
+  throw new HubError(
+    'This document declares no lucid-theme and would render unmanaged. Add <meta name="lucid-theme" content="adaptive"> with matching color-scheme metadata, or resubmit with "theme": "unmanaged".',
+    "E-HUB-09",
+    400,
+    ["Add the lucid-theme declaration"],
+  );
+}
+
 /** Publication and connection have separate results. A connection failure cannot undo a document. */
 export async function publishArtifact(
   value: unknown,
@@ -82,6 +94,12 @@ export async function publishArtifact(
   if (!object(value) || !object(value.artifact))
     throw new HubError("Expected a publication request with an artifact.", "E-HUB-03");
   const { artifact, creationId, conversationId, workingDirectory, serverUrl } = value;
+  // The unmanaged marker is an exact string or nothing. An invalid value
+  // is malformed input, and no flag may conceal it.
+  if (value.theme !== undefined && value.theme !== "unmanaged")
+    throw new HubError('The theme field accepts only "unmanaged".', "E-HUB-03", 400, [
+      "Remove the theme field",
+    ]);
   if (
     (typeof creationId !== "string" || !isWireId(creationId)) &&
     (typeof conversationId !== "string" || !validConversationId(conversationId))
@@ -104,6 +122,15 @@ export async function publishArtifact(
     );
   if (typeof serverUrl !== "string" || !URL.canParse(serverUrl))
     throw new HubError("Provide the local Lucid serverUrl.", "E-HUB-03");
+  // The size bound runs before any parsing or durable writes, so an
+  // oversized input never reaches the theme parser or the record.
+  if (artifact.bytes.length > ARTIFACT_BYTES_MAX)
+    throw new HubError(
+      `Artifact exceeds the ${ARTIFACT_BYTES_MAX} unit limit. Shrink it and retry.`,
+      "E-HUB-03",
+      400,
+      ["Shrink the artifact"],
+    );
   const url = new URL(serverUrl);
   if (
     url.protocol !== "http:" ||
@@ -123,6 +150,22 @@ export async function publishArtifact(
     connector ??
     ((target, conversationId) =>
       connectPublication(target, conversationId, value.registration, authority));
+  // The theme guard runs before any durable write: no record shell, no
+  // receipt, no version on refusal. A creationId that resolves to an
+  // existing record is a retry; the artifact-exists exemption below
+  // decides it after opening, so fresh creations refuse here.
+  const markedUnmanaged = value.theme === "unmanaged";
+  if (typeof conversationId !== "string") {
+    try {
+      const prior = await records.discoveryIndex.receipts(String(creationId));
+      if (prior.length === 0 && declaredTheme(artifact.bytes) === "unmanaged" && !markedUnmanaged)
+        refuseUnmanaged();
+    } catch (cause) {
+      if (cause instanceof HubError) throw cause;
+      // An unreadable receipt index refuses later at creation; the guard
+      // stays out of its way.
+    }
+  }
   let id: string;
   if (typeof conversationId === "string") {
     id = conversationId;
@@ -155,6 +198,28 @@ export async function publishArtifact(
     connectionAuthority: () => undefined,
     ownerPresence: authority.ownerPresence,
   });
+  // The guard runs before the native-publication bookkeeping, so a refusal
+  // stores nothing. An already-held artifact is exempt: its policy was
+  // chosen at creation, independent of addressing field and version number.
+  // Byte conflicts refuse before theme checks: reconcile bytes first.
+  const held = host.readArtifact(artifact.artifactId, artifact.version);
+  if (held) {
+    if (
+      held.bytes !== artifact.bytes ||
+      held.author !== "agent" ||
+      held.contentType !== "text/html"
+    ) {
+      host.close();
+      throw new HubError(
+        "This publication conflicts with an existing artifact version. Reconcile the request and retry.",
+        "E-HUB-03",
+        409,
+      );
+    }
+  } else if (declaredTheme(artifact.bytes) === "unmanaged" && !markedUnmanaged) {
+    host.close();
+    refuseUnmanaged();
+  }
   let closed = false;
   try {
     const requirement = host.recordNativePublication();
