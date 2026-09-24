@@ -52,7 +52,8 @@ async function nativeFixture(): Promise<NativeFixture> {
       JSON.stringify({
         artifact: {
           artifactId: "flow",
-          bytes: "<h1>Exact artifact context</h1>",
+          bytes:
+            '<html><head><meta name="lucid-theme" content="adaptive"></head><body><h1>Exact artifact context</h1></body></html>',
           contentType: "text/html",
           version: 1,
         },

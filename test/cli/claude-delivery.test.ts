@@ -55,7 +55,7 @@ async function commit(root: string, owner: ProcessOwner, stdout: string, extra =
 }
 
 async function claudeFixture(
-  documentBytes = "<h1>Exact artifact context</h1>",
+  documentBytes = '<html><head><meta name="lucid-theme" content="adaptive"></head><body><h1>Exact artifact context</h1></body></html>',
 ): Promise<ClaudeFixture> {
   const root = mkdtempSync(join(tmpdir(), "lucid-claude-delivery-"));
   try {
@@ -195,7 +195,13 @@ test("a Claude tool command changes nothing until its parent Bash callback commi
     writeFileSync(
       request,
       JSON.stringify({
-        artifact: { artifactId: "sub", bytes: "<p>sub</p>", contentType: "text/html", version: 1 },
+        artifact: {
+          artifactId: "sub",
+          bytes:
+            '<html><head><meta name="lucid-theme" content="adaptive"></head><body><p>sub</p></body></html>',
+          contentType: "text/html",
+          version: 1,
+        },
         creationId: "subagent-publication",
         serverUrl: "http://127.0.0.1:17454",
         workingDirectory: root,
@@ -410,7 +416,13 @@ test("a Claude Code command without a registered session refuses and keeps the p
     writeFileSync(
       request,
       JSON.stringify({
-        artifact: { artifactId: "doc", bytes: "<p>kept</p>", contentType: "text/html", version: 1 },
+        artifact: {
+          artifactId: "doc",
+          bytes:
+            '<html><head><meta name="lucid-theme" content="adaptive"></head><body><p>kept</p></body></html>',
+          contentType: "text/html",
+          version: 1,
+        },
         creationId: "unregistered",
         serverUrl: "http://127.0.0.1:17454",
         workingDirectory: root,
@@ -461,7 +473,8 @@ function listening(owner: ProcessOwner) {
 test("Claude Code receives a large document by reference and answers only after reading all of it", async () => {
   const section = (index: number) =>
     `<section id="s${index}"><p>Paragraph ${index} with Unicode ก🙂 and "quotes".</p></section>\n`;
-  const document = Array.from({ length: 1_200 }, (_, index) => section(index)).join("");
+  const sections = Array.from({ length: 1_200 }, (_, index) => section(index)).join("");
+  const document = `<html><head><meta name="lucid-theme" content="adaptive"></head><body>${sections}</body></html>`;
   expect(Buffer.byteLength(document)).toBeGreaterThan(60_000);
   const { deps, dir, id, output, owner, root } = await claudeFixture(document);
   try {
@@ -554,7 +567,8 @@ test("Claude Code receives a large document by reference and answers only after 
 });
 
 test("a reference offer whose copy is lost refuses an answer and still records a failure", async () => {
-  const document = `<main>${"<p>Large paragraph of recorded document text.</p>\n".repeat(900)}</main>`;
+  const body = `<main>${"<p>Large paragraph of recorded document text.</p>\n".repeat(900)}</main>`;
+  const document = `<html><head><meta name="lucid-theme" content="adaptive"></head><body>${body}</body></html>`;
   const { deps, dir, id, output, owner, root } = await claudeFixture(document);
   try {
     const records = conversations(root);
