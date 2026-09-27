@@ -2,10 +2,10 @@
 number: 35
 title: "Pi native settings and extension loading for bound continuation"
 type: protocol
-status: Draft
+status: Accepted
 author: "Claude Opus 5.5"
 date: 2026-09-27
-version: 1
+version: 2
 ---
 
 # RFC-35: Pi native settings and extension loading for bound continuation
@@ -44,7 +44,8 @@ never runs.
 The person using this is the reader who annotates an agent's artifact
 (`CONTEXT.md`); for a Pi author, the notes go to the author's own
 Pi session after the TUI closes (RFC 28). This RFC holds the scope RFC 26
-already accepted. It adds no new user-visible capability.
+already accepted. It adds no capability outside RFC 26's accepted scope:
+bound Pi notes, which Lucid now holds, reach the original session.
 
 Out of scope: Claude Code's native-settings lane (a separate acceptance
 item under RFC 26), approval channels for Pi (Pi has none), and changes to
@@ -93,23 +94,36 @@ models marked reasoning-capable. An extension logged `ctx.model`,
    64 MiB, lines of at most 1 MiB, UTF-8, and a file identity (device,
    inode, size, modification and change times) that must not change
    during the read.
-3. The first entry MUST be the session header, whose `id` equals the
-   requested ID and whose `cwd` resolves to the requested folder;
-   otherwise `session-unavailable` or `cwd-refused`.
+3. The first parsed entry MUST be the session header, whose `id` equals
+   the requested ID and whose `cwd` resolves to the requested folder;
+   otherwise `session-unavailable` or `cwd-refused`. Blank lines are
+   skipped, as Pi skips them. A malformed line makes the read
+   `settings-unavailable`. Pi would skip it and load; hcn holds instead,
+   on purpose.
 4. The snapshot applies Pi's own restoration rule (S8):
-   - the path runs from the last entry through `parentId` links to the
-     header, as `buildSessionPath` does when no leaf is selected; a
-     missing parent is `settings-unavailable`;
+   - the path runs from the last entry through `parentId` links, as
+     `_buildIndex` and `buildSessionPath` do on open; it stops at a
+     missing parent, as Pi's walk does; a cycle is
+     `settings-unavailable`; a version 1 file is a chain in file order,
+     as Pi's migration makes it;
    - provider and model: the last `model_change` or assistant message on
-     that path, whichever comes later;
-   - effort: the last `thinking_level_change` on that path, else `off`;
+     that path, whichever comes later. An entry of either kind without a
+     valid provider and model makes the read `settings-unavailable`; hcn
+     never skips it;
+   - effort: the last `thinking_level_change` on that path, else `off`.
+     A bound session always has one: Pi records the startup level when it
+     creates a session (S2), and Lucid binds only sessions with messages
+     (RFC 28 step 9). A value outside Pi's thinking ladder is
+     `settings-unavailable`;
    - no model on the path: `settings-unavailable`.
 5. The fingerprint is SHA-256 over the source, harness, session ID,
    requested folder, file identity, the IDs of the entries that set the
    model and the effort, provider, model, and effort. Lucid treats it as opaque.
 6. The snapshot carries `continuation: "resume"`. Codex snapshots carry
-   `continuation: "native-approvals"`. The field is additive; a snapshot
-   without it is a Codex snapshot from an older hcn.
+   `continuation: "native-approvals"`. The field is additive. Lucid reads
+   an absent field as `native-approvals` only for a snapshot whose source
+   is `codex-rollout-v1`; any other snapshot with an absent or unknown
+   value is held.
 
 ### hcn: fingerprinted Pi resume
 
@@ -118,8 +132,11 @@ models marked reasoning-capable. An extension logged `ctx.model`,
    refuses with `native-settings-changed` on a different fingerprint, and
    spawns a flagless resume. It passes no provider, model, or thinking
    flag: Pi restores the same values the snapshot read, by its own rule.
-   It keeps the existing refusal of caller model, effort, and provider
-   selectors and of native passthrough.
+   The fingerprinted Pi path accepts only these run options: `--json`,
+   `--resume`, `--cwd`, `--native-settings-fingerprint`, `--extension`,
+   `--env`, `--timeout`, `--questions`, and the prompt. Every other
+   option, including model, effort, provider, tools, skills, access,
+   discovery toggles, and native passthrough, refuses before spawn.
 8. `--extension <path>` is a new run option. The Pi descriptor renders it
    as `-e <path>`; other harnesses refuse it before spawn. The path MUST
    be absolute and name a regular file. It is not a settings selector, so
@@ -129,7 +146,9 @@ models marked reasoning-capable. An extension logged `ctx.model`,
 ### Lucid
 
 9. Preparation keeps its current order: inspect, hold when unavailable,
-   record the snapshot's provider, model, and effort as the driver.
+   record the snapshot's provider, model, and effort as the driver. A
+   snapshot without `permissions` is accepted only when `continuation` is
+   `resume`; an absent `permissions` is never read as a grant.
 10. The snapshot's `continuation` selects the transport. `native-approvals`
     (or absent) keeps RFC 27's approval stream. `resume` runs an ordinary
     one-turn resume with `--native-settings-fingerprint`, `--cwd`, and no
@@ -144,7 +163,14 @@ The headless resume passes no trust override. Pi applies the saved
 decision for the folder, or skips trust-gated project resources (S7). A
 session whose person granted trust for that TUI process only continues
 with fewer project resources, never more. Lucid does not widen trust on
-the person's behalf.
+the person's behalf. `--approve` would widen trust. `--no-approve` would
+drop project resources a saved decision allows, including a provider or
+tool extension the session depends on.
+
+Pi reads a project `sessionDir` setting before it resolves trust, so a
+folder could point Pi at another store. hcn resolves the store itself
+(slice 1 of RFC 28), the fingerprint binds the file hcn read, and RFC
+28's verify-after-open checks the session Pi opened.
 
 ## Message Formats
 
@@ -196,9 +222,19 @@ RFC 28's outcome classification at settlement.
 
 - The Pi source reads session metadata and the provider and model fields
   of assistant messages. It never returns message content.
-- A flagless resume cannot widen settings: Pi restores what the session
-  recorded, and the fingerprint proves the file did not change after
-  inspection.
+- A flagless resume cannot widen the session-file settings: Pi restores
+  what the session recorded, and the fingerprint proves the session file
+  did not change after inspection.
+- The fingerprint covers the session file only. Ambient Pi configuration
+  (default model and thinking settings, system prompt, default tools,
+  skills, installed extensions, the model registry, trust settings, and
+  `trust.json`) is the same on the TUI and the headless side, because
+  both run as the same user on the same machine, but it can change
+  between inspection and spawn. It is outside the fingerprint under that
+  same-user boundary. Lucid passes no configuration-changing flag on
+  this path. An extension installed in that window runs behind RFC 28's
+  attestation gate; a turn it starts itself is classified uncertain (RFC
+  28 step 10).
 - Project trust can only narrow (Project trust).
 - `--extension` accepts only an absolute regular file chosen by the
   caller; Lucid passes only the file it wrote (RFC 28).
@@ -216,8 +252,10 @@ hcn pin deliberately with re-captured fixtures.
 1. hcn: Pi source parser (pure, `src/interpretation`), store-rooted read
    (`src/execution/native-settings.ts`), `continuation` field, Pi branch in
    `verifyNativeSettings` and argv rendering (flagless), `--extension`
-   option with descriptor data. Tests with recorded-shape session files;
-   a live check against Pi with the dead provider.
+   option with descriptor data. Session fixtures are files captured from
+   real Pi runs with the dead provider; a test that needs a shape no
+   recording shows composes it inline and says so. A live check runs
+   inspect and a fingerprinted resume against Pi.
 2. hcn release; Lucid pin bump with re-captured fixtures.
 3. Lucid: parse `continuation`; `resume` transport in preparation and
    execution; `native.extensions`. Fake-hcn tests for both transports.
@@ -243,6 +281,27 @@ hcn pin deliberately with re-captured fixtures.
 
 None.
 
+## Response to v1 review
+
+Verdict: accept with minors.
+
+| Finding | Disposition |
+|---|---|
+| F1 missing parent | hcn mirrors Pi: the walk stops at a missing parent. |
+| F2 field-less settings entry | Fail closed: `settings-unavailable`. |
+| F3 header position, malformed lines | First parsed entry; blank lines skipped; malformed holds on purpose. |
+| F4 ambient configuration | Stated as outside the fingerprint under the same-user boundary. |
+| F5 `off` fallback | Anchored to the bound-session invariant. |
+| F6 inspect-to-spawn gaps | Extensions and trust edits named with their mitigations. |
+| F7 absent `continuation` | Codex source only; anything else holds. |
+| F8 permission-less snapshots | Accepted only with `continuation: "resume"`. |
+| F9 refused set | Allow-list for the fingerprinted Pi path. |
+| F10 no trust flag | Reason stated. |
+| F11 project `sessionDir` | Layered defense cited. |
+| F12 capability wording | Rephrased. |
+| F13 qualifiers | Added. |
+| F14 fixtures | Captured from real Pi runs; inline compositions marked. |
+
 ## References
 
 Normative:
@@ -255,3 +314,4 @@ Normative:
 Informative:
 
 - Pi docs `sessions.md`, `security.md`, `cli.md` (Pi 0.87.1).
+- [v1 review](35_pi-native-settings-for-bound-continuation.review-v1.md).
