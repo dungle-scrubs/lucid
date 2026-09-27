@@ -21,13 +21,13 @@ const OTHER_PI_PID = 4343;
 const PI_EXE = "/opt/pi-runtime/bin/node";
 
 /** The first line of a real file, as the hook's own bounded reader reports it. */
-const firstLine = (path: string): string | null => {
+const firstLine = (path: string): string | null | undefined => {
   try {
     const text = readFileSync(path, "utf8");
     const newline = text.indexOf("\n");
     return newline === -1 ? text : text.slice(0, newline);
-  } catch {
-    return null;
+  } catch (cause) {
+    return (cause as NodeJS.ErrnoException).code === "ENOENT" ? undefined : null;
   }
 };
 
@@ -305,6 +305,22 @@ test("an owner under a shell and then launchd registers, and the session file he
         workingDirectory: root,
       }),
     ).toMatchObject({ kind: "registered", v: 1 });
+    // Pi 0.87.1 reports a new session's path before it writes the file (live TUI run).
+    expect(
+      await run(root, "session-start", {
+        ...capture("session-start"),
+        sessionFile: join(root, "not-written-yet.jsonl"),
+        workingDirectory: root,
+      }),
+    ).toMatchObject({ kind: "registered", v: 1 });
+    // A path that exists but cannot be read as a file still refuses.
+    expect(
+      await run(root, "session-start", {
+        ...capture("session-start"),
+        sessionFile: root,
+        workingDirectory: root,
+      }),
+    ).toMatchObject({ kind: "refused", reason: "native-context-unverified", v: 1 });
   } finally {
     rmSync(root, { force: true, recursive: true });
   }

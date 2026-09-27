@@ -58,7 +58,8 @@ export interface PiHookDeps {
   readonly parentPid: () => number;
   readonly probe: (pid: number) => ReturnType<typeof readProcessOwner>;
   /** The first line of a file, or null when it cannot be read; bounds the session-file check. */
-  readonly readFirstLine: (path: string) => string | null;
+  /** The file's first line; `undefined` when the file does not exist, `null` when unreadable. */
+  readonly readFirstLine: (path: string) => string | null | undefined;
   readonly readParentPid: (pid: number) => number | null | undefined;
   readonly realpath: (path: string) => string;
   readonly now: () => number;
@@ -83,7 +84,7 @@ const refused = (reason: string, message: string): PiHookResult => ({
 });
 
 /** The first line of a session file, at most 64 KiB in; null when it cannot be read. */
-function readHeaderLine(path: string): string | null {
+function readHeaderLine(path: string): string | null | undefined {
   try {
     const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
@@ -95,8 +96,8 @@ function readHeaderLine(path: string): string | null {
     } finally {
       closeSync(fd);
     }
-  } catch {
-    return null;
+  } catch (cause) {
+    return (cause as NodeJS.ErrnoException).code === "ENOENT" ? undefined : null;
   }
 }
 
@@ -224,10 +225,13 @@ function ownerUnderRuntimeOrPi(startPid: number, deps: PiHookDeps): boolean {
 }
 
 /** The session file's header line must name the captured session and folder. A null
- * return accepts; a session Pi has not written yet (`sessionFile: null`) is accepted. */
+ * return accepts. Pi 0.87.1 reports a new session's file path at `session_start` before
+ * it writes the file, so a missing file, like `sessionFile: null`, is accepted; the
+ * owner-ancestry rule, not this check, refuses an owner a model started. */
 function sessionFileRefusal(capture: PiCapture, deps: PiHookDeps): string | null {
   if (capture.sessionFile === null) return null;
   const line = deps.readFirstLine(capture.sessionFile);
+  if (line === undefined) return null;
   let header: unknown;
   try {
     header = JSON.parse(line ?? "");
