@@ -5,7 +5,7 @@ type: feature
 status: Draft
 author: "Claude Opus 5.5"
 date: 2026-09-27
-version: 1
+version: 2
 ---
 
 # RFC-34: Unbound publication falls back to headless with the producer's settings
@@ -13,17 +13,19 @@ version: 1
 ## Abstract
 
 An agent session with no Lucid integration can publish an artifact through
-`lucid artifact publish`. The publication records a native requirement,
-binding fails, and the record then holds every browser note forever. No
-action releases the hold, and the saved driver preference cannot select a
+`lucid artifact publish`. RFC 26 v9 then records a native requirement, the
+binding fails, and the record holds every browser note permanently. No
+action ends the hold, and the saved driver preference cannot select a
 driver for it. The record also takes the built-in `claude` / `opus`
-defaults, because the publisher did not declare its own settings. This RFC
-makes three changes. The publisher declares its harness, model, and working
-folder. A publication whose binding fails because no integration exists
-releases the native requirement, so browser chat runs as an ordinary
-headless conversation on the declared settings. The native registration
-check stops reporting "could not be verified" when the real result is "not
-registered".
+defaults, because the publisher did not send its own settings. This RFC
+makes four changes. The skill tells a non-integrated publisher to send its
+settings, working folder, and origin. A publication whose binding fails
+with `registration-missing` records a terminal `publication-fallback`
+fact, and browser chat then runs as an ordinary headless conversation on
+those settings. A fresh headless session gets a pointer to the origin
+session's transcript. The ancestry check reads parent PIDs of root-owned
+processes, so an unregistered caller gets `registration-missing` and not
+`owner-unknown`.
 
 ## Introduction
 
@@ -42,26 +44,31 @@ The connection projection reports `setup-required` with
 preference is `pi / zai / glm-5.3 / headless-turn`, revision 2. The person
 set that preference in Settings, and it has no effect.
 
-Three separate defects produce this result:
+Three defects produce this result:
 
-- **The hold has no exit.** RFC 26 v9 makes `requiresNativeConnection`
-  true for any record with `nativePublication !== null`. It defines no
-  clear-requirement or convert-to-managed action, and it states "Saved
-  preference never selects this state." Pi has no integration (RFC 28 is
-  parked), so the record can never bind.
-- **The record takes the wrong settings.** `publishArtifact` uses
-  `readUserConfig().defaults` when the request has no `settings` field
-  (`src/cli/artifact-publish.ts`). The built-ins are `claude` / `opus` /
-  `high` (`src/config/user-config.ts`). The request also sent
-  `workingDirectory: null`, so the record uses a managed workspace inside
-  the record folder and not the folder the artifact came from.
-- **The failure reason is wrong.** The caller was not registered. The
-  result should be `registration-missing`. `callerAncestryOwns` walks the
-  caller's parent processes for each live registration. The Pi process
-  descends from `/usr/bin/login` (pid 872), which root owns.
-  `proc_pidinfo` cannot read it, so the walk returns `undefined` for every
-  registration. Three live Claude Code registrations exist on the machine,
-  so `withNativeRegistration` reports `owner-unknown`. Every session
+- **The hold has no exit.** `requiresNativeConnection` is true for any
+  record with `nativePublication !== null` (`src/protocol/connection.ts:328`).
+  `managedCandidates` then returns `[]` (`src/store/managed-readiness.ts:36`).
+  RFC 26 v9 defines no clear-requirement or convert-to-managed action, and
+  states "Saved preference never selects this state." Pi has no
+  integration (RFC 28 is parked), so the record can never bind.
+- **The record takes the wrong settings.** The publication request already
+  accepts `settings` and `workingDirectory`
+  (`src/cli/artifact-publish.ts:163-176`). Creation writes `settings` as the
+  initial driver preference at revision 1 (`src/store/creation.ts:84`).
+  The Pi session sent neither field. So the record took
+  `readUserConfig().defaults`, which are the built-ins `claude` / `opus` /
+  `high` (`src/config/user-config.ts:22`), and a managed workspace inside
+  the record folder, not `~/dev/harness/rolodex`.
+- **The failure reason is wrong.** The caller was not registered, so the
+  result should be `registration-missing`. `callerAncestryOwns`
+  (`src/store/native-registration.ts:73-86`) walks the caller's parent
+  processes once for each live registration. The Pi process descends from
+  `/usr/bin/login` (pid 872), which root owns. `readProcessOwner` uses
+  `proc_pidinfo` with `PROC_PIDTBSDINFO`, which fails for a root-owned
+  process, so the walk returns `undefined`. Three live Claude Code
+  registrations exist on the machine, so `withNativeRegistration` reports
+  `owner-unknown` (`src/store/native-registration.ts:288`). Every session
   started in a Ghostty terminal has this ancestry.
 
 The Lucid skill tells an interface with no integration not to publish.
@@ -69,20 +76,21 @@ The Pi session published anyway. A skill instruction does not hold at the
 boundary, so the fix belongs in the publish path.
 
 The person using this is the reader who annotates agent-authored artifacts
-(`CONTEXT.md`). Lucid's purpose is to route a live agent conversation into
-a durable record and back to that reader. A record that accepts notes and
-never answers them breaks that purpose. This RFC narrows a dead end. It
-adds no new interface support and holds scope.
+(`CONTEXT.md`). Lucid routes a live agent conversation into a durable
+record and back to that reader. A record that accepts notes and never
+answers them breaks that purpose. This RFC removes a dead end. It adds no
+interface support and holds scope.
 
 Out of scope, with reasons:
 
-- Pi native integration. RFC 28 owns it. When a Pi binding exists, RFC 26
-  continuation applies and this fallback does not fire.
+- Pi native integration. RFC 28 owns it.
 - Resuming the original native session headlessly. It needs a strict
   session locator, which RFC 28 has not settled.
-- Transcript import. RFC 26 ruled it out. Section 3 passes a pointer only.
-- Records held for any reason other than a missing registration. Those
+- Transcript import. RFC 26 ruled it out. Section 4 passes a pointer only.
+- Records held for any reason other than `registration-missing`. Those
   holds protect a session that may be alive, and RFC 26 keeps them.
+- Returning a fallback record to native delivery. Section 3 explains why
+  fallback is terminal.
 
 ## Terminology
 
@@ -92,19 +100,16 @@ as described in RFC 2119.
 
 - **Native requirement**: RFC 26's `nativePublication` state. It holds
   queued input until a verified binding exists.
-- **Unbound publication**: a publication whose binding attempt failed.
-- **No-integration failure**: a binding failure with reason
-  `registration-missing`. The calling process descends from no live
-  registered native owner. This class excludes `owner-unknown`,
-  `native-identity-conflict`, `registration-store-unavailable`,
-  `registration-busy`, `stale-registration`, and
-  `connection-result-unrecorded`.
-- **Release**: a durable fact that ends a native requirement which never
-  bound.
+- **Unbound publication**: a publication with a native requirement and no
+  binding.
+- **Fallback**: the durable `publication-fallback` fact, and the state it
+  produces. It ends a native requirement that never bound. The word
+  "release" is not used, because `hold-released` already names the
+  detach/handoff fact (`src/protocol/connection.ts:343`).
 - **Producer settings**: the harness, provider, model, effort, and profile
-  that the publishing session declares for itself.
+  that the publishing session sends for itself in `settings`.
 - **Origin**: the publishing session's declared harness, native session ID,
-  and native session file, recorded as unverified provenance.
+  and native session file. Lucid stores it as unverified provenance.
 
 ## Motivation
 
@@ -112,20 +117,21 @@ Every interactive session that is not a registered Claude Code or Codex
 CLI session produces this dead end when it publishes: Pi, Muse, Cursor,
 and any delegated worker. The reader sees a working chat input, types a
 note, and gets "Saved" with no answer and no action that changes it. The
-Settings panel offers a model choice that does nothing. From the reader's
-side, the product is broken, and nothing on the page says why.
+Settings panel offers a model choice that does nothing. The page does not
+say why.
 
-Upkeep after this ships: one fact kind in the connection reducer, one
-predicate term, one metadata field, one probe fallback, and one label. The
-existing managed dispatch path does the execution. That upkeep is small
-against a failure that affects every non-integrated publisher.
+Upkeep after this ships: one fact kind and one state field in the
+connection reducer, one predicate term, one projection state, one metadata
+field, one prompt line, one probe fallback, and one label. The existing
+managed dispatch path does the execution. That upkeep is small against a
+failure that affects every non-integrated publisher.
 
 ## Design
 
-### 1. The publisher declares producer settings, working folder, and origin
+### 1. The publisher sends producer settings, working folder, and origin
 
-The publication request gains one optional object and uses two existing
-fields:
+`settings` and `workingDirectory` already exist on the publication
+request. The only new request field is `origin`:
 
 ```json
 {
@@ -150,175 +156,361 @@ fields:
 
 Rules:
 
-1. `settings` keeps its existing `settingsShape` validation. On creation,
-   Lucid writes it as the creation settings (as today) and also as the
-   initial driver preference at revision 1, through the existing
-   `driver-preference` writer. Managed preparation reads the driver
-   preference (`src/modes/managed-preparation.ts`), so this is the value a
-   later headless turn uses.
-2. When `settings` is absent, current behavior holds: user-config defaults.
-   The skill change in section 5 makes the field normal for agent callers.
+1. `settings` and `workingDirectory` keep their current validation and
+   their current creation path. Creation already writes `settings` as the
+   initial driver preference (`createConversationRecord`,
+   `src/store/creation.ts:84`). Managed preparation reads that preference
+   (`src/modes/managed-preparation.ts:265`).
+2. When `settings` is absent, current behavior holds: user-config
+   defaults. Publishers that use an older skill still get those defaults.
+   This RFC fixes the settings defect only for publishers that send
+   `settings`, which the skill change in section 6 makes normal.
 3. Lucid MUST NOT infer settings from artifact text, the process table, or
-   harness session files. ADR 0009 governs: the declaration is a
-   preference, not a claim about what ran. The log records what ran.
+   harness session files. ADR 0005 and ADR 0009 govern. The declaration is
+   a preference, not a claim about what ran. The log records what ran.
 4. `settings` applies only on creation. A publication into an existing
    conversation MUST NOT change the driver preference. The person's choice
    in Settings wins after creation.
-5. `workingDirectory` keeps its existing validation. The skill sends the
-   publisher's current folder.
-6. `origin` is optional. Every field is optional, bounded, and free of
-   control characters. `sessionFile` MUST be absolute. Lucid stores
-   `origin` in record metadata beside `creation.request`. It is provenance
-   only. It grants no execution authority, selects no harness, and is
-   never passed to hcn as a resume target.
+5. `origin` is optional and applies only on creation. Its shape is closed:
+   `harness` is a known harness name, `nativeSessionId` is at most 128
+   characters from the wire-ID alphabet, and `sessionFile` is an absolute
+   path of at most 4096 bytes with no control characters (the rules of the
+   existing `path()` validator, `src/protocol/connection.ts:572-576`).
+   Every field is optional. An invalid `origin` refuses the request with
+   `E-HUB-03` before any durable write.
+6. Lucid stores `origin` in record metadata as `origin`, beside
+   `creation`. It is provenance only. It grants no execution authority,
+   selects no harness, and MUST NOT be passed to hcn as a resume target.
+7. The `driver-preference.ts` module comment that names the server as the
+   only writer gains the creation carve-out that already exists in code.
 
-### 2. A no-integration failure releases the native requirement
+### 2. The `publication-fallback` fact and state
 
-The connection protocol gains one fact on the existing envelope
-`{v: 1, src: "execution", payloadVersion: 2, at, connection: body}`:
+The connection protocol gains one fact kind on the existing envelope
+`{v: 1, src: "execution", payloadVersion: 2, at, connection: body}`. Its
+body is exactly:
 
 ```json
-{ "kind": "publication-released", "actionId": "<uuid>", "failureActionId": "<uuid>" }
+{ "kind": "publication-fallback", "actionId": "<uuid>", "failureActionId": "<uuid>" }
 ```
 
-Rules:
+Both IDs pass the existing `connectionId` validator. `parseConnectionFact`
+accepts exactly these three keys.
 
-1. `connectPublication` appends `publication-released` in the same host
-   connection transaction as the failure, and only when all of these hold:
-   - the failure reason is `registration-missing`;
-   - `state.connection === null` (never bound);
-   - `hasUnsettledPublicationDelivery(state)` is false;
-   - no reconnect reservation exists.
+`NativePublication` (`src/protocol/connection.ts:312-326`) gains one field:
 
-   Any other failure keeps the RFC 26 hold unchanged.
-2. The reducer requires a current `publication-requested` and a matching
-   `publication-connection-failed` whose `actionId` equals
-   `failureActionId`. It sets `nativePublication.released =
-   {actionId, failureActionId, at}`. An identical repeat changes nothing.
-   A reused ID with different content gets `connection-conflict`.
-3. `requiresNativeConnection(state)` becomes:
+```ts
+readonly fallback: {
+  readonly actionId: string;
+  readonly failureActionId: string;
+  readonly at: number;
+} | null;
+```
 
-   ```ts
-   state.connection !== null ||
-     (state.nativePublication !== null && state.nativePublication.released === null)
-   ```
+Its initial value is `null`. The fold of a record written before this
+amendment produces `null`. `ChannelState.holdRelease` and the
+`hold-released` fact are unchanged.
 
-   Every RFC 26 admission check uses this predicate, so a released record
-   is an ordinary managed record. Queued input becomes a managed candidate
-   at the next admission check. The existing presence lock, executor lease,
-   and dispatch-boundary rechecks apply unchanged.
-4. A later publication into a released record appends a new
-   `publication-requested`. That fact clears `released` and re-arms the
-   requirement, because a new publisher may have an integration. If that
-   binding succeeds, RFC 26's native flow governs. If it fails with a
-   no-integration failure, rule 1 releases it again.
-5. Release clears nothing else. Failure history, artifacts, inputs, and
-   the driver preference stay unchanged.
-6. The record now contains a new fact kind inside payload version 2. A
-   pre-amendment reader refuses it on fold with `invalid-connection`, the
-   same as the RFC 26 F5 behavior. The released record needs a supporting
-   reader. No downgrade conversion exists.
+The reducer accepts `publication-fallback` only when all of these hold.
+Otherwise it refuses with the reason shown:
 
-The new fact is necessary for this reason. RFC 26 records the requirement
-before the artifact write and before registration lookup, so a crash
-cannot leave queued input dispatchable. This RFC keeps that order. The
-requirement exists for the whole publication, and the release is a
-separate, later, durable decision.
+| Condition | Refusal |
+|---|---|
+| `state.nativePublication !== null` | `connection-not-admitted` |
+| `state.connection === null` (never bound) | `connection-not-admitted` |
+| `nativePublication.failure?.actionId === failureActionId` | `connection-not-admitted` |
+| `nativePublication.failure.reason === "registration-missing"` | `connection-not-admitted` |
+| `hasUnsettledPublicationDelivery(state) === false` | `execution-blocked` |
+| `nativePublication.fallback === null` | `connection-conflict` |
 
-### 3. The first headless turn knows where the conversation began
+The fact's `actionId` goes into `nativePublication.actions`, like the
+other publication facts. The existing top-of-reducer rule then makes an
+identical repeat a no-op and a reused ID with different content a
+`connection-conflict` (`src/protocol/connection.ts:996-1002`).
 
-A released record has no native session to resume. Until RFC 28 lands, the
-first headless turn starts a **new session** on the producer settings. It
-runs in `workingDirectory`, with the artifact and the note as context.
+The v1 guard "no reconnect reservation exists" is dropped. It is vacuous:
+a reconnect needs a binding (`src/protocol/connection.ts:1080-1082`), and
+the table already requires `connection === null`.
 
-When `origin.sessionFile` exists, the first managed dispatch context adds
-one reference line:
+`requiresNativeConnection` (`src/protocol/connection.ts:328`) becomes:
 
-> This conversation began in a {harness} session. Its transcript is at
-> {sessionFile}. Read it only if the note needs earlier context.
+```ts
+export function requiresNativeConnection(state: ChannelState): boolean {
+  return (
+    state.connection !== null ||
+    (state.nativePublication !== null && state.nativePublication.fallback === null)
+  );
+}
+```
 
-The reference is a pointer, not a payload. Lucid does not read, copy, or
-size-check the file. RFC 30's offered-copy mechanism is not used, because
-this is a managed dispatch and not a native offer. A missing file at read
-time is the agent's normal tool failure. Later turns resume the managed
-session that the first turn created, and they do not repeat the line.
+Every RFC 26 admission check uses this predicate, so a fallback record is
+an ordinary managed record for admission. Section 3 covers what happens
+after that.
 
-### 4. Registration check reports the right reason
+### 3. Fallback is terminal
 
-`callerAncestryOwns` changes how it handles a process it cannot read:
+After fallback, the record stays a managed record. Three reducer rules
+enforce this:
 
-1. The walk reads each ancestor with `readProcessOwner`. When that returns
-   `undefined`, the walk reads only the parent PID with a parent-only probe
-   (`sysctl` `KERN_PROC_PID` / `kinfo_proc`). `ps -o ppid= -p 872` returns
-   `741` in the observed case, so the kernel exposes the parent PID of a
-   root-owned process to this user.
-2. A process that the walk cannot read fully MUST NOT match a registered
-   owner. An owner match still needs PID, start time, and executable.
-3. The walk returns `undefined` only when the parent-only probe also fails,
-   a cycle occurs, or the depth limit is reached.
-4. A walk that ends at PID 1 with no match returns `false`. With no
-   `undefined` results and no match, `withNativeRegistration` reports
-   `registration-missing`, and section 2 applies.
+1. `bound` is refused with `connection-conflict` when
+   `nativePublication.fallback !== null`. A native session cannot take
+   over a record that has already dispatched, or may dispatch, managed
+   work.
+2. `publication-connection-failed` is refused with
+   `connection-not-admitted` when `nativePublication.fallback !== null`.
+   The failure that caused the fallback stays the current failure.
+3. `publication-requested` keeps its current rule. The host reuses
+   `requestedActionId` (`src/store/conversation-host.ts:1186-1188`), so a
+   later publication writes an identical fact, and the reducer treats it
+   as a no-op.
 
-A registered Claude Code or Codex session is unaffected. Its walk reaches
-the owner before it reaches `login`.
+The v1 "re-arm" rule is removed. It conflicted with the second-request
+refusal (`src/protocol/connection.ts:1008-1013`). It also required a
+native session to take over a record whose managed session may already
+hold history, which RFC 26's binding guards refuse
+(`src/protocol/connection.ts:1044-1048`). A person who wants native
+delivery starts a new conversation from an integrated session.
 
-### 5. Skill and UI
+`connectPublication` reads the record state first. When `fallback` is not
+null, it skips registration lookup and returns the fallback projection
+from section 5. A later publication into a fallback record therefore
+writes its artifact and changes no connection state.
+
+### 4. Writing the fallback: two ordered appends
+
+The fallback write follows the failure write. These are two separate host
+transactions, because `writeConnection` appends one fact for each
+`transactDynamic` call (`src/store/conversation-host.ts:1048-1084`):
+
+1. `saveConnectionFailure` appends `publication-connection-failed` through
+   `recordNativePublication`, as it does today. The host reuses the
+   previous failure's ID when reason and message are unchanged
+   (`src/store/conversation-host.ts:1178-1181`).
+2. When step 1 is accepted and the reason is `registration-missing`,
+   `saveConnectionFailure` calls a new host operation,
+   `recordPublicationFallback()`. Inside one `writeConnection`
+   transaction, it reads the current `nativePublication.failure` and
+   produces `{kind: "publication-fallback", actionId, failureActionId:
+   failure.actionId}`. The `actionId` is the existing `fallback.actionId`
+   when one exists, otherwise a new UUID. The reducer table in section 2
+   decides the result.
+
+Another writer can append between the two transactions. Each fact is
+validated alone against the state at its own append, so the interleave
+is safe. If another failure with a different reason lands in between, the
+fallback's `failureActionId` no longer names the current failure, and the
+reducer refuses it. The record stays held.
+
+A crash between the two appends leaves the record held. Recovery is a
+repeat of the same publication (same conversation ID, same artifact
+identity, version, and bytes). The artifact write is an idempotent
+repeat. The failure write reuses its ID, and the fallback write then
+succeeds. This also heals an existing record whose last failure is
+`owner-unknown` from the ancestry defect: after section 7 ships, the
+repeat produces a new `registration-missing` failure, and then the
+fallback.
+
+### 5. Admission after fallback, and what the connection panel shows
+
+At the next admission check, `managedCandidates`
+(`src/store/managed-readiness.ts:31`) no longer returns `[]` because of the
+predicate. The remaining fences still apply unchanged:
+
+- `state.holdRelease !== null` still holds the record.
+- A managed attempt that ended with an `uncertain` outcome still holds the
+  record (`src/store/managed-readiness.ts:40-44`).
+- Every entry point still takes the presence lock and executor lease, and
+  rechecks the predicate at attempt creation and at the dispatch boundary
+  (RFC 26 F2, F4).
+
+No managed attempt can be in flight when the fallback is written. RFC 26
+F2 and F4 recheck the predicate at attempt creation, executor
+acquisition, and the dispatch boundary, and the predicate was true until
+the fallback append. So the guard table needs no separate
+unsettled-execution check.
+
+Notes dispatch once each. A note saved before the fallback is a queued
+input with no execution entry. After the fallback it becomes an eligible
+managed candidate, like any queued input on an ordinary record. The input
+ledger and delivery cursor that dispatch every ordinary input once also
+govern these notes. A note saved after the fallback takes the same path.
+
+The connection projection gains one state, `headless-fallback`.
+`observeConnection` (`src/store/connection-view.ts:66`) checks
+`nativePublication.fallback` before its unbound branch:
+
+- `state`: `headless-fallback`
+- `reason`: `registration-missing`
+- `message`: "No live session is connected. Notes get replies from a new
+  headless session with this conversation's settings."
+- `actions`: `[]`
+- `nativeConnectionRequired`: `false`, from the predicate.
+
+`awaitingNativeBinding` is false for a fallback record, because it calls
+the predicate. `lucid connection status` returns the same projection.
+
+RFC 26 section 8's status table gains one row: `headless-fallback`, "No
+live session is connected; replies come from a new headless session",
+no actions.
+
+### 6. Skill and browser
 
 The skill (`~/dev/skills` source for `~/.agents/skills/lucid`) replaces
 "Other ordinary native interfaces have no enabled authoring integration
 yet" with this rule. An interface with no integration MAY publish through
 the CLI. The request MUST carry `settings` for its own harness and model,
-`workingDirectory`, and `origin` where the harness exposes it. The reply
-tells the person that notes get an answer from a new headless session on
-the same model, not from this live session.
+and `workingDirectory` for its current folder. It SHOULD carry `origin`
+when the harness exposes those values. The reply tells the person that a
+new headless session on the same model answers notes, not the live
+session.
 
-Browser, for a released record: the connection panel shows no setup
-state. The chat input works. The label near the input reads:
+Browser: when the connection state is `headless-fallback`, the connection
+panel is hidden (as for any ordinary managed record), and the chat input
+works. A label near the input reads:
 
-> No live session is connected. Replies come from a new headless
-> {harness} / {model} session. [?]
+> Replies come from a new headless {harness} / {model} session. [?]
 
-The `?` tooltip explains that the publishing session has no Lucid
-integration, so Lucid cannot deliver notes back into it. It names the
-Settings control that changes the model. `lucid connection status` returns
-a new state `released`, reason `registration-missing`, actions `[]`, and
-`nativeConnectionRequired: false`.
+`{harness}` and `{model}` come from `savedPreference`. The `?` control
+opens an accessible tooltip on hover and keyboard focus. It says that the
+session that published this artifact has no Lucid integration, so Lucid
+cannot send notes back into it, and that the Settings control changes the
+model.
+
+### 7. Fresh headless sessions get a pointer to the origin transcript
+
+A fallback record has no native session to resume. Until RFC 28 lands, a
+headless turn starts a new session on the saved driver preference in the
+record's working folder.
+
+When managed preparation starts a **fresh** native session (the
+dispatch's native intent is not `resume`,
+`src/modes/managed-preparation.ts:224-227`) and record metadata has
+`origin.sessionFile`, the `reference` block
+(`src/modes/managed-preparation.ts:331-341`) gains one line, after the
+fresh-attempt note and before the context reading command:
+
+> This conversation began in a {origin.harness} session. Its transcript is
+> at {origin.sessionFile}. Read it only if the note needs earlier context.
+
+`{origin.harness}` is "native" when absent. The rule is based on the
+native intent, not on a turn count, so a later `continue-fresh` also gets
+the line. A resumed turn does not. When `origin` or `sessionFile` is
+absent, the line is omitted and nothing fails.
+
+The line is a pointer, not a payload. Lucid does not read, copy, or
+size-check the file. The file can be large, so the line tells the agent to
+read it only when the note needs it. A missing file at read time, for
+example in a record copied to another machine, is the agent's normal tool
+failure.
+
+### 8. Registration check reports the right reason
+
+`callerAncestryOwns` changes how it handles an ancestor that
+`readProcessOwner` cannot read:
+
+1. A new parent-only probe reads `proc_pidinfo` with flavor
+   `PROC_PIDT_SHORTBSDINFO` (13, 64 bytes, parent PID at offset 4).
+   Measured on this machine on 2026-09-27: it returns `872 → 741` for the
+   root-owned `/usr/bin/login`, where `PROC_PIDTBSDINFO` fails. It returns
+   0 bytes for a PID that does not exist.
+2. When `readProcessOwner(pid)` returns `undefined`, the walk calls the
+   parent-only probe. On success it continues from the parent PID. The
+   unreadable process itself MUST NOT match a registered owner: a match
+   still needs PID, start time, and executable.
+3. The walk returns `undefined` only when the parent-only probe also
+   fails, a cycle occurs, or the 64-step depth limit is reached.
+4. A walk that ends at PID 1 with no match returns `false`.
+
+Trust assumption. A registered owner is always fully readable by the
+publishing user. Registration corroborates the owner's PID, start time,
+and executable at write time (`src/store/native-registration.ts:235-239`),
+and the registration store is private to the same user
+(`src/store/native-registration.ts:131-138`). So a process the walk cannot
+read fully cannot be a registered owner, and skipping it cannot hide a
+match. If an owner process becomes unreadable after registration, the
+walk now passes through it and returns `false` for that registration,
+where it returned `undefined` before. The caller then gets
+`registration-missing`, and section 2 can fall back. That case needs a
+registered owner to change user or privilege, which Claude Code and Codex
+do not do.
+
+The probe is Darwin-only, like `readProcessOwner`. On other platforms the
+walk keeps its current behavior.
+
+## Amendments to RFC 26
+
+This RFC changes these RFC 26 v9 sentences for the `registration-missing`
+case only. Every other RFC 26 rule stays normative.
+
+1. "There is no clear-requirement or convert-to-managed action in this
+   amendment." `publication-fallback` is a convert-to-managed fact,
+   limited to `registration-missing` failures on never-bound records.
+2. F1: "The wire bodies are exactly `publication-requested` and
+   `publication-connection-failed`." A third body, `publication-fallback`,
+   is added. `NativePublication` gains `fallback`.
+3. F2: "`requiresNativeConnection(state)` ... is true exactly when
+   `state.nativePublication !== null || state.connection !== null`." The
+   predicate gains the `fallback === null` term.
+4. "Saved preference never selects this state." After fallback, the saved
+   preference selects the driver, because the record is managed.
+5. F6: "Unbound required records use `setup-required`." A fallback record
+   uses `headless-fallback`, with `nativeConnectionRequired: false`.
+6. Section 8 status table: the `headless-fallback` row is added.
+7. "Only verified binding admits the already specified native continuation
+   workflow." Unchanged for native continuation. Fallback admits managed
+   dispatch, not native continuation.
 
 ## State Machine
 
 ```
-publication-requested ──fail(registration-missing, guards pass)──> released
-        │                                                           │
-        ├──fail(other reason)──> held (RFC 26, unchanged)           │
-        └──binding verified────> bound (RFC 26, unchanged)          │
-released ──publication-requested──> requested (re-armed) ───────────┘
+requested ──failure(registration-missing)──> held ──publication-fallback──> fallback (terminal)
+    │                                         │
+    │                                         └──(crash before fallback)──> held; repeat publication retries
+    ├──failure(any other reason)──> held (RFC 26, unchanged)
+    └──bound──> bound (RFC 26, unchanged)
+
+fallback: bound refused; failure refused; requested repeat is a no-op.
 ```
 
 ## Error Handling
 
-- The release append fails after the failure fact was stored: the record
-  stays held. The command returns the failure with `persistence: saved`
-  and a message that the release did not save. Repeating the same
-  publication retries the release under the host transaction.
-- The failure append fails: RFC 26 F7 applies unchanged, and no release is
-  attempted.
-- The settings declaration is invalid: the command refuses with
-  `E-HUB-03` before any durable write, as `settingsShape` does today.
-- The declared model is unavailable at dispatch: the existing managed
+- The failure append fails: RFC 26 F7 applies unchanged, and no fallback
+  is attempted.
+- The fallback append is refused or fails after the failure is stored: the
+  record stays held. The command returns the failure result with
+  `persistence: saved`. Its message adds that the headless fallback did
+  not save and that repeating the same publication retries it.
+- `origin` is invalid: the command refuses with `E-HUB-03` before any
+  durable write.
+- The saved model is unavailable at dispatch: the existing managed
   preparation refusal applies and shows `change-settings`.
+- A pre-amendment reader folds a fallback record: it refuses the unknown
+  kind with `invalid-connection`, as RFC 26 F5 requires. No downgrade
+  conversion exists.
 
 ## Security Considerations
 
-- Release weakens nothing that protects a live session. A no-integration
-  failure means no live registration is an ancestor of the caller, so no
-  native session exists that could also receive the input. `owner-unknown`
-  and conflicts still hold.
-- The parent-only probe reads a PID and nothing else. It creates no match
-  authority.
+- `registration-missing` proves that no verified registration is an
+  ancestor of the caller. It does not prove that no live native session
+  exists. One false-fallback case remains: a session with a working
+  integration that publishes before its registration is written. Claude
+  Code and Codex register at session start through their hooks, before the
+  model can run a command, so the window is the hook's own startup. If it
+  occurs, the record falls back and its notes go to a headless session and
+  not to the live session. The notes are not lost, and no second native
+  process receives them. Recovery: the person publishes again from the
+  live session into a new conversation. This RFC accepts that residual
+  risk. The alternative keeps every non-integrated publication in a dead
+  end.
+- Fallback cannot start a second writer for a live native session. A
+  never-bound record has no native session attached, and rule 1 of section
+  3 refuses a later binding.
+- The parent-only probe reads one PID and grants no match authority
+  (section 8).
 - `origin.sessionFile` is a path that the publisher chose. Lucid never
   opens it. The headless agent reads it with its own tool permissions in
-  the same account, which is the same access the publisher had.
+  the same account, which is the same access the publisher had. Record
+  copies carry the path. On another machine it fails as a missing file.
 - The trust boundary is unchanged: one person on one machine, local
   filesystem access (RFC 32).
 
@@ -326,63 +518,101 @@ released ──publication-requested──> requested (re-armed) ─────
 
 - **A "continue headless" button in the setup panel.** It keeps the dead
   end as the default and puts an unexplained decision in front of a
-  first-time reader. The no-integration case has one correct answer, so
-  the fallback is automatic.
-- **Treat the saved preference as release.** ADR 0009 forbids a preference
-  that changes execution state, and RFC 26 rejected it.
+  first-time reader. The `registration-missing` case has one correct
+  answer, so the fallback is automatic.
+- **Re-arm the requirement on a later publication (v1).** It conflicted
+  with the second-request refusal and with RFC 26 binding guards once
+  managed history exists. Section 3 makes fallback terminal.
+- **Heal held records on a status read.** A status read is a read of
+  durable facts with no writes (RFC 26 F7). Healing uses a repeat
+  publication instead (section 4).
+- **Treat the saved preference as the exit.** ADR 0009 forbids a
+  preference that changes execution state, and RFC 26 rejected it.
 - **Read the producer's model from the Pi session file.** That re-derives
-  harness behavior in Lucid, which ADR 0005 forbids. If hcn gains an
-  operation that reports a session's model, the skill can use it (Open
-  Question 1).
+  harness behavior in Lucid, which ADR 0005 forbids.
 - **Resume the original Pi session headlessly.** RFC 28 is blocked on the
-  native strict-open race. This RFC gives that path its upgrade point: when
-  a Pi binding exists, RFC 26 continuation applies and no release occurs.
+  native strict-open race.
 
 ## Implementation Plan
 
-1. Protocol: the `publication-released` fact, the reducer, the predicate
-   change, and the `released` projection state. Fake-hcn oracle for each
-   case in Acceptance.
-2. Registration: parent-only probe and ancestry walk change. Tests use an
-   injected probe with an unreadable ancestor.
-3. Publish: `settings` → driver preference on creation, and `origin`
-   metadata.
-4. Managed context: the origin reference line on the first dispatch.
-5. UI: connection panel, chat label, and tooltip. Verify at 390, 768, and
-   1440 pixels in both themes.
-6. Skill update in `~/dev/skills`, then its link script.
-7. Live confirmation: an interactive Pi session publishes, a browser note
-   gets an answer from a headless `pi / zai / glm-5.3` turn in the
-   publisher's folder.
+Each unit has an observable outcome before the next unit depends on it.
+
+1. **Probe.** Parent-only probe and walk change (section 8). Test with an
+   injected probe that has an unreadable ancestor, and confirm that the
+   live Pi ancestry returns `false`.
+2. **Protocol.** `publication-fallback` parse, reducer table, `fallback`
+   field, predicate, terminal rules, and the `headless-fallback`
+   projection (sections 2, 3, 5).
+3. **Publish path.** `recordPublicationFallback`, `saveConnectionFailure`
+   ordering, `connectPublication` short-circuit, `origin` validation and
+   metadata (sections 1, 4).
+4. **Managed context.** The origin line on fresh dispatch (section 7).
+5. **Browser.** Label and tooltip, verified at 390, 768, and 1440 pixels
+   in both themes (section 6).
+6. **Skill.** Update in `~/dev/skills`, then its link script.
+7. **Live confirmation.** Repeat the publication for record `40cf7112`,
+   confirm the fallback, and confirm that a browser note gets a reply from
+   a headless `pi / zai / glm-5.3` turn.
 
 ## Acceptance
 
-- The Pi-under-`login` ancestry reports `registration-missing`, not
-  `owner-unknown`.
-- Release happens only for `registration-missing` with all guards passing.
-  Each excluded reason and each failed guard keeps the hold.
-- A released record dispatches a note saved before release and a note
-  saved after it, once each.
-- A crash between the failure fact and the release leaves the record held.
-  A repeat publication releases it.
-- A publication into a released record re-arms, and then binds or releases
-  again.
-- Creation writes the declared settings as driver preference revision 1.
-  A later publication into the record does not change the preference.
-- The first dispatch includes the origin line. The second does not.
-- The pre-amendment reader refuses a released record on fold.
+- The Pi-under-`login` ancestry returns `false`, and publication reports
+  `registration-missing`.
+- Fallback is written only for `registration-missing` on a never-bound
+  record with no unsettled publication delivery. Each other reason, a
+  bound record, and an uncertain legacy delivery keep the hold.
+- A fallback whose `failureActionId` is not the current failure is
+  refused.
+- After fallback: `bound` is refused, a new failure is refused, and a
+  repeated `publication-requested` is a no-op.
+- A crash between the failure and the fallback leaves the record held. A
+  repeat publication writes the fallback.
+- A note saved before the fallback and a note saved after it each dispatch
+  once.
+- An uncertain managed outcome still holds a fallback record.
+- The projection for a fallback record is `headless-fallback`,
+  `nativeConnectionRequired: false`, actions `[]`.
+- A fresh dispatch with `origin.sessionFile` includes the origin line. A
+  resumed dispatch does not. A record without `origin` dispatches without
+  the line.
+- A publication into an existing record does not change the driver
+  preference or `origin`.
+- The pre-amendment reader refuses a fallback record on fold.
 - The existing RFC 26 acceptance suite passes unchanged.
 
 ## Open Questions
 
 1. Can hcn report the model, provider, and native session file of the
    calling session, so the skill copies values and does not recall them?
-2. Should the tooltip link to Pi integration status (RFC 28) so the reader
-   can see when same-session replies become possible?
-3. Should an existing held record with only no-integration failures
-   release on its next status read, or only on a new publication? This
-   draft requires a new publication. Record `40cf7112` would need one
-   republish.
+   Not blocking: the skill can read them from the harness where it
+   exposes them.
+2. Should the tooltip link to Pi integration status (RFC 28)? Not
+   blocking.
+
+## Response to v1 review
+
+Every finding in
+[review v1](34_unbound-publication-headless-fallback.review-v1.md) is
+answered here.
+
+| Finding | Disposition |
+|---|---|
+| R34-01 `released` field missing, name collides with `hold-released` | Applied. Fact `publication-fallback`, field `NativePublication.fallback`, exact shapes in section 2. `holdRelease` untouched. |
+| R34-02 re-arm conflicts with second-request refusal; repeat rules underived | Applied. Re-arm removed; fallback is terminal (section 3). Action ID derivation and repeat rules in section 4. |
+| R34-03 "same transaction" is false | Applied. Two ordered appends, interleave and crash analysis in section 4. |
+| R34-04 `registration-missing` overstates the signal | Applied. Claim narrowed; false-fallback case, window, and recovery in Security. |
+| R34-05 guard set vacuous and incomplete | Applied. Reconnect guard dropped; F2/F4 cited; surviving fences listed in section 5. |
+| R34-06 request schema and writer path misdescribed | Applied. Section 1 names `origin` as the only new field and `createConversationRecord` as the writer. |
+| R34-07 RFC 26 amendments not listed | Applied. New "Amendments to RFC 26" section. |
+| R34-08 probe trust assumption unstated | Applied. Section 8 states it, with the measured probe. |
+| R34-09 origin line undermarked | Applied. Section 7: fresh-intent rule, bounds in section 1, placement, absent-origin rule, size note. |
+| R34-10 once-each dispatch argument missing | Applied. Section 5. |
+| R34-11 projection state needs a mapping | Applied. Section 5, and the RFC 26 table row. |
+| R34-12 residual defaults | Applied. Section 1 rule 2. |
+| R34-13 driver-preference comment | Applied. Section 1 rule 7. |
+| R34-14, R34-15 ADR consistency | No change needed; fencing sentence kept in section 1 rule 6. |
+| R34-16 Open Question 3 should be decided | Applied. Repeat publication heals (section 4); status-read healing rejected in Alternatives. |
+| R34-17 copied-record portability | Applied. Section 7 and Security. |
 
 ## References
 
@@ -397,5 +627,6 @@ Informative:
 
 - RFC 28: Pi native extension bridge (parked).
 - RFC 30: native feedback context by reference.
+- RFC 32: any-session handoff to Lucid (trust boundary).
 - Record `40cf7112-6dab-485b-b099-e1b306570dac`, the observed failure
   (local machine only; the facts are quoted in the Introduction).
