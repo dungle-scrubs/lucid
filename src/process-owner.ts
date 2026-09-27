@@ -20,7 +20,7 @@ export interface ProcessSnapshot extends ProcessOwner {
 }
 
 /** null is confirmed absent; undefined means that inspection is unavailable. */
-type ProcessProbe = (pid: number) => ProcessSnapshot | null | undefined;
+export type ProcessProbe = (pid: number) => ProcessSnapshot | null | undefined;
 
 function absentOrUnknown(pid: number): null | undefined {
   try {
@@ -155,8 +155,11 @@ export function readProcessOwner(pid: number): ProcessSnapshot | null | undefine
   return probe(pid);
 }
 
-export function ownerPresence(owner: ProcessOwner): boolean | undefined {
-  const current = readProcessOwner(owner.pid);
+export function ownerPresence(
+  owner: ProcessOwner,
+  probe: ProcessProbe = readProcessOwner,
+): boolean | undefined {
+  const current = probe(owner.pid);
   if (current === undefined) return undefined;
   return (
     current !== null &&

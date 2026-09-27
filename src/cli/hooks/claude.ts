@@ -1,9 +1,8 @@
 import { nativeOwner } from "../../harness/native-owner.js";
 import type { NativeListenerResult } from "../../modes/native-listener.js";
-import type { ConnectionControl, NativeBinding } from "../../protocol/connection.js";
+import type { NativeBinding } from "../../protocol/connection.js";
 import type { ProcessOwner } from "../../protocol/process-owner.js";
 import { sameProcessOwner } from "../../protocol/process-owner.js";
-import type { ClaudeOperation } from "../../store/claude-proposals.js";
 import {
   CLAUDE_PROPOSAL_MARKER,
   claimClaudeProposal,
@@ -20,9 +19,8 @@ import {
   registerNativeSession,
   withNativeRegistration,
 } from "../../store/native-registration.js";
-import { connectPublication, refusePublicationConnection } from "../artifact-publish.js";
+import { refusePublicationConnection } from "../artifact-publish.js";
 import { claudeSessionAuthority } from "../claude-commands.js";
-import { runConnectionControl } from "../connection-control.js";
 import { NATIVE_ROLE_ENV } from "../invocation.js";
 import type { NativeStopOptions } from "../native-lifecycle.js";
 import {
@@ -30,8 +28,8 @@ import {
   interruptNativeListening,
   listenAtNativeStop,
 } from "../native-lifecycle.js";
-import { requestNativeListening } from "../native-listening.js";
 import type { Conversations } from "../record-addressing.js";
+import { commitOperation } from "./native-commit.js";
 
 export interface ClaudeHookDeps {
   /** Claude Code's consecutive Stop-continuation cap; 0 disables it. */
@@ -152,37 +150,6 @@ interface ClaudeHookOptions extends NativeStopOptions {
   readonly retryMs?: number;
 }
 
-function commitOperation(
-  records: Conversations,
-  operation: ClaudeOperation,
-  registration: NativeBinding,
-  authority: RegistrationAuthority,
-): string {
-  const { conversationId } = operation;
-  switch (operation.kind) {
-    case "bind": {
-      const status = connectPublication(
-        records,
-        conversationId,
-        registration.registrationId,
-        authority,
-      );
-      return `Connection for ${conversationId}: ${status.state}. ${status.message}`;
-    }
-    case "listen":
-      return `Listening for ${conversationId}: ${requestNativeListening(records, conversationId, authority).message}`;
-    case "receipt":
-    case "respond": {
-      const control: ConnectionControl =
-        operation.kind === "receipt"
-          ? { kind: "receipt", offerId: operation.offerId }
-          : { kind: "respond", offerId: operation.offerId, outcome: operation.outcome };
-      const result = runConnectionControl(records, conversationId, control, authority);
-      return `${operation.kind === "receipt" ? "Receipt" : "Response"} for offer ${operation.offerId}: ${result.verdict}. ${result.message}`;
-    }
-  }
-}
-
 /** Commit proposals reported by a parent Bash call. A subagent's proposal is claimed and refused. */
 function commitProposals(
   records: Conversations,
@@ -230,7 +197,7 @@ function commitProposals(
     }
     if (proposal.registrationId !== registration.registrationId) {
       lines.push(
-        `${nonce}: not recorded. It was saved by a different native lifecycle; run the command again.`,
+        `${nonce}: not recorded. stale-registration: It was saved by a different native lifecycle; run the command again.`,
       );
       continue;
     }

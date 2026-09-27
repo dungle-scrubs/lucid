@@ -72,12 +72,15 @@ function refusalMessage(reason: string): string {
   }
 }
 
-/** Resolve native authority before entering the host's serialized control transaction. */
+/** Resolve native authority before entering the host's serialized control transaction.
+ * `reference`, when set, is the registration id the commit names; the lookup refuses a
+ * registration that was replaced after the caller resolved it (RFC 28 step 3). */
 export function runConnectionControl(
   records: Conversations,
   conversationId: string,
   control: ConnectionControl,
   authority: RegistrationAuthority = nativeCommandAuthority(),
+  reference?: string,
 ): ConnectionControlResult {
   const dir = commandRecordDir(records, conversationId);
   const write = (registration?: NativeBinding): ControlOutcome => {
@@ -98,7 +101,7 @@ export function runConnectionControl(
   const result =
     control.kind === "cancel-input"
       ? { ok: true as const, value: write() }
-      : withNativeRegistration(records.rootDir, undefined, write, authority);
+      : withNativeRegistration(records.rootDir, reference, write, authority);
   const outcome = result.ok ? result.value : { verdict: "refused" as const, reason: result.reason };
   let message: string;
   if (!result.ok) message = result.message;

@@ -1,5 +1,6 @@
 import type { ConversationPanelVisibility } from "../server/view-options.js";
 import { validConversationId } from "../store/errors.js";
+import type { PiHookEvent } from "./hooks/pi.js";
 
 /**
  * CLI frame mapping: the pure subcommand -> protocol intent translation.
@@ -17,6 +18,7 @@ export type MappedCommand =
   | { readonly kind: "reconnect"; readonly conversationId: string }
   | { readonly kind: "codex-hook"; readonly root?: string }
   | { readonly kind: "claude-hook"; readonly root?: string }
+  | { readonly kind: "pi-hook"; readonly event: PiHookEvent; readonly root?: string }
   | {
       readonly kind: "connection-setup";
       readonly hooksFile: string;
@@ -130,6 +132,24 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
               message:
                 "The Claude Code hook reads its native callback from stdin; --root selects its configured record root.",
             };
+    case "_pi-hook": {
+      const events = new Set<PiHookEvent>(["session-start", "session-shutdown", "tool-result"]);
+      const piHookHelp = {
+        kind: "help" as const,
+        message:
+          "usage: lucid _pi-hook <session-start|session-shutdown|tool-result> [--root ROOT]\nThe Pi hook reads one JSON capture from stdin; --root selects its configured record root.",
+      };
+      if (rest.length === 1 && events.has(rest[0] as PiHookEvent))
+        return { event: rest[0] as PiHookEvent, kind: "pi-hook" };
+      if (
+        rest.length === 3 &&
+        events.has(rest[0] as PiHookEvent) &&
+        rest[1] === "--root" &&
+        rest[2]
+      )
+        return { event: rest[0] as PiHookEvent, kind: "pi-hook", root: rest[2] };
+      return piHookHelp;
+    }
     case "connection": {
       const help = {
         kind: "help",

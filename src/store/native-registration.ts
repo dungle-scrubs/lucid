@@ -11,10 +11,17 @@ import {
   unlinkSync,
 } from "node:fs";
 import { join } from "node:path";
-import { ownerPresence, readParentPid, readProcessOwner } from "../process-owner.js";
-import type { NativeBinding } from "../protocol/connection.js";
+import {
+  ownerPresence,
+  type ProcessProbe,
+  type ProcessSnapshot,
+  readParentPid,
+  readProcessOwner,
+} from "../process-owner.js";
+import type { NativeBinding, NativeInterface } from "../protocol/connection.js";
 import { connectionId, parseNativeBinding, sameNativeHistory } from "../protocol/connection.js";
 import type { ProcessOwner } from "../protocol/process-owner.js";
+import { sameProcessOwner } from "../protocol/process-owner.js";
 import { atomicSidecar } from "./atomic-file.js";
 import { classifyStoreFailure, type StoreFailureCode, validConversationId } from "./errors.js";
 import { type AppendLock, acquireAppendLock, LockError } from "./flock.js";
@@ -99,21 +106,24 @@ export function callerAncestryOwns(
   return pid <= 1 ? false : undefined;
 }
 /** Requires ancestry and independent native-session proof; without an adapter it authorizes nothing.
- * Cache only caller ancestry within one command. Session and final owner checks stay fresh. */
+ * Cache only caller ancestry within one command. Session and final owner checks stay fresh.
+ * A hook that has already verified its parent passes the same process probe, so one command
+ * reads one process view (RFC 28: the parent check and the registration corroborate together). */
 export function nativeRegistrationAuthority(
   verifySession: (capture: NativeCapture) => boolean | undefined = () => undefined,
+  probe: ProcessProbe = readProcessOwner,
 ): RegistrationAuthority {
   const snapshots = new Map<number, ReturnType<typeof readProcessOwner>>();
-  const probe = (pid: number): ReturnType<typeof readProcessOwner> => {
-    if (!snapshots.has(pid)) snapshots.set(pid, readProcessOwner(pid));
-    return snapshots.get(pid);
+  const cached: ProcessProbe = (pid) => {
+    if (!snapshots.has(pid)) snapshots.set(pid, probe(pid));
+    return snapshots.get(pid) as ProcessSnapshot | null | undefined;
   };
   return {
     callerOwns: (capture) => {
-      const ancestry = callerAncestryOwns(capture.owner, probe);
+      const ancestry = callerAncestryOwns(capture.owner, cached);
       return ancestry === true ? verifySession(capture) : ancestry;
     },
-    ownerPresence,
+    ownerPresence: (owner) => ownerPresence(owner, cached),
   };
 }
 
@@ -252,11 +262,11 @@ export function registerNativeSession(
   )
     return failure("owner-unknown", "The native owner could not be corroborated.");
   const result = withRegistrations(root, (dir): RegistrationResult<NativeBinding> => {
-    const key = createHash("sha256")
-      .update(JSON.stringify([registration.interface, registration.owner]))
-      .digest("hex");
     try {
-      atomicSidecar(join(dir, `${key}.json`), registration);
+      atomicSidecar(
+        join(dir, `${registrationKey(registration.interface, registration.owner)}.json`),
+        registration,
+      );
       return { ok: true, value: registration };
     } catch {
       return failure(
@@ -267,6 +277,61 @@ export function registerNativeSession(
   });
   if (!result.ok) return result;
   return result.value.ok ? { ok: true, registration: result.value.value } : result.value;
+}
+
+function registrationKey(iface: NativeInterface, owner: ProcessOwner): string {
+  // Canonical field order: the stored binding's owner is parsed to this order, so the
+  // filename is stable whatever field order a caller's owner object carries.
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        iface,
+        { executable: owner.executable, pid: owner.pid, startedAt: owner.startedAt },
+      ]),
+    )
+    .digest("hex");
+}
+
+/** RFC 28 step 1: `session_shutdown` removes the registration this owner
+ * holds for this session. Anything else is left in place. */
+export function removeNativeRegistration(
+  root: string,
+  iface: NativeInterface,
+  owner: ProcessOwner,
+  nativeSessionId: string,
+): { readonly removed: boolean } | RegistrationFailure {
+  const result = withRegistrations(
+    root,
+    (dir): RegistrationResult<{ readonly removed: boolean }> => {
+      const path = join(dir, `${registrationKey(iface, owner)}.json`);
+      let entry: RegistrationEntry;
+      try {
+        entry = readRegistration(path);
+      } catch (cause) {
+        if ((cause as NodeJS.ErrnoException).code === "ENOENT")
+          return { ok: true, value: { removed: false } };
+        return failure(
+          "registration-store-unavailable",
+          "The native registration could not be read. Shutdown removal was not performed.",
+        );
+      }
+      const binding = entry.binding;
+      if (binding.nativeSessionId !== nativeSessionId || !sameProcessOwner(binding.owner, owner))
+        return { ok: true, value: { removed: false } };
+      try {
+        unlinkSync(path);
+      } catch {
+        return failure(
+          "registration-store-unavailable",
+          "The native registration could not be removed. Check access to its storage.",
+        );
+      }
+      return { ok: true, value: { removed: true } };
+    },
+  );
+  // withRegistrations wraps the callback's own RegistrationResult; unwrap both layers.
+  const outcome = result.ok ? result.value : result;
+  return outcome.ok ? outcome.value : outcome;
 }
 
 export function withNativeRegistration<TValue>(

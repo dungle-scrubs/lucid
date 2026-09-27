@@ -73,9 +73,14 @@ export interface DispatchDeps {
   readonly announceFn?: (stdin: string) => Promise<AnnounceResult>;
   readonly codexHookFn?: typeof import("./hooks/codex.js").runCodexHook;
   readonly claudeHookFn?: typeof import("./hooks/claude.js").runClaudeHook;
+  /** For `_pi-hook`: the stdin the bounded capture reader reads. Defaults to `process.stdin`. */
+  readonly piCaptureInput?: AsyncIterable<Uint8Array | string>;
   /** Claude Code session reported to a tool command; null disables detection. Defaults to the
    * environment unless a test injects `nativeAuthority`. */
   readonly claudeSession?: string | null;
+  /** Pi session reported to a tool command; null disables detection. Defaults to the
+   * environment unless a test injects `nativeAuthority`. */
+  readonly piSession?: string | null;
   readonly injectFn?: (stdin: string) => Promise<InjectResult>;
   readonly readStdinFn?: () => Promise<string>;
   /** Sink for help / confirmation lines — defaults to `console.log` in `runCli`. */
@@ -106,6 +111,7 @@ export type DispatchResult =
     }
   | { readonly kind: "codex-hook" }
   | { readonly kind: "claude-hook" }
+  | { readonly kind: "pi-hook" }
   | { readonly kind: "connection-listen"; readonly verdict: "requested" | "held" | "pending" }
   | { readonly kind: "connection-setup"; readonly verdict: "installed" | "unchanged" | "refused" }
   | { readonly kind: "connection-control"; readonly verdict: "accepted" | "refused" | "pending" }
@@ -233,12 +239,43 @@ export const dispatch = async (
       );
     return { kind: "claude-hook" };
   }
+  if (mapped.kind === "pi-hook") {
+    const { PI_CAPTURE_OVERSIZE_MESSAGE, PI_CAPTURE_MAX_BYTES, readBoundedInput, runPiHook } =
+      await import("./hooks/pi.js");
+    const records = (deps.conversationsFactory ?? conversations)(mapped.root ?? deps.rootDir);
+    // A capture over the byte bound is refused before it is parsed (RFC 28 Message Formats).
+    const text = await readBoundedInput(deps.piCaptureInput ?? process.stdin, PI_CAPTURE_MAX_BYTES);
+    const result =
+      text === null
+        ? {
+            kind: "refused" as const,
+            message: PI_CAPTURE_OVERSIZE_MESSAGE,
+            reason: "invalid-capture",
+            v: 1 as const,
+          }
+        : await runPiHook(records, mapped.event, text);
+    (deps.onOutput ?? console.log)(JSON.stringify(result));
+    return { kind: "pi-hook" };
+  }
   if (mapped.kind === "connection-listen") {
     const claudeSession = await commandClaudeSession(deps);
+    const piSession = await commandPiSession(deps);
     const records = (deps.conversationsFactory ?? conversations)(deps.rootDir);
     if (claudeSession) {
       const { proposeClaudeOperation } = await import("./claude-commands.js");
       const result = proposeClaudeOperation(records, claudeSession, {
+        conversationId: mapped.conversationId,
+        kind: "listen",
+      });
+      (deps.onOutput ?? console.log)(proposalOutput(result, mapped.json));
+      return {
+        kind: "connection-listen",
+        verdict: result.verdict === "pending" ? "pending" : "held",
+      };
+    }
+    if (piSession) {
+      const { proposePiOperation } = await import("./pi-commands.js");
+      const result = proposePiOperation(records, piSession, {
         conversationId: mapped.conversationId,
         kind: "listen",
       });
@@ -273,11 +310,32 @@ export const dispatch = async (
         break;
     }
     const claudeSession = control.kind === "cancel-input" ? null : await commandClaudeSession(deps);
+    const piSession = control.kind === "cancel-input" ? null : await commandPiSession(deps);
     if (claudeSession && control.kind !== "cancel-input") {
       const { proposeClaudeOperation } = await import("./claude-commands.js");
       const result = proposeClaudeOperation(
         records,
         claudeSession,
+        control.kind === "receipt"
+          ? { conversationId: mapped.conversationId, kind: "receipt", offerId: control.offerId }
+          : {
+              conversationId: mapped.conversationId,
+              kind: "respond",
+              offerId: control.offerId,
+              outcome: control.outcome,
+            },
+      );
+      (deps.onOutput ?? console.log)(proposalOutput(result, mapped.json));
+      return {
+        kind: "connection-control",
+        verdict: result.verdict === "pending" ? "pending" : "refused",
+      };
+    }
+    if (piSession && control.kind !== "cancel-input") {
+      const { proposePiOperation } = await import("./pi-commands.js");
+      const result = proposePiOperation(
+        records,
+        piSession,
         control.kind === "receipt"
           ? { conversationId: mapped.conversationId, kind: "receipt", offerId: control.offerId }
           : {
@@ -317,13 +375,16 @@ export const dispatch = async (
       "./artifact-publish.js"
     );
     const claudeSession = await commandClaudeSession(deps);
+    const piSession = await commandPiSession(deps);
     const result = await publishArtifact(
       withUnmanagedMarker(await readPublicationRequest(mapped.request), mapped.allowUnmanaged),
       deps.rootDir,
       deps.nativeAuthority,
       claudeSession
         ? (await import("./claude-commands.js")).claudePublicationConnector(claudeSession)
-        : undefined,
+        : piSession
+          ? (await import("./pi-commands.js")).piPublicationConnector(piSession)
+          : undefined,
     );
     (deps.onOutput ?? console.log)(
       mapped.json
@@ -566,4 +627,11 @@ async function commandClaudeSession(deps: DispatchDeps): Promise<string | null |
   if (deps.claudeSession !== undefined) return deps.claudeSession;
   if (deps.nativeAuthority) return null;
   return (await import("./claude-commands.js")).claudeCommandSession();
+}
+
+/** The Pi session is resolved only after the Claude session; both name a proposal path. */
+async function commandPiSession(deps: DispatchDeps): Promise<string | null | undefined> {
+  if (deps.piSession !== undefined) return deps.piSession;
+  if (deps.nativeAuthority) return null;
+  return (await import("./pi-commands.js")).piCommandSession();
 }
