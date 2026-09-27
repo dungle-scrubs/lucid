@@ -73,6 +73,7 @@ import { ContentComparisonView } from "./content-comparison.js";
 import { useConversationPanel } from "./conversation-panel.js";
 import type { DriverChoiceBody, DriverChoices, DriverPreference } from "./driver-menus.js";
 import { ExecutionRecovery } from "./execution-recovery.js";
+import { HeadlessFallbackLabel } from "./headless-fallback-label.js";
 import { isQueueSend } from "./hotkeys.js";
 import {
   ArchiveDuotone,
@@ -1210,6 +1211,7 @@ const Thread = ({
           </div>
         )}
 
+        <HeadlessFallbackLabel />
         <ComposerPrimitive.Root
           className={dragOver ? "composer dragover" : invite ? "composer inviting" : "composer"}
           onDragOver={(e) => {

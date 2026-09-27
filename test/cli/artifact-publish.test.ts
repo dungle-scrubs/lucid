@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { publishArtifact } from "../../src/cli/artifact-publish.js";
@@ -44,7 +44,7 @@ test("publication remains readable and retries the same record when connection n
     expect(first.publication.status).toBe("published");
     expect(first.connection).toMatchObject({
       reason: "registration-missing",
-      state: "setup-required",
+      state: "headless-fallback",
     });
     expect(first.artifactUrl).toBe(`http://127.0.0.1:17454/c/${first.conversationId}/flow`);
     await dispatch(args, { onOutput: (line) => output.push(line), rootDir: records });
@@ -251,7 +251,93 @@ test("unverified native ownership remains unknown in the publication result", as
   }
 });
 
-test("failed native publication holds saved feedback and retains its cause after reopening", async () => {
+test("a publication with no registration falls back: saved feedback becomes managed work", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-publication-fallback-"));
+  try {
+    const result = await publishArtifact(
+      {
+        artifact: {
+          artifactId: "flow",
+          bytes:
+            '<html><head><meta name="lucid-theme" content="adaptive"></head><body><h1>Answer me</h1></body></html>',
+          contentType: "text/html",
+          version: 1,
+        },
+        creationId: "fallback-publication",
+        origin: {
+          harness: "pi",
+          nativeSessionId: "pi-session",
+          sessionFile: "/tmp/pi-session.jsonl",
+        },
+        serverUrl: "http://127.0.0.1:17454",
+        settings: {
+          effort: "high",
+          harness: "pi",
+          model: "glm-5.3",
+          profile: "headless-turn",
+          provider: "zai",
+        },
+        workingDirectory: root,
+      },
+      root,
+      { callerOwns: () => false, ownerPresence: () => false },
+    );
+    expect(result.connection).toMatchObject({
+      persistence: "saved",
+      reason: "registration-missing",
+      state: "headless-fallback",
+    });
+    const dir = conversations(root).dirFor(result.conversationId);
+    const host = openWriter(dir);
+    try {
+      expect(
+        host.acceptInput(
+          { id: "saved-feedback", mode: "queue", text: "Revise this" },
+          { managed: true },
+        ).verdict,
+      ).toBe("accepted");
+    } finally {
+      host.close();
+    }
+    const reopened = openWriter(dir);
+    try {
+      expect(managedCandidates(dir, reopened.state())).toEqual(["saved-feedback"]);
+    } finally {
+      reopened.close();
+    }
+    expect(readConnection(dir)).toMatchObject({
+      actions: [],
+      nativeConnectionRequired: false,
+      nativeSessionId: null,
+      reason: "registration-missing",
+      savedPreference: { harness: "pi", model: "glm-5.3", provider: "zai" },
+      state: "headless-fallback",
+    });
+    // Fallback is terminal: a later publication into the record changes no connection state.
+    const again = await publishArtifact(
+      {
+        artifact: {
+          artifactId: "flow",
+          bytes:
+            '<html><head><meta name="lucid-theme" content="adaptive"></head><body><h1>Answer me again</h1></body></html>',
+          contentType: "text/html",
+          version: 2,
+        },
+        conversationId: result.conversationId,
+        serverUrl: "http://127.0.0.1:17454",
+        settings: { effort: "high", harness: "claude", model: "opus", profile: "headless-turn" },
+      },
+      root,
+      { callerOwns: () => true, ownerPresence: () => true },
+    );
+    expect(again.connection).toMatchObject({ state: "headless-fallback" });
+    expect(readConnection(dir).savedPreference).toMatchObject({ harness: "pi", model: "glm-5.3" });
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("an ambiguous native publication holds saved feedback and retains its cause after reopening", async () => {
   const root = mkdtempSync(join(tmpdir(), "lucid-publication-hold-"));
   try {
     const result = await publishArtifact(
@@ -264,6 +350,7 @@ test("failed native publication holds saved feedback and retains its cause after
           version: 1,
         },
         creationId: "held-publication",
+        registration: "not-a-registration-reference",
         serverUrl: "http://127.0.0.1:17454",
         settings: {
           effort: "high",
@@ -297,7 +384,7 @@ test("failed native publication holds saved feedback and retains its cause after
         actions: ["setup-instructions"],
         nativeConnectionRequired: true,
         nativeSessionId: null,
-        reason: "registration-missing",
+        reason: "invalid-registration",
         state: "setup-required",
       });
       expect(readConnection(dir).message).toContain(result.connection.message);
@@ -519,6 +606,82 @@ test("managed bytes publish; malformed bytes refuse without throwing", async () 
         root,
       ),
     ).rejects.toMatchObject({ code: "E-HUB-09" });
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("origin is validated on creation and ignored on an existing conversation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-publication-origin-"));
+  const artifact = (version: number) => ({
+    artifactId: "flow",
+    bytes:
+      '<html><head><meta name="lucid-theme" content="adaptive"></head><body>Origin</body></html>',
+    contentType: "text/html",
+    version,
+  });
+  const none = { callerOwns: () => false, ownerPresence: () => false };
+  try {
+    await expect(
+      publishArtifact(
+        {
+          artifact: artifact(1),
+          creationId: "bad-origin",
+          origin: { sessionFile: "relative/path.jsonl" },
+          serverUrl: "http://127.0.0.1:17454",
+          workingDirectory: root,
+        },
+        root,
+        none,
+      ),
+    ).rejects.toMatchObject({ code: "E-HUB-03" });
+    expect(conversations(root).list().identities.size).toBe(0);
+    const created = await publishArtifact(
+      {
+        artifact: artifact(1),
+        creationId: "good-origin",
+        origin: { harness: "pi", sessionFile: "/work/session.jsonl" },
+        serverUrl: "http://127.0.0.1:17454",
+        workingDirectory: root,
+      },
+      root,
+      none,
+    );
+    const revised = await publishArtifact(
+      {
+        artifact: artifact(2),
+        conversationId: created.conversationId,
+        origin: { harness: "not-a-harness" },
+        serverUrl: "http://127.0.0.1:17454",
+      },
+      root,
+      none,
+    );
+    expect(revised.publication).toEqual({ status: "published", version: 2 });
+    const meta = JSON.parse(
+      readFileSync(join(conversations(root).dirFor(created.conversationId), "meta.json"), "utf8"),
+    );
+    expect(meta.creation.request.origin).toEqual({
+      harness: "pi",
+      sessionFile: "/work/session.jsonl",
+    });
+    // A native connector never runs for a fallback record.
+    let connectorCalls = 0;
+    const third = await publishArtifact(
+      {
+        artifact: artifact(3),
+        conversationId: created.conversationId,
+        serverUrl: "http://127.0.0.1:17454",
+      },
+      root,
+      none,
+      () => {
+        connectorCalls++;
+        throw new Error("A fallback record must not reach a connector");
+      },
+    );
+    expect(connectorCalls).toBe(0);
+    expect(third.connection).toMatchObject({ state: "headless-fallback" });
   } finally {
     rmSync(root, { force: true, recursive: true });
   }

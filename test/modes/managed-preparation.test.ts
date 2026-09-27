@@ -18,9 +18,15 @@ const driver = {
   effort: "high",
   profile: "headless-turn",
 } as const;
-async function setup(profile: "headless-turn" | "headless-session" = "headless-turn") {
+async function setup(
+  profile: "headless-turn" | "headless-session" = "headless-turn",
+  origin?: Record<string, string>,
+) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "lucid-managed-preparation-")));
-  const record = createConversationRecord(root, "managed", { workingDirectory: root });
+  const record = createConversationRecord(root, "managed", {
+    workingDirectory: root,
+    ...(origin ? { creation: { id: "created", request: { workingDirectory: root, origin } } } : {}),
+  });
   let lease = true;
   const host = createConversationHost(record.paths.dir, {
     executorLease: () => lease,
@@ -1243,3 +1249,58 @@ test.each(["queued-note", "failed-attempt", "held-input"] as const)(
     }
   },
 );
+
+test("a fresh dispatch points at the origin transcript only when the record declares one", async () => {
+  const origin = { harness: "pi", nativeSessionId: "pi-1", sessionFile: "/work/pi/session.jsonl" };
+  for (const declared of [origin, undefined]) {
+    const f = await setup("headless-turn", declared);
+    const preparation = createManagedPreparation({
+      host: f.host,
+      offerContext: f.offerContext,
+      runner: f.runner,
+      driver,
+      cwd: f.root,
+    });
+    try {
+      const result = await preparation.prepare({ ...input, signal: new AbortController().signal });
+      if (result.kind !== "ready") throw new Error("held");
+      const line =
+        "This conversation began in a pi session. Its transcript is at /work/pi/session.jsonl. Read it only if the note needs earlier context.";
+      if (declared) expect(result.prompt).toContain(line);
+      else expect(result.prompt).not.toContain("This conversation began in");
+    } finally {
+      preparation.close();
+      f.close();
+    }
+  }
+});
+
+test("a publication fallback waits for a managed attempt that started before the requirement", async () => {
+  const f = await setup();
+  const preparation = createManagedPreparation({
+    host: f.host,
+    offerContext: f.offerContext,
+    runner: f.runner,
+    driver,
+    cwd: f.root,
+  });
+  try {
+    const result = await preparation.prepare({ ...input, signal: new AbortController().signal });
+    expect(result.kind).toBe("ready");
+    expect(f.host.state().executions.request).toMatchObject({ kind: "attempt-started" });
+    expect(f.host.recordNativePublication().verdict).toBe("accepted");
+    expect(f.host.state().nativePublication?.legacyDelivery).toMatchObject({
+      inFlight: 0,
+      uncertainInputs: [],
+    });
+    f.host.recordNativePublication({ message: "No registration.", reason: "registration-missing" });
+    expect(f.host.recordPublicationFallback()).toMatchObject({
+      issue: "execution-blocked",
+      verdict: "refused",
+    });
+    expect(f.host.state().nativePublication?.fallback).toBeNull();
+  } finally {
+    preparation.close();
+    f.close();
+  }
+});

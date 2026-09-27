@@ -11,7 +11,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import { join } from "node:path";
-import { ownerPresence, readProcessOwner } from "../process-owner.js";
+import { ownerPresence, readParentPid, readProcessOwner } from "../process-owner.js";
 import type { NativeBinding } from "../protocol/connection.js";
 import { connectionId, parseNativeBinding, sameNativeHistory } from "../protocol/connection.js";
 import type { ProcessOwner } from "../protocol/process-owner.js";
@@ -70,14 +70,28 @@ function parseListenRequest(value: unknown): NativeListenRequest | null {
     : null;
 }
 
-function callerAncestryOwns(owner: ProcessOwner, probe = readProcessOwner): boolean | undefined {
-  let pid = process.pid;
+/** A process with unreadable identity cannot be a registered owner: registration
+ * corroborated the owner's full identity as the same user. The walk passes
+ * through such a process by its parent PID and never matches it. */
+export function callerAncestryOwns(
+  owner: ProcessOwner,
+  probe = readProcessOwner,
+  parent = readParentPid,
+  start = process.pid,
+): boolean | undefined {
+  let pid = start;
   const visited = new Set<number>();
   while (pid > 1 && visited.size < 64 && !visited.has(pid)) {
     visited.add(pid);
     const current = probe(pid);
-    if (current === undefined) return undefined;
     if (current === null) return false;
+    if (current === undefined) {
+      const next = parent(pid);
+      if (next === undefined) return undefined;
+      if (next === null) return false;
+      pid = next;
+      continue;
+    }
     if (current.pid === owner.pid)
       return current.executable === owner.executable && current.startedAt === owner.startedAt;
     pid = current.parentPid;

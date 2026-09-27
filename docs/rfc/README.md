@@ -1,5 +1,8 @@
 # Active RFCs
 
+RFC 34 drafts [unbound publication headless fallback](34_unbound-publication-headless-fallback.rfc.md).
+It is a draft: a publication from a session with no Lucid integration releases its native requirement, and browser chat runs headless on the settings the publisher declared.
+
 RFC 32 drafts [any-session handoff to Lucid](32_any-session-handoff-to-lucid.rfc.md).
 It is a draft: any plain session supplies artifact plus continuation text, one local command creates the record and attaches, and the source holds through a 30-minute review window.
 
@@ -57,7 +60,7 @@ settings`). Its proposal and v1 review are preserved in the merge; current
 contracts live in [drivers](../drivers.md) for the store source and
 served choices.
 
-The highest allocated RFC number is **32**. The next RFC is **33**.
+The highest allocated RFC number is **34**. The next RFC is **35**.
 RFC 24 was allocated to Claude startup compatibility; RFC 25 is allocated to
 automatic recovery in concurrent work. Their numbers remain reserved.
 Never reset numbering because completed files have been removed. Before

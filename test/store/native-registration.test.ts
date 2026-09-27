@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,7 @@ import { readProcessOwner } from "../../src/process-owner.js";
 import { StoreError } from "../../src/store/errors.js";
 import { acquireAppendLock } from "../../src/store/flock.js";
 import {
+  callerAncestryOwns,
   nativeRegistrationAuthority,
   registerNativeSession,
   withNativeRegistration,
@@ -322,4 +323,52 @@ test("registration cleanup removes only corroborated departed owners and retains
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
+});
+
+describe("ancestry through a process whose identity is unreadable", () => {
+  // The observed chain: pi -> zsh -> herdr -> zsh -> login (root-owned) -> ghostty -> launchd.
+  const identities: Record<number, { parentPid: number; executable: string }> = {
+    500: { parentPid: 400, executable: "/bin/pi" },
+    400: { parentPid: 300, executable: "/bin/zsh" },
+    200: { parentPid: 1, executable: "/Applications/Ghostty.app/ghostty" },
+  };
+  const probe = (pid: number) => {
+    const known = identities[pid];
+    return known ? { ...known, pid, startedAt: `${pid}:0` } : undefined;
+  };
+  const owner = (pid: number) => ({
+    executable: identities[pid]?.executable ?? "/x",
+    pid,
+    startedAt: `${pid}:0`,
+  });
+
+  test("an unregistered caller below login is not owned, not unknown", () => {
+    const parent = (pid: number) => (pid === 300 ? 200 : undefined);
+    expect(callerAncestryOwns(owner(999), probe, parent, 500)).toBe(false);
+  });
+
+  test("an owner above the unreadable process still matches", () => {
+    const parent = (pid: number) => (pid === 300 ? 200 : undefined);
+    expect(callerAncestryOwns(owner(200), probe, parent, 500)).toBe(true);
+  });
+
+  test("an unreadable process never matches, even at the owner's PID", () => {
+    const parent = (pid: number) => (pid === 300 ? 200 : undefined);
+    expect(
+      callerAncestryOwns(
+        { executable: "/usr/bin/login", pid: 300, startedAt: "300:0" },
+        probe,
+        parent,
+        500,
+      ),
+    ).toBe(false);
+  });
+
+  test("an ancestor with no readable parent leaves ownership unknown", () => {
+    expect(callerAncestryOwns(owner(999), probe, () => undefined, 500)).toBeUndefined();
+  });
+
+  test("an ancestor that is gone ends the walk as not owned", () => {
+    expect(callerAncestryOwns(owner(999), probe, () => null, 500)).toBe(false);
+  });
 });

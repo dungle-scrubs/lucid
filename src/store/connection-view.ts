@@ -63,6 +63,13 @@ export function observeConnection(
 ): ConnectionStatus {
   const { executorPresent, now, ownerPresence: probe } = observation;
   const binding = state.connection?.binding;
+  if (!binding && state.nativePublication?.fallback)
+    return {
+      message:
+        "No live session is connected. Notes get replies from a new headless session with this conversation's settings.",
+      reason: state.nativePublication.failure?.reason ?? null,
+      state: "headless-fallback",
+    };
   if (!binding && state.nativePublication) {
     const failure = state.nativePublication.failure;
     const delivery = state.nativePublication.legacyDelivery;
