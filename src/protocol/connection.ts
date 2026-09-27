@@ -1033,7 +1033,7 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
         publication.failure.reason !== FALLBACK_FAILURE_REASON
       )
         return refuseConnection(state, now, "connection-not-admitted");
-      if (hasUnsettledPublicationDelivery(state))
+      if (hasUnsettledExecution(state) || hasUnsettledPublicationDelivery(state))
         return refuseConnection(state, now, "execution-blocked");
       if (publication.fallback) return refuseConnection(state, now, "connection-conflict");
       next = {

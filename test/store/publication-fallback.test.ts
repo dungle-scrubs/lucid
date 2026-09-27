@@ -206,3 +206,33 @@ test("a crash between the failure and the fallback stays held until the same pub
     replayed.close();
   }
 });
+
+test("a bound record never falls back", () => {
+  const { dir, root } = recordIn();
+  const owner = readProcessOwner(process.pid);
+  if (!owner) throw new Error("Expected the test process identity");
+  const binding = {
+    generation: crypto.randomUUID(),
+    harness: "codex" as const,
+    interface: "codex-cli" as const,
+    nativeSessionId: "bound-native",
+    owner,
+    registrationId: crypto.randomUUID(),
+    workingDirectory: root,
+  };
+  const host = openWriter(dir, { connectionAuthority: () => binding, ownerPresence: () => true });
+  try {
+    host.recordNativePublication();
+    expect(
+      host.writeConnection({ actionId: binding.generation, binding, kind: "bound" }).verdict,
+    ).toBe("accepted");
+    host.recordNativePublication(missing);
+    expect(host.recordPublicationFallback()).toMatchObject({
+      issue: "connection-not-admitted",
+      verdict: "refused",
+    });
+    expect(requiresNativeConnection(host.state())).toBe(true);
+  } finally {
+    host.close();
+  }
+});

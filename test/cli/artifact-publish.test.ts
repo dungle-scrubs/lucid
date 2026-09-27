@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { publishArtifact } from "../../src/cli/artifact-publish.js";
@@ -658,6 +658,30 @@ test("origin is validated on creation and ignored on an existing conversation", 
       none,
     );
     expect(revised.publication).toEqual({ status: "published", version: 2 });
+    const meta = JSON.parse(
+      readFileSync(join(conversations(root).dirFor(created.conversationId), "meta.json"), "utf8"),
+    );
+    expect(meta.creation.request.origin).toEqual({
+      harness: "pi",
+      sessionFile: "/work/session.jsonl",
+    });
+    // A native connector never runs for a fallback record.
+    let connectorCalls = 0;
+    const third = await publishArtifact(
+      {
+        artifact: artifact(3),
+        conversationId: created.conversationId,
+        serverUrl: "http://127.0.0.1:17454",
+      },
+      root,
+      none,
+      () => {
+        connectorCalls++;
+        throw new Error("A fallback record must not reach a connector");
+      },
+    );
+    expect(connectorCalls).toBe(0);
+    expect(third.connection).toMatchObject({ state: "headless-fallback" });
   } finally {
     rmSync(root, { force: true, recursive: true });
   }

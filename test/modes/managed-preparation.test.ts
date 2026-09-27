@@ -1274,3 +1274,33 @@ test("a fresh dispatch points at the origin transcript only when the record decl
     }
   }
 });
+
+test("a publication fallback waits for a managed attempt that started before the requirement", async () => {
+  const f = await setup();
+  const preparation = createManagedPreparation({
+    host: f.host,
+    offerContext: f.offerContext,
+    runner: f.runner,
+    driver,
+    cwd: f.root,
+  });
+  try {
+    const result = await preparation.prepare({ ...input, signal: new AbortController().signal });
+    expect(result.kind).toBe("ready");
+    expect(f.host.state().executions.request).toMatchObject({ kind: "attempt-started" });
+    expect(f.host.recordNativePublication().verdict).toBe("accepted");
+    expect(f.host.state().nativePublication?.legacyDelivery).toMatchObject({
+      inFlight: 0,
+      uncertainInputs: [],
+    });
+    f.host.recordNativePublication({ message: "No registration.", reason: "registration-missing" });
+    expect(f.host.recordPublicationFallback()).toMatchObject({
+      issue: "execution-blocked",
+      verdict: "refused",
+    });
+    expect(f.host.state().nativePublication?.fallback).toBeNull();
+  } finally {
+    preparation.close();
+    f.close();
+  }
+});

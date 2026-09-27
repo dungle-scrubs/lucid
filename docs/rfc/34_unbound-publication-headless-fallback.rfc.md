@@ -225,7 +225,7 @@ Otherwise it refuses with the reason shown:
 | `state.connection === null` (never bound) | `connection-not-admitted` |
 | `nativePublication.failure?.actionId === failureActionId` | `connection-not-admitted` |
 | `nativePublication.failure.reason === "registration-missing"` | `connection-not-admitted` |
-| `hasUnsettledPublicationDelivery(state) === false` | `execution-blocked` |
+| `hasUnsettledExecution(state) === false` and `hasUnsettledPublicationDelivery(state) === false` | `execution-blocked` |
 | `nativePublication.fallback === null` | `connection-conflict` |
 
 The fact's `actionId` goes into `nativePublication.actions`, like the
@@ -276,9 +276,10 @@ hold history, which RFC 26's binding guards refuse
 (`src/protocol/connection.ts:1044-1048`). A person who wants native
 delivery starts a new conversation from an integrated session.
 
-`connectPublication` reads the record state first. When `fallback` is not
-null, it skips registration lookup and returns the fallback projection
-from section 5. A later publication into a fallback record therefore
+`publishArtifact` reads the record state before it selects a connector.
+When `fallback` is not null, it runs no connector, native or ordinary,
+does no registration lookup, and returns the fallback projection from
+section 5. A later publication into a fallback record therefore
 writes its artifact and changes no connection state.
 
 ### 4. Writing the fallback: two ordered appends
@@ -343,12 +344,15 @@ predicate. The remaining fences still apply unchanged:
   rechecks the predicate at attempt creation and at the dispatch boundary
   (RFC 26 F2, F4).
 
-No managed attempt can be in flight when the fallback is written. Two
-rules cover the two cases. An attempt that started before the
-requirement is captured in `legacyDelivery` at the request transition
-(`src/protocol/connection.ts:1024-1035`), and the guard row
-`hasUnsettledPublicationDelivery(state) === false` refuses the fallback
-until it settles. An attempt after the requirement cannot start: RFC 26
+No managed attempt can be in flight when the fallback is written. Three
+rules cover the cases. Input issued before the requirement is captured in
+`legacyDelivery` at the request transition
+(`src/protocol/connection.ts:1024-1035`). A managed attempt that recorded
+`attempt-started` before the requirement but has no applied disposition
+is in neither counter; `hasUnsettledExecution`, the guard that `bound`
+already uses, covers it. The guard row refuses the fallback until both
+settle. A refused fallback leaves the record held, and a repeat of the
+same publication retries it (section 4). An attempt after the requirement cannot start: RFC 26
 F2 and F4 recheck the predicate at attempt creation, executor
 acquisition, and the dispatch boundary, and the predicate was true until
 the fallback append. A pre-requirement attempt that ends `uncertain`
@@ -682,6 +686,11 @@ answered here.
 | R34-23 Linux keeps the defect | Applied. Linux gets a `/proc/<pid>/stat` parent read; other platforms stay held, stated. |
 | R34-24 check order in `observeConnection` | Applied. Section 5. |
 | R34-25 bind-versus-fallback race | Applied. Section 4. |
+
+Implementation review (`gpt-6-astra@codex`, 2026-09-27) found two defects,
+both fixed in code and text: the guard table lacked
+`hasUnsettledExecution` (section 2, section 5), and a native connector ran
+before the fallback short-circuit (section 3).
 
 ## References
 

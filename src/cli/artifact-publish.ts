@@ -243,9 +243,13 @@ export async function publishArtifact(
       )
         throw new HubError(`Artifact publication refused: ${result.issue}.`, "E-HUB-03", 409);
     }
+    // Fallback is terminal for every connector, including a native one.
+    const fallback = host.state().nativePublication?.fallback
+      ? { ...fallbackStatus(host), persistence: "saved" as const }
+      : null;
     host.close();
     closed = true;
-    const connection = connect(records, id);
+    const connection = fallback ?? connect(records, id);
     return {
       artifactUrl: `${url.origin}/c/${encodeURIComponent(id)}/${encodeURIComponent(params.artifactId)}`,
       connection,
