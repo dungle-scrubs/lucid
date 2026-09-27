@@ -20,6 +20,7 @@ import { createConversationHost, viewSnapshot } from "../../src/store/conversati
 import { presenceHeld } from "../../src/store/presence.js";
 import { replaceSettings } from "../../src/store/settings.js";
 import { createConversationRecord } from "../../src/store/store.js";
+import { compileBinary } from "../helpers/compile-binary.js";
 
 function workerFixture(hang = false) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "lucid-worker-process-")));
@@ -104,7 +105,9 @@ test("contender worker processes run one accepted task and exit without holding 
     await Promise.all(children.map((child) => child.exited));
     rmSync(root, { recursive: true, force: true });
   }
-});
+  // Two worker processes start from source and each runs several hcn calls:
+  // about 4.5 s on a loaded machine, too close to bun's 5 s default.
+}, 15000);
 
 const alive = (pid: number): boolean => {
   try {
@@ -121,11 +124,10 @@ test("compiled background launch completes one task and all worker processes exi
   const binary = join(f.root, "compiled-worker");
   mkdirSync(budget);
   try {
-    await Bun.build({
-      compile: { autoloadBunfig: false, autoloadDotenv: false, outfile: binary },
-      entrypoints: [resolve(import.meta.dir, "../helpers/compiled-worker.ts")],
+    await compileBinary({
+      entrypoint: resolve(import.meta.dir, "../helpers/compiled-worker.ts"),
+      outfile: binary,
       plugins: [tailwind],
-      throw: true,
     });
     const child = Bun.spawn([binary, "launch-worker", f.root, "process", "accepted"], {
       env: { ...f.env, LUCID_TEST_PROCESS_BUDGET: budget },

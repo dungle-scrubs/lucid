@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { env } from "node:process";
 import { requestBackgroundWorker } from "../../src/cli/background-worker.js";
 import { BACKGROUND_COMMAND, shellCommand } from "../../src/cli/invocation.js";
+import { compileBinary } from "../helpers/compile-binary.js";
 
 test("a managed worker cannot recursively launch another worker", () => {
   const previous = env[BACKGROUND_COMMAND];
@@ -23,10 +24,9 @@ test("compiled worker commands route directly to their internal subcommand", asy
   const root = mkdtempSync(join(tmpdir(), "lucid-compiled-routing-"));
   const binary = join(root, "routing-probe");
   try {
-    await Bun.build({
-      compile: { autoloadBunfig: false, autoloadDotenv: false, outfile: binary },
-      entrypoints: [resolve(import.meta.dir, "../helpers/compiled-routing.ts")],
-      throw: true,
+    await compileBinary({
+      entrypoint: resolve(import.meta.dir, "../helpers/compiled-routing.ts"),
+      outfile: binary,
     });
     // The probe only prints argv. It cannot launch workers or a server.
     const child = Bun.spawn([binary], { stderr: "pipe", stdout: "pipe", timeout: 5000 });
