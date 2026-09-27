@@ -1,10 +1,20 @@
 import { expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { dispatch } from "../../src/cli/dispatch.js";
 import { selfInvocation } from "../../src/cli/invocation.js";
 import { piExtensionSource } from "../../src/harness/pi-extension.js";
+import { acquireAppendLock } from "../../src/store/flock.js";
 
 const cli = (file: string, json = true) => [
   "connection",
@@ -31,9 +41,15 @@ test("Pi setup creates a missing settings file with the extension at mode 0600",
     expect(saved.extensions).toHaveLength(1);
     expect(typeof saved.extensions[0]).toBe("string");
     expect(lstatSync(file).mode & 0o777).toBe(0o600);
-    const entry = JSON.parse(output.pop() ?? "null");
-    expect(entry).toMatchObject({ ready: false, status: "installed", trustRequired: true });
-    expect(entry.hooksFile).toBe(file);
+    expect(JSON.parse(output.pop() ?? "null")).toEqual({
+      hooksFile: file,
+      message:
+        "Lucid's Pi extension is configured in this Pi settings file. Start a new Pi session so the extension's session_start registers it. Setup alone does not mean Lucid is listening.",
+      ready: false,
+      reason: null,
+      status: "installed",
+      trustRequired: true,
+    });
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
@@ -58,6 +74,29 @@ test("Pi setup preserves existing keys and other extensions in order", async () 
   }
 });
 
+test("a settings file without an extensions key gains one and keeps its other keys", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-pi-setup-add-"));
+  try {
+    const file = join(root, "settings.json");
+    const records = join(root, "records");
+    writeFileSync(file, JSON.stringify({ model: "m", theme: "dark" }), { mode: 0o644 });
+    expect(await dispatch(cli(file), { rootDir: records, onOutput: () => {} })).toMatchObject({
+      verdict: "installed",
+    });
+    const saved = JSON.parse(readFileSync(file, "utf8"));
+    expect(Object.keys(saved).sort()).toEqual(["extensions", "model", "theme"]);
+    expect(saved.model).toBe("m");
+    expect(saved.theme).toBe("dark");
+    expect(saved.extensions).toHaveLength(1);
+    expect(saved.extensions[0].startsWith(join(records, ".integrations", "pi", "lucid-"))).toBe(
+      true,
+    );
+    expect(saved.extensions[0].endsWith(".js")).toBe(true);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test("a second Pi setup run is unchanged and writes nothing", async () => {
   const root = mkdtempSync(join(tmpdir(), "lucid-pi-setup-twice-"));
   try {
@@ -71,7 +110,9 @@ test("a second Pi setup run is unchanged and writes nothing", async () => {
       verdict: "unchanged",
     });
     expect(readFileSync(file, "utf8")).toBe(bytes);
-    expect(lstatSync(file).mtimeMs).toBe(before.mtimeMs);
+    const after = lstatSync(file);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+    expect(after.ino).toBe(before.ino);
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
@@ -100,6 +141,107 @@ test("Pi setup replaces an older Lucid entry under the same root and keeps one u
   } finally {
     rmSync(root, { force: true, recursive: true });
     rmSync(otherRoot, { force: true, recursive: true });
+  }
+});
+
+test("files under the integration directory that are not lucid-*.js are kept", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-pi-setup-foreign-"));
+  try {
+    const file = join(root, "settings.json");
+    const records = join(root, "records");
+    const other = join(records, ".integrations", "pi", "other.js");
+    const notJs = join(records, ".integrations", "pi", "lucid-x.txt");
+    mkdirSync(dirname(other), { recursive: true });
+    writeFileSync(other, "export default function () {}");
+    writeFileSync(notJs, "not javascript");
+    writeFileSync(file, JSON.stringify({ extensions: [other, notJs] }));
+    expect(await dispatch(cli(file), { rootDir: records, onOutput: () => {} })).toMatchObject({
+      verdict: "installed",
+    });
+    const saved = JSON.parse(readFileSync(file, "utf8"));
+    expect(saved.extensions.slice(0, 2)).toEqual([other, notJs]);
+    expect(saved.extensions).toHaveLength(3);
+    expect(existsSync(other)).toBe(true);
+    expect(existsSync(notJs)).toBe(true);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("a symlinked Pi settings file refuses settings-symlink and changes nothing", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-pi-setup-link-"));
+  try {
+    const target = join(root, "managed-settings.json");
+    const bytes = JSON.stringify({ theme: "dark" });
+    writeFileSync(target, bytes);
+    const link = join(root, "link-settings.json");
+    symlinkSync(target, link);
+    const output: string[] = [];
+    expect(
+      await dispatch(cli(link), {
+        rootDir: join(root, "records"),
+        onOutput: (line: string) => output.push(line),
+      }),
+    ).toEqual({ kind: "connection-setup", verdict: "refused" });
+    expect(JSON.parse(output.pop() ?? "null")).toMatchObject({
+      reason: "settings-symlink",
+      status: "refused",
+    });
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(readFileSync(link, "utf8")).toBe(bytes);
+    expect(readFileSync(target, "utf8")).toBe(bytes);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("a held setup lock refuses settings-busy and the file is unchanged", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-pi-setup-busy-"));
+  try {
+    const file = join(root, "settings.json");
+    const bytes = JSON.stringify({ theme: "dark" });
+    writeFileSync(file, bytes);
+    const lock = acquireAppendLock(`${file}.lucid-setup`, { privateFile: true, timeoutMs: 0 });
+    try {
+      const output: string[] = [];
+      expect(
+        await dispatch(cli(file), {
+          rootDir: join(root, "records"),
+          onOutput: (line: string) => output.push(line),
+        }),
+      ).toEqual({ kind: "connection-setup", verdict: "refused" });
+      expect(JSON.parse(output.pop() ?? "null")).toMatchObject({
+        reason: "settings-busy",
+        status: "refused",
+      });
+      expect(readFileSync(file, "utf8")).toBe(bytes);
+    } finally {
+      lock.release();
+    }
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("a directory at the settings path refuses settings-unreadable", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-pi-setup-dir-"));
+  try {
+    const path = join(root, "settings.json");
+    mkdirSync(path);
+    const output: string[] = [];
+    expect(
+      await dispatch(cli(path), {
+        rootDir: join(root, "records"),
+        onOutput: (line: string) => output.push(line),
+      }),
+    ).toEqual({ kind: "connection-setup", verdict: "refused" });
+    expect(JSON.parse(output.pop() ?? "null")).toMatchObject({
+      reason: "settings-unreadable",
+      status: "refused",
+    });
+    expect(lstatSync(path).isDirectory()).toBe(true);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
   }
 });
 
