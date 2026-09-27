@@ -4,9 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DispatchDeps } from "../../src/cli/dispatch.js";
 import { dispatch } from "../../src/cli/dispatch.js";
+import { commitOperation } from "../../src/cli/hooks/native-commit.js";
 import type { PiHookDeps } from "../../src/cli/hooks/pi.js";
 import { runPiHook } from "../../src/cli/hooks/pi.js";
 import { mapSubcommand } from "../../src/cli/mapping.js";
+import { piSessionAuthority } from "../../src/cli/pi-commands.js";
 import { conversations } from "../../src/cli/record-addressing.js";
 import { readConnection } from "../../src/store/connection-view.js";
 import { openWriter, viewConversation } from "../../src/store/conversation-host.js";
@@ -18,6 +20,7 @@ const SESSION = "pi-session-01";
 const OTHER_SESSION = "pi-session-02";
 const PI_PID = 4242;
 const OTHER_PI_PID = 4343;
+const SHELL_PID = 4000;
 const PI_EXE = "/opt/pi-runtime/bin/node";
 
 /** The first line of a real file, as the hook's own bounded reader reports it. */
@@ -31,7 +34,8 @@ const firstLine = (path: string): string | null | undefined => {
   }
 };
 
-/** The synthetic process chain: this test process, its parent the Pi runtime. */
+/** The synthetic process chain: this test process, its parent the Pi runtime,
+ * and above that a readable shell whose own parent is pid 1. */
 const deps = (overrides: Partial<PiHookDeps> = {}): PiHookDeps => ({
   now: () => Date.now(),
   parentPid: () => PI_PID,
@@ -39,8 +43,10 @@ const deps = (overrides: Partial<PiHookDeps> = {}): PiHookDeps => ({
     pid === process.pid
       ? { executable: "/bin/agent-shell", parentPid: PI_PID, pid, startedAt: `${pid}:0` }
       : pid === PI_PID
-        ? { executable: PI_EXE, parentPid: 1, pid: PI_PID, startedAt: "4242:1" }
-        : undefined,
+        ? { executable: PI_EXE, parentPid: SHELL_PID, pid: PI_PID, startedAt: "4242:1" }
+        : pid === SHELL_PID
+          ? { executable: "/bin/zsh", parentPid: 1, pid: SHELL_PID, startedAt: "4000:1" }
+          : undefined,
   readFirstLine: firstLine,
   readParentPid: () => undefined,
   realpath: (value: string) => value,
@@ -251,6 +257,30 @@ test("an owner that runs under a JavaScript runtime or a Pi process is not regis
   }
 });
 
+test("an owner whose parent is pid 1 has no parent shell and is not registered", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-pi-hook-orphan-"));
+  try {
+    const orphaned = {
+      probe: (pid: number) =>
+        pid === process.pid
+          ? { executable: "/bin/agent-shell", parentPid: PI_PID, pid, startedAt: `${pid}:0` }
+          : pid === PI_PID
+            ? { executable: PI_EXE, parentPid: 1, pid: PI_PID, startedAt: "4242:1" }
+            : undefined,
+    };
+    expect(await run(root, "session-start", capture("session-start"), orphaned)).toEqual({
+      kind: "refused",
+      message:
+        "This Pi process has no parent shell, so Lucid does not register it. Start Pi directly from a terminal.",
+      reason: "native-context-unverified",
+      v: 1,
+    });
+    expect(existsSync(join(root, ".registrations"))).toBe(false);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test("an owner under a shell and then launchd registers, and the session file header must name the session and folder", async () => {
   const root = mkdtempSync(join(tmpdir(), "lucid-pi-hook-shell-"));
   try {
@@ -430,8 +460,9 @@ test("a tool-result bind commit records the Pi registration as the record's bind
     expect(result).toMatchObject({ kind: "committed", v: 1 });
     if (result.kind !== "committed") throw new Error("Missing bind result");
     expect(result.text).toContain(`Connection for ${conversationId}`);
+    // The record's binding names the registration the bind committed under.
     expect(
-      readConnection(conversations(root).dirFor(conversationId), { ownerPresence: () => true }),
+      viewConversation(conversations(root).dirFor(conversationId)).state.connection?.binding,
     ).toMatchObject({
       interface: "pi-cli",
       nativeSessionId: SESSION,
@@ -453,10 +484,12 @@ test("a proposal saved under another owner's session refuses before any registra
         pid === process.pid
           ? { executable: "/bin/agent-shell", parentPid: parent, pid, startedAt: `${pid}:0` }
           : pid === PI_PID
-            ? { executable: PI_EXE, parentPid: 1, pid: PI_PID, startedAt: "4242:1" }
+            ? { executable: PI_EXE, parentPid: SHELL_PID, pid: PI_PID, startedAt: "4242:1" }
             : pid === OTHER_PI_PID
-              ? { executable: PI_EXE, parentPid: 1, pid: OTHER_PI_PID, startedAt: "4343:1" }
-              : undefined,
+              ? { executable: PI_EXE, parentPid: SHELL_PID, pid: OTHER_PI_PID, startedAt: "4343:1" }
+              : pid === SHELL_PID
+                ? { executable: "/bin/zsh", parentPid: 1, pid: SHELL_PID, startedAt: "4000:1" }
+                : undefined,
     };
     // Owner B registers and saves a bind proposal under its own session.
     parent = OTHER_PI_PID;
@@ -521,6 +554,56 @@ test("a commit names its registration: a replaced generation refuses and changes
     });
     if (result.kind !== "committed") throw new Error("Missing replaced result");
     expect(result.text).toContain(`${proposal.nonce}: refused (registration-replaced)`);
+    expect(viewConversation(dir).state.seq).toBe(before);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("commitOperation itself names its registration: a stale generation refuses and changes nothing", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-pi-hook-direct-commit-"));
+  try {
+    const conversationId = publicationRecord(root, "pi direct commit record");
+    expect(await run(root, "session-start", capture("session-start"))).toMatchObject({
+      kind: "registered",
+    });
+    const first = registered(root);
+    if (!first.ok) throw new Error(first.message);
+    // Bind the record under generation 1 through the hook, as a real session does.
+    const bind = saveNativeProposal(root, first.value, { conversationId, kind: "bind" });
+    expect(
+      await run(root, "tool-result", {
+        ...capture("tool-result"),
+        markers: [`lucid-pi-proposal:${bind.nonce}`],
+        toolCallId: "call-1",
+      }),
+    ).toMatchObject({ kind: "committed", v: 1 });
+    // The same owner re-registers: generation 2 replaces generation 1 under the same key.
+    expect(await run(root, "session-start", capture("session-start"))).toMatchObject({
+      kind: "registered",
+    });
+    const second = registered(root);
+    if (!second.ok) throw new Error(second.message);
+    expect(second.value.registrationId).not.toBe(first.value.registrationId);
+    const records = conversations(root);
+    const dir = records.dirFor(conversationId);
+    const before = viewConversation(dir).state.seq;
+    // Called directly, with no earlier proposal checks to catch the case first.
+    const receipt = commitOperation(
+      records,
+      { kind: "receipt", conversationId, offerId: crypto.randomUUID() },
+      first.value,
+      piSessionAuthority(SESSION, deps().probe),
+    );
+    expect(receipt).toContain("stale-registration");
+    expect(viewConversation(dir).state.seq).toBe(before);
+    const listen = commitOperation(
+      records,
+      { kind: "listen", conversationId },
+      first.value,
+      piSessionAuthority(SESSION, deps().probe),
+    );
+    expect(listen).toContain("stale-registration");
     expect(viewConversation(dir).state.seq).toBe(before);
   } finally {
     rmSync(root, { force: true, recursive: true });

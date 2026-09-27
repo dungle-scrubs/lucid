@@ -28,11 +28,18 @@ export function commitOperation(
       );
       return `Connection for ${conversationId}: ${status.state}. ${status.message}`;
     }
-    case "listen":
-      return `Listening for ${conversationId}: ${
-        requestNativeListening(records, conversationId, authority, registration.registrationId)
-          .message
+    case "listen": {
+      const listening = requestNativeListening(
+        records,
+        conversationId,
+        authority,
+        registration.registrationId,
+      );
+      // A held listen names its reason, as the hook's own refusal lines do.
+      return `Listening for ${conversationId}: ${listening.message}${
+        listening.kind === "held" ? ` (${listening.reason})` : ""
       }`;
+    }
     case "receipt":
     case "respond": {
       const control: ConnectionControl =
@@ -46,7 +53,10 @@ export function commitOperation(
         authority,
         registration.registrationId,
       );
-      return `${operation.kind === "receipt" ? "Receipt" : "Response"} for offer ${operation.offerId}: ${result.verdict}. ${result.message}`;
+      // A refused control names its reason, as the hook's own refusal lines do.
+      return `${operation.kind === "receipt" ? "Receipt" : "Response"} for offer ${
+        operation.offerId
+      }: ${result.verdict}${result.reason ? ` (${result.reason})` : ""}. ${result.message}`;
     }
   }
 }

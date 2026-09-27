@@ -52,7 +52,6 @@ test.each(["confirmed", "lost-response", "receipt-after-loss", "offered-before-c
         nativeSessionId: "native-one",
         observedAt: reads,
         reason: null,
-        registrationId: null,
         savedPreference: null,
         state: "not-listening",
       };

@@ -18,7 +18,6 @@ const initial: BrowserConnection = {
   nativeSessionId: "native-one",
   observedAt: 1000,
   reason: "owner-unknown",
-  registrationId: null,
   savedPreference: null,
   state: "owner-unknown",
 };

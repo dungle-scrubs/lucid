@@ -34,6 +34,8 @@ const INVALID_CAPTURE_MESSAGE = "The Pi hook capture is invalid.";
 const UNVERIFIED_PARENT_MESSAGE = "The Pi process that started this helper could not be verified.";
 const RUNTIME_ANCESTRY_MESSAGE =
   "This Pi session runs inside another JavaScript runtime or Pi process, so Lucid does not register it. Start Pi directly from a terminal.";
+const ORPHAN_OWNER_MESSAGE =
+  "This Pi process has no parent shell, so Lucid does not register it. Start Pi directly from a terminal.";
 const SESSION_FILE_MESSAGE =
   "This Pi session's own session file does not match the captured session or folder, so Lucid does not register it.";
 
@@ -278,6 +280,9 @@ export async function runPiHook(
   if (!("owner" in parent)) return refused("native-context-unverified", parent.message);
   const { owner, ownerParentPid } = parent;
   if (event === "session-start") {
+    // A real Pi TUI always has its shell as its parent; an owner parented to
+    // pid 1 or 0 is a detached process, not a session a person started.
+    if (ownerParentPid <= 1) return refused("native-context-unverified", ORPHAN_OWNER_MESSAGE);
     if (ownerUnderRuntimeOrPi(ownerParentPid, d))
       return refused("native-context-unverified", RUNTIME_ANCESTRY_MESSAGE);
     const sessionFile = sessionFileRefusal(capture, d);
