@@ -98,7 +98,7 @@ as described in RFC 2119.
 - **Capture**: what the extension reads from its own callback context:
   mode, process ID and executable, session ID, session file, working
   folder, and for `tool_result` the tool call ID and the proposal marker
-  lines from the output.
+  tokens from the output.
 - **Supervisor**: the extension's single module-level handle on its
   running helper. It owns spawn, kill, and await.
 - **Verify-after-open**: the headless-role check. Pi opens a session; the
@@ -234,13 +234,14 @@ captured `pid`, and the parent executable to equal the captured
    including one that resumed the parent session with the parent's
    `PI_SESSION_ID`, is such a process: Pi runs under a JavaScript runtime.
    Otherwise the command saves a proposal that carries the session ID and
-   a nonce, and prints a marker line. It changes no record. The model must
+   a nonce, and prints a marker. It changes no record. The model must
    run the `lucid` binary directly; a JavaScript launcher (`npx`, `bunx`,
    `pnpm`, `node <script>`) puts a runtime in the chain and refuses. The
    skill text says so (slice 5).
 3. **Commit from `tool_result`.** For a `tool_result` whose `toolName` is
-   `bash`, the extension extracts lines that start with the proposal
-   marker prefix (at most 16; more refuses the batch) and starts `lucid
+   `bash`, the extension extracts marker tokens (the prefix and a nonce)
+   wherever they appear in the output, including inside `--json` output
+   (at most 16 distinct tokens; more refuses the batch) and starts `lucid
    _pi-hook tool-result`. The helper commits a proposal only when all of
    these hold:
    - the parent and role checks pass;
@@ -369,7 +370,7 @@ builds the capture; the helper refuses a larger input before parsing:
   "sessionFile": "/abs/path.jsonl",
   "workingDirectory": "/abs/folder",
   "toolCallId": "<id, tool-result only>",
-  "markers": ["<proposal marker line>", "... at most 16, tool-result only"]
+  "markers": ["<proposal marker token>", "... at most 16, tool-result only"]
 }
 ```
 
@@ -458,7 +459,7 @@ states. `refused` never reaches `input` with `continue`.
 | Owner has no parent shell, runs under a JavaScript runtime or Pi process, or the session file header disagrees | Refuse registration: `native-context-unverified`. |
 | `mode` is not `tui` in an interactive-role event | The extension does not start a helper. |
 | Helper input over 64 KiB, malformed, or with unknown fields | Refuse before parsing or mutation. |
-| More than 16 marker lines in one tool result | Refuse the batch; nothing commits. |
+| More than 16 distinct marker tokens in one tool result | Refuse the batch; nothing commits. |
 | Proposal session is not the registered session | Refuse the proposal: `proposal-session-mismatch`. |
 | A JavaScript runtime or the owner's executable sits between the command and the owner | Refuse the proposal: `proposal-ancestry-unverified`. |
 | A Bash command runs without `PI_SESSION_ID` | No proposal is made; the publication reports `owner-unknown`. Pi sets the variable only when its Bash tool receives the tool context. An extension that replaces the Bash tool must pass that context to Pi's built-in tool. |

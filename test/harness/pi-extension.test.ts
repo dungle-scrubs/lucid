@@ -387,6 +387,39 @@ describe("interactive role", () => {
     });
   });
 
+  test("a marker inside a --json output line is found and committed", async () => {
+    const helper = helperSpawn();
+    helper.output = JSON.stringify({ kind: "committed", text: "Lucid results:\nok", v: 1 });
+    const handlers = loadInteractive(helper.spawn);
+    await handlers.get("session_start")?.({}, tuiContext());
+    const uuid = "5f0c7a3e-1b2d-4c8e-9f10-2a3b4c5d6e7f";
+    const result = await handlers.get("tool_result")?.(
+      bashResult(`{"v":1,"proposal":"lucid-pi-proposal:${uuid}","ok":true}`),
+      tuiContext(),
+    );
+    expect((result as { content: { text: string }[] }).content[1]?.text).toBe("Lucid results:\nok");
+    const capture = JSON.parse(helper.spawns[1]?.stdin ?? "{}");
+    expect(capture).toMatchObject({
+      event: "tool-result",
+      markers: [`lucid-pi-proposal:${uuid}`],
+      toolCallId: "call-1",
+    });
+  });
+
+  test("the same token twice in one result, in JSON and on its own line, is passed once", async () => {
+    const helper = helperSpawn();
+    helper.output = JSON.stringify({ kind: "committed", text: "Lucid results:\nok", v: 1 });
+    const handlers = loadInteractive(helper.spawn);
+    await handlers.get("session_start")?.({}, tuiContext());
+    const token = `lucid-pi-proposal:${"b".repeat(36)}`;
+    await handlers.get("tool_result")?.(
+      bashResult(`{"proposal":"${token}"}\n${token}`),
+      tuiContext(),
+    );
+    const capture = JSON.parse(helper.spawns[1]?.stdin ?? "{}");
+    expect(capture).toMatchObject({ event: "tool-result", markers: [token] });
+  });
+
   test("a helper refusal appends the refusal message", async () => {
     const helper = helperSpawn();
     helper.output = JSON.stringify({
@@ -505,13 +538,16 @@ describe("interactive role", () => {
     expect(helper.spawns).toHaveLength(1);
   });
 
-  test("seventeen markers refuse the batch without starting a helper", async () => {
+  test("seventeen distinct tokens on one line refuse the batch without starting a helper", async () => {
     const helper = helperSpawn();
     const handlers = loadInteractive(helper.spawn);
     await handlers.get("session_start")?.({}, tuiContext());
-    const seventeen = Array.from({ length: 17 }, () => `lucid-pi-proposal:${"a".repeat(36)}`);
+    const seventeen = Array.from(
+      { length: 17 },
+      (_, i) => `lucid-pi-proposal:${i.toString(16).padStart(36, "0")}`,
+    );
     const result = await handlers.get("tool_result")?.(
-      bashResult(seventeen.join("\n")),
+      bashResult(seventeen.join(" ")),
       tuiContext(),
     );
     expect((result as { content: unknown[] }).content).toHaveLength(2);
@@ -526,10 +562,13 @@ describe("interactive role", () => {
     const handlers = loadInteractive(helper.spawn);
     await handlers.get("session_start")?.({}, tuiContext());
     expect(
-      await handlers.get("tool_result")?.(bashResult("lucid-pi-proposal:x"), tuiContext()),
+      await handlers.get("tool_result")?.(
+        bashResult(`lucid-pi-proposal:${"a".repeat(36)}`),
+        tuiContext(),
+      ),
     ).toBeDefined();
     const read = await loadInteractive(helper.spawn).get("tool_result")?.(
-      { ...bashResult("lucid-pi-proposal:x"), toolName: "read" },
+      { ...bashResult(`lucid-pi-proposal:${"a".repeat(36)}`), toolName: "read" },
       tuiContext(),
     );
     expect(read).toBeUndefined();

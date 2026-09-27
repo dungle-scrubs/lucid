@@ -98,7 +98,7 @@ export function lucidPiExtension(
   let verified = false;
 
   // ---- Interactive role (RFC 28 steps 1-3): one short-lived helper per event. ----
-  const MARKER = "lucid-pi-proposal:";
+  const MARKER_TOKEN = /lucid-pi-proposal:[0-9a-f-]{36}/gi;
   const HELPER_RESULT_MAX = 49152;
   const HELPER_TIMEOUT_MS = 15000;
   const UNCONFIRMED = "Lucid could not confirm these proposals. They are not retried.";
@@ -270,7 +270,8 @@ export function lucidPiExtension(
         if (item === null || typeof item !== "object") continue;
         const block = item as { readonly text?: unknown; readonly type?: unknown };
         if (block.type !== "text" || typeof block.text !== "string") continue;
-        for (const line of block.text.split("\n")) if (line.startsWith(MARKER)) markers.push(line);
+        for (const match of block.text.matchAll(MARKER_TOKEN))
+          if (!markers.includes(match[0])) markers.push(match[0]);
       }
       if (markers.length === 0) return undefined;
       if (markers.length > 16)
