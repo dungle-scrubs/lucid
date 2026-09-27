@@ -182,6 +182,28 @@ test("rpc and tui runs take no headless role, even with the variables set", asyn
   }
 });
 
+test("the headless role never starts a settled helper on agent_settled", async () => {
+  const folder = mkdtempSync(join(tmpdir(), "lucid-pi-cwd-"));
+  const manual = manualSpawn();
+  const handlers = new Map<string, Handler>();
+  Object.assign(process.env, {
+    LUCID_PI_ATTEMPT: `${ATTEMPT}.${NONCE}`,
+    LUCID_PI_EXPECTED_SESSION: SESSION,
+    LUCID_PI_EXPECTED_CWD: folder,
+    LUCID_PI_ATTESTATION: join(mkdtempSync(join(tmpdir(), "lucid-pi-att-")), `${ATTEMPT}.json`),
+  });
+  lucidPiExtension(
+    { on: (event: string, handler: Handler) => handlers.set(event, handler) } as never,
+    LUCID,
+    manual.spawn,
+  );
+  await handlers.get("session_start")?.({}, context({ cwd: folder, mode: "json" }));
+  handlers.get("agent_settled")?.({}, context({ cwd: folder, mode: "json" }));
+  expect(manual.spawns).toHaveLength(0);
+  // The headless verification ran and completed; no interactive helper ever spawned.
+  expect(process.exitCode).toBe(0);
+});
+
 test("without LUCID_PI_ATTEMPT the extension registers nothing", () => {
   expect(load({}).size).toBe(0);
 });
@@ -206,8 +228,8 @@ const helperSpawn = () => {
         kill: () => {
           api.killed += 1;
         },
-        on: (event: "close" | "error", listener: () => void) => {
-          if (event === "close") closing.push(listener);
+        on: (event: "close" | "error" | "exit", listener: () => void) => {
+          if (event === "close" || event === "exit") closing.push(listener);
         },
         stdin: {
           end: (payload?: string) => {
@@ -268,6 +290,7 @@ const manualSpawn = () => {
     readonly emitClose: () => void;
     readonly emitData: (chunk: unknown) => void;
     readonly emitError: () => void;
+    readonly emitExit: () => void;
     readonly kills: readonly string[];
   }
   const children: ManualChild[] = [];
@@ -277,6 +300,7 @@ const manualSpawn = () => {
     const closing: (() => void)[] = [];
     const data: ((chunk: unknown) => void)[] = [];
     const errors: (() => void)[] = [];
+    const exits: (() => void)[] = [];
     const record = { args: [command, ...args], stdin: "" };
     spawns.push(record);
     children.push({
@@ -289,14 +313,17 @@ const manualSpawn = () => {
       emitError: () => {
         for (const listener of errors) listener();
       },
+      emitExit: () => {
+        for (const listener of exits) listener();
+      },
       kills,
     });
     return {
       kill: (signal?: string) => {
         kills.push(signal ?? "");
       },
-      on: (event: "close" | "error", listener: () => void) => {
-        (event === "close" ? closing : errors).push(listener);
+      on: (event: "close" | "error" | "exit", listener: () => void) => {
+        (event === "close" ? closing : event === "error" ? errors : exits).push(listener);
       },
       stdin: {
         end: (payload?: string) => {
@@ -737,27 +764,6 @@ describe("interactive role", () => {
       await shuttingDown;
     });
 
-    test("session_start with reason reload cancels the settled helper before re-registering", async () => {
-      const manual = manualSpawn();
-      const handlers = loadInteractive(manual.spawn);
-      const starting = handlers.get("session_start")?.({}, tuiContext());
-      manual.children[0]?.emitClose();
-      await starting;
-      handlers.get("agent_settled")?.({}, tuiContext());
-      const reloading = handlers.get("session_start")?.({ reason: "reload" }, tuiContext());
-      expect(manual.children[1]?.kills).toEqual(["SIGTERM"]);
-      expect(manual.spawns.map((spawn) => spawn.args[3])).toEqual(["session-start", "settled"]);
-      manual.children[1]?.emitClose();
-      await settle();
-      expect(manual.spawns.map((spawn) => spawn.args[3])).toEqual([
-        "session-start",
-        "settled",
-        "session-start",
-      ]);
-      manual.children[2]?.emitClose();
-      await reloading;
-    });
-
     test("session_start with an unrelated reason does not cancel a running helper", async () => {
       const manual = manualSpawn();
       const handlers = loadInteractive(manual.spawn);
@@ -765,11 +771,157 @@ describe("interactive role", () => {
       manual.children[0]?.emitClose();
       await starting;
       handlers.get("agent_settled")?.({}, tuiContext());
-      const compacting = handlers.get("session_start")?.({ reason: "compact" }, tuiContext());
+      const startup = handlers.get("session_start")?.({ reason: "startup" }, tuiContext());
       manual.children[2]?.emitClose();
-      await compacting;
+      await startup;
       expect(manual.children[1]?.kills).toEqual([]);
       manual.children[1]?.emitClose();
+    });
+
+    test.each(["new", "resume", "fork", "reload"])(
+      "session_start with reason %s cancels the settled helper before re-registering",
+      async (reason) => {
+        const manual = manualSpawn();
+        const handlers = loadInteractive(manual.spawn);
+        const starting = handlers.get("session_start")?.({}, tuiContext());
+        manual.children[0]?.emitClose();
+        await starting;
+        handlers.get("agent_settled")?.({}, tuiContext());
+        const replacing = handlers.get("session_start")?.({ reason }, tuiContext());
+        expect(manual.children[1]?.kills).toEqual(["SIGTERM"]);
+        expect(manual.spawns.map((spawn) => spawn.args[3])).toEqual(["session-start", "settled"]);
+        manual.children[1]?.emitClose();
+        await settle();
+        expect(manual.spawns.map((spawn) => spawn.args[3])).toEqual([
+          "session-start",
+          "settled",
+          "session-start",
+        ]);
+        manual.children[2]?.emitClose();
+        await replacing;
+      },
+    );
+
+    test("a settled result over the 49152-byte bound is killed and never delivered", async () => {
+      const manual = manualSpawn();
+      const clock = manualTimers();
+      const { record, sent } = delivery();
+      const handlers = loadInteractive(manual.spawn, LUCID, clock.timers, record);
+      const starting = handlers.get("session_start")?.({}, tuiContext());
+      manual.children[0]?.emitClose();
+      await starting;
+      handlers.get("agent_settled")?.({}, tuiContext());
+      manual.children[1]?.emitData(offered("x".repeat(50_000)));
+      expect(manual.children[1]?.kills).toEqual(["SIGKILL"]);
+      manual.children[1]?.emitClose();
+      await settle();
+      expect(sent).toEqual([]);
+    });
+
+    test("a settled result whose payload is not a string delivers nothing", async () => {
+      const manual = manualSpawn();
+      const { record, sent } = delivery();
+      const handlers = loadInteractive(manual.spawn, LUCID, undefined, record);
+      const starting = handlers.get("session_start")?.({}, tuiContext());
+      manual.children[0]?.emitClose();
+      await starting;
+      handlers.get("agent_settled")?.({}, tuiContext());
+      manual.children[1]?.emitData(
+        JSON.stringify({ kind: "listener", result: { kind: "offered", payload: 42 }, v: 1 }),
+      );
+      manual.children[1]?.emitClose();
+      await settle();
+      expect(sent).toEqual([]);
+    });
+
+    test("agent_settled during session_shutdown starts no helper", async () => {
+      const manual = manualSpawn();
+      const handlers = loadInteractive(manual.spawn);
+      const starting = handlers.get("session_start")?.({}, tuiContext());
+      manual.children[0]?.emitClose();
+      await starting;
+      // Shutdown pends on its own helper; a settled event that fires meanwhile starts nothing.
+      const shuttingDown = handlers.get("session_shutdown")?.({}, tuiContext());
+      await settle();
+      handlers.get("agent_settled")?.({}, tuiContext());
+      expect(manual.spawns.map((spawn) => spawn.args[3])).toEqual([
+        "session-start",
+        "session-shutdown",
+      ]);
+      manual.children[1]?.emitClose();
+      await shuttingDown;
+      expect(manual.spawns.map((spawn) => spawn.args[3])).toEqual([
+        "session-start",
+        "session-shutdown",
+      ]);
+    });
+
+    test("a child that exits delivers its offer even though exit precedes close", async () => {
+      const manual = manualSpawn();
+      const { record, sent } = delivery();
+      const handlers = loadInteractive(manual.spawn, LUCID, undefined, record);
+      const starting = handlers.get("session_start")?.({}, tuiContext());
+      manual.children[0]?.emitClose();
+      await starting;
+      handlers.get("agent_settled")?.({}, tuiContext());
+      manual.children[1]?.emitData(offered("the offer"));
+      manual.children[1]?.emitExit();
+      manual.children[1]?.emitClose();
+      await settle();
+      expect(sent).toEqual([
+        { options: { deliverAs: "followUp", expandPromptTemplates: false }, text: "the offer" },
+      ]);
+    });
+
+    test("input waiting on a child that never exits or closes resolves after the final grace", async () => {
+      const manual = manualSpawn();
+      const clock = manualTimers();
+      const { record, sent } = delivery();
+      const handlers = loadInteractive(manual.spawn, LUCID, clock.timers, record);
+      const starting = handlers.get("session_start")?.({}, tuiContext());
+      manual.children[0]?.emitClose();
+      await starting;
+      handlers.get("agent_settled")?.({}, tuiContext());
+      manual.children[1]?.emitData(offered("stale offer"));
+      const input = handlers.get("input");
+      if (!input) throw new Error("Missing input handler");
+      let finished = false;
+      const cancelling = (async () => {
+        await input({ source: "interactive" }, {});
+        finished = true;
+      })();
+      // The child ignores SIGTERM and SIGKILL and never emits close or exit.
+      expect(manual.children[1]?.kills).toEqual(["SIGTERM"]);
+      expect(finished).toBe(false);
+      clock.advance(2_000);
+      expect(manual.children[1]?.kills).toEqual(["SIGTERM", "SIGKILL"]);
+      expect(finished).toBe(false);
+      clock.advance(1_000);
+      await cancelling;
+      expect(finished).toBe(true);
+      // The offer printed before the cancel is never delivered.
+      expect(sent).toEqual([]);
+    });
+
+    test("a child that exits without closing still resolves the cancel", async () => {
+      const manual = manualSpawn();
+      const clock = manualTimers();
+      const handlers = loadInteractive(manual.spawn, LUCID, clock.timers);
+      const starting = handlers.get("session_start")?.({}, tuiContext());
+      manual.children[0]?.emitClose();
+      await starting;
+      handlers.get("agent_settled")?.({}, tuiContext());
+      const input = handlers.get("input");
+      if (!input) throw new Error("Missing input handler");
+      let finished = false;
+      const cancelling = (async () => {
+        await input({ source: "interactive" }, {});
+        finished = true;
+      })();
+      expect(manual.children[1]?.kills).toEqual(["SIGTERM"]);
+      manual.children[1]?.emitExit();
+      await cancelling;
+      expect(finished).toBe(true);
     });
 
     test("a settled helper that never exits is killed with SIGKILL after 60 s", async () => {

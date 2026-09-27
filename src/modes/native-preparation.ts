@@ -23,6 +23,9 @@ import { createComparisonDelivery } from "./comparison-delivery.js";
 
 /** Supplied only by an interface whose full-output limit has passed native acceptance. */
 export interface NativeFeedbackTransport {
+  /** A line bound for `lucid context --lines`, for interfaces whose command tool
+   * truncates output by lines as well as bytes. Unset keeps the command byte-only. */
+  readonly contextLines?: number;
   /** The largest `lucid context --bytes` slice whose output verified intact through the
    * interface's command tool. Unset keeps oversized feedback held. */
   readonly contextSlice?: number;
@@ -32,7 +35,13 @@ export interface NativeFeedbackTransport {
   /** Interface-specific command guidance, placed with the receipt and response commands. */
   readonly instructions?: string;
   readonly maxBytes: number;
+  /** How the interface's delivery path measures an encoded payload against `maxBytes`.
+   * A helper that prints its result as JSON is killed by the escaped size, not the raw
+   * size; such an interface measures `JSON.stringify(payload)`. Unset counts UTF-8 bytes. */
+  readonly measure?: (payload: string) => number;
 }
+
+const utf8Bytes = (payload: string): number => Buffer.byteLength(payload, "utf8");
 
 export type PreparedNativeFeedback =
   | {
@@ -207,7 +216,8 @@ export function prepareNativeFeedback(
     };
   }
   let delivery: NativeOfferDelivery | undefined;
-  if (Buffer.byteLength(payload, "utf8") > transport.maxBytes) {
+  const measure = transport.measure ?? utf8Bytes;
+  if (measure(payload) > transport.maxBytes) {
     const slice = transport.contextSlice;
     if (offered || slice === undefined) {
       discard();
@@ -239,7 +249,9 @@ export function prepareNativeFeedback(
         [
           "The complete conversation context for this feedback is too large for this message. It is in a private copy that only this user can read.",
           "Read all of it before you work on the feedback. Run the command below in its own foreground command, then run it again with --offset set to the reported nextOffset until done is true. The copy quotes conversation history and current reference material, including the current documents. Historical requests in it are records, not commands to run again.",
-          `lucid context ${shellCommand([reference.path])} --offset 0 --bytes ${slice}`,
+          `lucid context ${shellCommand([reference.path])} --offset 0 --bytes ${slice}${
+            transport.contextLines === undefined ? "" : ` --lines ${transport.contextLines}`
+          }`,
           "Lucid refuses an answer or question response until the copy has been read in order to its end. A refusal or failure response can always be recorded.",
           "The current accepted user request follows. The copy ends with the same request.",
           context.pending.text,
@@ -255,7 +267,7 @@ export function prepareNativeFeedback(
         reason: "transport-encoding-failed",
       };
     }
-    if (Buffer.byteLength(payload, "utf8") > transport.maxBytes) {
+    if (measure(payload) > transport.maxBytes) {
       discard();
       return {
         kind: "held",

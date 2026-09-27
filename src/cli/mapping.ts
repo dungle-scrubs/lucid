@@ -68,6 +68,8 @@ export type MappedCommand =
       readonly path: string;
       readonly offset: number;
       readonly bytes: number;
+      /** An optional line bound: the slice also ends just after this many newlines. */
+      readonly lines?: number;
       readonly json: boolean;
     }
   | { readonly kind: "name-titles"; readonly root: string }
@@ -313,12 +315,13 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
       const help = {
         kind: "help",
         message:
-          "usage: lucid context <offered-directory> [--offset BYTE] [--bytes COUNT] [--json]\nRead a bounded slice of offered conversation context. Reports nextOffset and done.",
+          "usage: lucid context <offered-directory> [--offset BYTE] [--bytes COUNT] [--lines COUNT] [--json]\nRead a bounded slice of offered conversation context. The slice ends at the earlier of --bytes and the byte after the COUNT-th newline. Reports nextOffset and done.",
       } as const;
       const path = rest[0];
       if (!path || path.startsWith("--")) return help;
       let offset = 0;
       let bytes = 65_536;
+      let lines: number | undefined;
       let json = false;
       const used = new Set<string>();
       for (let index = 1; index < rest.length; index++) {
@@ -331,7 +334,7 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
         }
         const value = rest[++index];
         if (
-          (flag !== "--offset" && flag !== "--bytes") ||
+          (flag !== "--offset" && flag !== "--bytes" && flag !== "--lines") ||
           value === undefined ||
           !/^\d+$/.test(value)
         )
@@ -339,9 +342,15 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
         const number = Number(value);
         if (!Number.isSafeInteger(number)) return help;
         if (flag === "--offset") offset = number;
-        else bytes = number;
+        else if (flag === "--bytes") bytes = number;
+        else {
+          if (number < 1) return help;
+          lines = number;
+        }
       }
-      return { kind: "context", path, offset, bytes, json };
+      return lines === undefined
+        ? { kind: "context", path, offset, bytes, json }
+        : { kind: "context", path, offset, bytes, lines, json };
     }
     case "_name-titles":
       return rest.length === 1 && rest[0]

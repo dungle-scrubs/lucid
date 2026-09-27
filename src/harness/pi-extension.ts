@@ -51,7 +51,7 @@ export interface PiHelperCommand {
 /** The part of a spawned child the interactive role reads; tests pass a fake. */
 export interface PiHelperChild {
   kill(signal?: string): void;
-  on(event: "close" | "error", listener: () => void): void;
+  on(event: "close" | "error" | "exit", listener: () => void): void;
   readonly stdin: {
     end(data?: string): void;
     on(event: "error", listener: (error: unknown) => void): void;
@@ -114,6 +114,8 @@ export function lucidPiExtension(
   const HELPER_TIMEOUT_MS = 15000;
   const SETTLED_TIMEOUT_MS = 60000;
   const CANCEL_KILL_MS = 2000;
+  // After the cancel SIGKILL, how long the supervisor still waits for exit evidence.
+  const CANCEL_FINAL_MS = 1000;
   const UNCONFIRMED = "Lucid could not confirm these proposals. They are not retried.";
   const clock: PiHelperTimers = timers ?? {
     clearTimeout: (handle) => clearTimeout(handle as Parameters<typeof clearTimeout>[0]),
@@ -201,6 +203,7 @@ export function lucidPiExtension(
     });
 
   // ---- Interactive listening (RFC 28 steps 4-6): one supervised settled helper. ----
+  let closing = false;
   let current:
     | {
         readonly child: PiHelperChild;
@@ -216,7 +219,8 @@ export function lucidPiExtension(
 
   /** RFC 28 step 4: start the settled helper unawaited; the supervisor owns its lifecycle. */
   const startSettled = (ctx: PiContext): void => {
-    if (current !== undefined || lucid === undefined || lucid.command.length === 0) return;
+    if (closing || current !== undefined || lucid === undefined || lucid.command.length === 0)
+      return;
     const [program, ...tail] = lucid.command;
     if (program === undefined) return;
     let child: PiHelperChild;
@@ -229,12 +233,14 @@ export function lucidPiExtension(
     } catch {
       return;
     }
-    let done = false;
+    let settled = false;
+    let closed = false;
     let discarded = false;
     let bytes = 0;
     const chunks: Buffer[] = [];
     let deadline: unknown;
     let grace: unknown;
+    let final: unknown;
     let released: () => void = () => {};
     const exited = new Promise<void>((resolve) => {
       released = resolve;
@@ -244,12 +250,16 @@ export function lucidPiExtension(
       try {
         child.kill(signal);
       } catch {}
+      // A child that ignores SIGKILL (a grandchild holds its pipe) must not block
+      // Pi's prompt forever: after a grace period the supervisor stops waiting.
+      if (signal === "SIGKILL") final = clock.setTimeout(() => settle(), CANCEL_FINAL_MS);
     };
     const settle = (): void => {
-      if (done) return;
-      done = true;
+      if (settled) return;
+      settled = true;
       clock.clearTimeout(deadline);
       clock.clearTimeout(grace);
+      clock.clearTimeout(final);
       current = undefined;
       released();
     };
@@ -260,6 +270,7 @@ export function lucidPiExtension(
         discarded = true;
         clock.clearTimeout(deadline);
         clock.clearTimeout(grace);
+        clock.clearTimeout(final);
         try {
           child.kill("SIGTERM");
         } catch {}
@@ -267,9 +278,13 @@ export function lucidPiExtension(
       },
     };
     deadline = clock.setTimeout(() => discard("SIGKILL"), SETTLED_TIMEOUT_MS);
+    // `exit` proves the process is gone even when a grandchild holds the pipes
+    // open and `close` never fires; `error` covers a spawn that never was.
     child.on("error", () => settle());
+    child.on("exit", () => settle());
     child.on("close", () => {
-      if (done) return;
+      if (closed) return;
+      closed = true;
       // The supervisor clears current before the result is read (RFC 28 step 4),
       // so the next agent_settled may already start a new helper while this one
       // delivers. A cancelled or timed-out helper never delivers, even when it
@@ -304,7 +319,6 @@ export function lucidPiExtension(
     });
     if (child.stdout)
       child.stdout.on("data", (chunk: unknown) => {
-        if (done) return;
         const buffer =
           typeof chunk === "string"
             ? Buffer.from(chunk, "utf8")
@@ -402,6 +416,8 @@ export function lucidPiExtension(
   pi.on("session_shutdown", async (_event, ctx) => {
     try {
       if (role === "interactive" && lucid !== undefined) {
+        // Shutdown is closing: a settled helper that fires now starts nothing.
+        closing = true;
         await cancelSettled();
         await runHelper("session-shutdown", capture("session-shutdown", ctx));
       }

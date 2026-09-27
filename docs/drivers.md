@@ -235,9 +235,11 @@ filename retain separate copies. The offered text is also returned for budget
 accounting before dispatch.
 
 An offered copy lives in a private temporary directory outside the record.
-`lucid context <offered-directory> [--offset BYTE] [--bytes COUNT] [--json]`
+`lucid context <offered-directory> [--offset BYTE] [--bytes COUNT] [--lines COUNT] [--json]`
 reads that copy directly, without HTTP or record access. Each read returns at
-most 65,536 bytes on UTF-8 boundaries, with nextOffset and done. Each read that starts
+most 65,536 bytes on UTF-8 boundaries, with nextOffset and done; `--lines` ends
+the slice at the earlier of `--bytes` and the byte just after that many
+newlines, for readers that truncate output by lines as well as bytes. Each read that starts
 within the prefix already read in order extends that prefix in a private
 `progress.json`; other reads are served and do not count. A native
 reference offer uses this record to refuse an answer before its copy was

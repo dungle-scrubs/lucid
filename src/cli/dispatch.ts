@@ -75,6 +75,9 @@ export interface DispatchDeps {
   readonly claudeHookFn?: typeof import("./hooks/claude.js").runClaudeHook;
   /** For `_pi-hook`: the stdin the bounded capture reader reads. Defaults to `process.stdin`. */
   readonly piCaptureInput?: AsyncIterable<Uint8Array | string>;
+  /** For `_pi-hook`: the hook runner, so tests inject the process-probe deps dispatch
+   * cannot supply. Production uses `runPiHook`; dispatch passes its `signal` through. */
+  readonly piHookFn?: typeof import("./hooks/pi.js").runPiHook;
   /** Claude Code session reported to a tool command; null disables detection. Defaults to the
    * environment unless a test injects `nativeAuthority`. */
   readonly claudeSession?: string | null;
@@ -245,6 +248,7 @@ export const dispatch = async (
     const records = (deps.conversationsFactory ?? conversations)(mapped.root ?? deps.rootDir);
     // A capture over the byte bound is refused before it is parsed (RFC 28 Message Formats).
     const text = await readBoundedInput(deps.piCaptureInput ?? process.stdin, PI_CAPTURE_MAX_BYTES);
+    const hook = deps.piHookFn ?? runPiHook;
     const result =
       text === null
         ? {
@@ -253,7 +257,7 @@ export const dispatch = async (
             reason: "invalid-capture",
             v: 1 as const,
           }
-        : await runPiHook(records, mapped.event, text, { signal: deps.signal });
+        : await hook(records, mapped.event, text, { signal: deps.signal });
     (deps.onOutput ?? console.log)(JSON.stringify(result));
     return { kind: "pi-hook" };
   }
@@ -426,7 +430,7 @@ export const dispatch = async (
   }
   if (mapped.kind === "context") {
     const { readOfferedContext } = await import("../store/context-offer.js");
-    const result = readOfferedContext(mapped.path, mapped.offset, mapped.bytes);
+    const result = readOfferedContext(mapped.path, mapped.offset, mapped.bytes, mapped.lines);
     const output = deps.onOutput ?? ((line: string) => console.log(line));
     output(
       mapped.json

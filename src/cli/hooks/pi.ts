@@ -372,8 +372,13 @@ export async function runPiHook(
       (registration) => registration,
       authority,
     );
-    if (!current.ok) return refused(current.reason, current.message);
-    if (current.value.owner.pid !== owner.pid)
+    // A session Lucid no longer knows is not this helper's to report: ordinary
+    // turns stay silent, as the Claude Stop branch does.
+    if (!current.ok)
+      return current.reason === "registration-missing"
+        ? { kind: "listener", result: { kind: "skipped" }, v: 1 }
+        : refused(current.reason, current.message);
+    if (!sameProcessOwner(current.value.owner, owner))
       return refused("proposal-session-mismatch", SETTLED_MISMATCH_MESSAGE);
     const result = await listenAtNativeStop(records, current.value, authority, {
       listener: { now: d.now, wait: d.wait ?? pause },
