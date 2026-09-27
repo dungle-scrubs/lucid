@@ -1,5 +1,6 @@
 import { closeSync, constants, openSync, readSync, realpathSync } from "node:fs";
 import { basename } from "node:path";
+import type { NativeListenerResult } from "../../modes/native-listener.js";
 import { readParentPid, readProcessOwner } from "../../process-owner.js";
 import { path } from "../../protocol/connection.js";
 import { isWireId } from "../../protocol/frames.js";
@@ -17,12 +18,13 @@ import {
   withNativeRegistration,
 } from "../../store/native-registration.js";
 import { refusePublicationConnection } from "../artifact-publish.js";
+import { listenAtNativeStop } from "../native-lifecycle.js";
 import { piSessionAuthority } from "../pi-commands.js";
 import type { Conversations } from "../record-addressing.js";
 import { commitOperation } from "./native-commit.js";
 
-/** The Pi extension's helper events (RFC 28 slice 3). `settled` arrives with listening. */
-export type PiHookEvent = "session-start" | "session-shutdown" | "tool-result";
+/** The Pi extension's helper events (RFC 28 slice 3, plus `settled` from slice 4). */
+export type PiHookEvent = "session-start" | "session-shutdown" | "settled" | "tool-result";
 
 /** One helper capture from stdin is bounded before it is parsed. */
 export const PI_CAPTURE_MAX_BYTES = 65_536;
@@ -38,6 +40,11 @@ const ORPHAN_OWNER_MESSAGE =
   "This Pi process has no parent shell, so Lucid does not register it. Start Pi directly from a terminal.";
 const SESSION_FILE_MESSAGE =
   "This Pi session's own session file does not match the captured session or folder, so Lucid does not register it.";
+const SETTLED_MISMATCH_MESSAGE =
+  "This Pi session's registration names a different Pi process, so Lucid does not listen in this session.";
+
+/** A signal that never aborts: the default when no process signal is wired into the helper. */
+const NEVER_ABORTS = new AbortController().signal;
 
 const BASE_KEYS = [
   "v",
@@ -65,6 +72,10 @@ export interface PiHookDeps {
   readonly readParentPid: (pid: number) => number | null | undefined;
   readonly realpath: (path: string) => string;
   readonly now: () => number;
+  /** Ends a `settled` listener wait; the helper still prints its result (RFC 28 slice 4). */
+  readonly signal?: AbortSignal;
+  /** The listener wait seam, as `listenAtNativeStop` accepts; tests inject a clock-driven one. */
+  readonly wait?: (ms: number, signal: AbortSignal) => Promise<void>;
 }
 
 export type PiHookResult =
@@ -76,6 +87,11 @@ export type PiHookResult =
     }
   | { readonly v: 1; readonly kind: "removed"; readonly removed: boolean }
   | { readonly v: 1; readonly kind: "committed"; readonly text: string }
+  | {
+      readonly v: 1;
+      readonly kind: "listener";
+      readonly result: NativeListenerResult | { readonly kind: "skipped" };
+    }
   | { readonly v: 1; readonly kind: "refused"; readonly reason: string; readonly message: string };
 
 const refused = (reason: string, message: string): PiHookResult => ({
@@ -101,6 +117,23 @@ function readHeaderLine(path: string): string | null | undefined {
   } catch (cause) {
     return (cause as NodeJS.ErrnoException).code === "ENOENT" ? undefined : null;
   }
+}
+
+/** The listener's default wait, matching `native-listener.ts`: abort ends the pause early. */
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const finish = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal.addEventListener("abort", finish, { once: true });
+  });
 }
 
 /** Read at most `maxBytes`; a larger input stops reading and reports `null` without parsing. */
@@ -326,6 +359,32 @@ export async function runPiHook(
     return "removed" in result
       ? { kind: "removed", removed: result.removed, v: 1 }
       : refused(result.reason, result.message);
+  }
+  if (event === "settled") {
+    // RFC 28 step 4: the helper runs the same Stop listener the Claude Stop hook runs.
+    // It resolves the registration through the callback's session, then requires that
+    // registration to belong to the verified parent, so a settled callback from another
+    // Pi process never listens under this session's name.
+    const authority = piSessionAuthority(capture.nativeSessionId, d.probe);
+    const current = withNativeRegistration(
+      records.rootDir,
+      undefined,
+      (registration) => registration,
+      authority,
+    );
+    // A session Lucid no longer knows is not this helper's to report: ordinary
+    // turns stay silent, as the Claude Stop branch does.
+    if (!current.ok)
+      return current.reason === "registration-missing"
+        ? { kind: "listener", result: { kind: "skipped" }, v: 1 }
+        : refused(current.reason, current.message);
+    if (!sameProcessOwner(current.value.owner, owner))
+      return refused("proposal-session-mismatch", SETTLED_MISMATCH_MESSAGE);
+    const result = await listenAtNativeStop(records, current.value, authority, {
+      listener: { now: d.now, wait: d.wait ?? pause },
+      signal: d.signal ?? NEVER_ABORTS,
+    });
+    return { kind: "listener", result, v: 1 };
   }
   // Commits locate the registration through the callback's session; the session itself
   // proves nothing beyond locating (RFC 28 Security Considerations).

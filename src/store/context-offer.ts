@@ -236,11 +236,14 @@ export function renderAttachmentReferences(attachments: readonly OfferedAttachme
 }
 
 /** Reads one fixed file in an offered directory. No record root, file name,
- * HTTP token, or user-controlled relative path is accepted. */
+ * HTTP token, or user-controlled relative path is accepted. `maxLines`, when set,
+ * ends the slice at the earlier of `maxBytes` and the byte just after that many
+ * newlines, so a caller whose reader truncates by lines still reads in order. */
 export function readOfferedContext(
   path: string,
   offset: number,
   maxBytes: number,
+  maxLines?: number,
 ): {
   readonly done: boolean;
   readonly nextOffset: number;
@@ -254,7 +257,8 @@ export function readOfferedContext(
     offset < 0 ||
     !Number.isSafeInteger(maxBytes) ||
     maxBytes < 4 ||
-    maxBytes > CONTEXT_SLICE_MAX
+    maxBytes > CONTEXT_SLICE_MAX ||
+    (maxLines !== undefined && (!Number.isSafeInteger(maxLines) || maxLines < 1))
   )
     throw new ContextPreparationError("Invalid offered context range or directory");
   const directory = lstatSync(path);
@@ -284,15 +288,29 @@ export function readOfferedContext(
       throw new ContextPreparationError("The offered context file or range is invalid");
     const buffer = Buffer.alloc(Math.min(maxBytes, stat.size - HEADER.length - offset));
     const bytes = readSync(fd, buffer, 0, buffer.length, HEADER.length + offset);
+    // The line bound shortens the slice first; the byte bound and the UTF-8 trim
+    // then apply to what remains, so `nextOffset` always follows the shorter slice.
+    let end = bytes;
+    if (maxLines !== undefined) {
+      let newlines = 0;
+      for (let index = 0; index < end; index++) {
+        if (buffer[index] !== 0x0a) continue;
+        newlines += 1;
+        if (newlines === maxLines) {
+          end = index + 1;
+          break;
+        }
+      }
+    }
     // Keep byte offsets stable while avoiding a split UTF-8 character at
     // the end of a slice. A caller cannot start inside a character.
-    for (let trim = 0; trim <= 3 && trim <= bytes; trim++) {
-      if (bytes > 0 && bytes === trim) break;
+    for (let trim = 0; trim <= 3 && trim <= end; trim++) {
+      if (end > 0 && end === trim) break;
       try {
         const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
-          buffer.subarray(0, bytes - trim),
+          buffer.subarray(0, end - trim),
         );
-        const nextOffset = offset + bytes - trim;
+        const nextOffset = offset + end - trim;
         recordReadProgress(canonical, offset, nextOffset);
         return { done: nextOffset === stat.size - HEADER.length, nextOffset, text };
       } catch {

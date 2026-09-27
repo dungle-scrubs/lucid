@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli } from "../../src/cli/dispatch.js";
+import { mapSubcommand } from "../../src/cli/mapping.js";
 import { readProcessOwner } from "../../src/process-owner.js";
 import { encodeAnnotationBatch } from "../../src/protocol/annotations.js";
 import { putBlob } from "../../src/store/blobs.js";
@@ -180,6 +181,71 @@ test("context CLI reads its offered copy without opening the record or using HTT
   } finally {
     offered.close();
     rmSync(record, { force: true, recursive: true });
+  }
+});
+
+test("a line-bounded slice ends after the counted newline and reads continue in order", () => {
+  const record = mkdtempSync(join(tmpdir(), "lucid-context-lines-"));
+  const content = `${Array.from({ length: 10 }, (_, index) => `line-${index}`).join("\n")}\n`;
+  const offered = offerContext(record, content);
+  try {
+    // --lines 3 returns three lines and the byte just after the third newline.
+    const first = readOfferedContext(offered.path, 0, 4096, 3);
+    expect(first).toEqual({
+      done: false,
+      nextOffset: "line-0\nline-1\nline-2\n".length,
+      text: "line-0\nline-1\nline-2\n",
+    });
+    // A following read without --lines continues from there, as before.
+    expect(readOfferedContext(offered.path, first.nextOffset, 4096)).toEqual({
+      done: true,
+      nextOffset: content.length,
+      text: "line-3\nline-4\nline-5\nline-6\nline-7\nline-8\nline-9\n",
+    });
+    // The byte bound still ends the slice when it comes first.
+    expect(readOfferedContext(offered.path, 0, 10, 3)).toEqual({
+      done: false,
+      nextOffset: 10,
+      text: "line-0\nlin",
+    });
+  } finally {
+    offered.close();
+    rmSync(record, { recursive: true, force: true });
+  }
+});
+
+test("the context CLI accepts --lines and refuses zero and non-integer counts as usage errors", async () => {
+  const record = mkdtempSync(join(tmpdir(), "lucid-context-lines-cli-"));
+  const content = `${Array.from({ length: 10 }, (_, index) => `line-${index}`).join("\n")}\n`;
+  const offered = offerContext(record, content);
+  const output: string[] = [];
+  try {
+    await runCli(
+      ["context", offered.path, "--offset", "0", "--bytes", "1024", "--lines", "3", "--json"],
+      {
+        conversationsFactory: () => {
+          throw new Error("must not open records");
+        },
+        onOutput: (line) => output.push(line),
+      },
+    );
+    expect(JSON.parse(output[0] ?? "{}")).toEqual({
+      done: false,
+      nextOffset: "line-0\nline-1\nline-2\n".length,
+      text: "line-0\nline-1\nline-2\n",
+    });
+    // A line count that is not a positive integer is a usage error, like a bad --bytes.
+    for (const flag of ["0", "1.5", "-1", "abc", "3e2"]) {
+      expect(mapSubcommand(["context", offered.path, "--bytes", "1024", "--lines", flag])).toEqual(
+        expect.objectContaining({ kind: "help" }),
+      );
+    }
+    expect(mapSubcommand(["context", offered.path, "--bytes", "1024"])).toEqual(
+      expect.objectContaining({ kind: "context" }),
+    );
+  } finally {
+    offered.close();
+    rmSync(record, { recursive: true, force: true });
   }
 });
 

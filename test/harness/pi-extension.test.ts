@@ -84,7 +84,7 @@ test("the extension removes its variables before any tool can read them", () => 
     expect(process.env[name]).toBeUndefined();
 });
 
-test("the expected session and folder with messages is verified and the prompt continues", () => {
+test("the expected session and folder with messages is verified and the prompt continues", async () => {
   const folder = mkdtempSync(join(tmpdir(), "lucid-pi-cwd-"));
   const { handlers, read } = headless(folder);
   handlers.get("session_start")?.({}, context({ cwd: folder }));
@@ -96,7 +96,7 @@ test("the expected session and folder with messages is verified and the prompt c
     expected: SESSION,
     opened: SESSION,
   });
-  expect(handlers.get("input")?.({}, {})).toEqual({ action: "continue" });
+  expect(await handlers.get("input")?.({}, {})).toEqual({ action: "continue" });
   expect(process.exitCode).toBe(0);
 });
 
@@ -106,12 +106,12 @@ test.each([
   ["folder-mismatch", { cwd: "/elsewhere" }],
   ["folder-mismatch", { headerCwd: "/elsewhere" }],
   ["session-empty", { entries: [{ type: "model_change" }, { type: "thinking_level_change" }] }],
-])("a %s refuses, writes the reason, exits 3, and drops the prompt", (reason, opts) => {
+])("a %s refuses, writes the reason, exits 3, and drops the prompt", async (reason, opts) => {
   const folder = mkdtempSync(join(tmpdir(), "lucid-pi-cwd-"));
   const { handlers, read } = headless(folder);
   handlers.get("session_start")?.({}, context({ cwd: folder, ...opts }));
   expect(read()).toMatchObject({ outcome: "refused", reason, attempt: ATTEMPT, nonce: NONCE });
-  expect(handlers.get("input")?.({}, {})).toEqual({ action: "handled" });
+  expect(await handlers.get("input")?.({}, {})).toEqual({ action: "handled" });
   expect(process.exitCode).toBe(3);
 });
 
@@ -124,7 +124,7 @@ test("a folder reached through a symlink matches by real path", () => {
   expect(read().outcome).toBe("verified");
 });
 
-test("a throwing session manager refuses as verification-failed", () => {
+test("a throwing session manager refuses as verification-failed", async () => {
   const folder = mkdtempSync(join(tmpdir(), "lucid-pi-cwd-"));
   const { handlers, read } = headless(folder);
   const broken = {
@@ -137,26 +137,26 @@ test("a throwing session manager refuses as verification-failed", () => {
   };
   handlers.get("session_start")?.({}, broken);
   expect(read()).toMatchObject({ outcome: "refused", reason: "verification-failed" });
-  expect(handlers.get("input")?.({}, {})).toEqual({ action: "handled" });
+  expect(await handlers.get("input")?.({}, {})).toEqual({ action: "handled" });
 });
 
-test("the prompt is dropped when session_start never ran", () => {
+test("the prompt is dropped when session_start never ran", async () => {
   const folder = mkdtempSync(join(tmpdir(), "lucid-pi-cwd-"));
   const { handlers } = headless(folder);
-  expect(handlers.get("input")?.({}, {})).toEqual({ action: "handled" });
+  expect(await handlers.get("input")?.({}, {})).toEqual({ action: "handled" });
 });
 
-test("an existing attestation file is never overwritten, and the prompt is dropped", () => {
+test("an existing attestation file is never overwritten, and the prompt is dropped", async () => {
   const folder = mkdtempSync(join(tmpdir(), "lucid-pi-cwd-"));
   const { handlers, attestation } = headless(folder);
   writeFileSync(attestation, "earlier");
   handlers.get("session_start")?.({}, context({ cwd: folder }));
   expect(readFileSync(attestation, "utf8")).toBe("earlier");
-  expect(handlers.get("input")?.({}, {})).toEqual({ action: "handled" });
+  expect(await handlers.get("input")?.({}, {})).toEqual({ action: "handled" });
   expect(process.exitCode).toBe(3);
 });
 
-test("an unparsable attempt writes no file and drops the prompt", () => {
+test("an unparsable attempt writes no file and drops the prompt", async () => {
   const folder = mkdtempSync(join(tmpdir(), "lucid-pi-cwd-"));
   const dir = mkdtempSync(join(tmpdir(), "lucid-pi-att-"));
   const handlers = load({
@@ -167,19 +167,41 @@ test("an unparsable attempt writes no file and drops the prompt", () => {
   });
   handlers.get("session_start")?.({}, context({ cwd: folder }));
   expect(() => readFileSync(join(dir, "x.json"))).toThrow();
-  expect(handlers.get("input")?.({}, {})).toEqual({ action: "handled" });
+  expect(await handlers.get("input")?.({}, {})).toEqual({ action: "handled" });
   expect(process.exitCode).toBe(3);
 });
 
-test("rpc and tui runs take no headless role, even with the variables set", () => {
+test("rpc and tui runs take no headless role, even with the variables set", async () => {
   const folder = mkdtempSync(join(tmpdir(), "lucid-pi-cwd-"));
   for (const mode of ["rpc", "tui"]) {
     const { handlers, attestation } = headless(folder);
     handlers.get("session_start")?.({}, context({ cwd: folder, mode }));
     expect(() => readFileSync(attestation)).toThrow();
-    expect(handlers.get("input")?.({}, {})).toBeUndefined();
+    expect(await handlers.get("input")?.({}, {})).toBeUndefined();
     expect(process.exitCode).toBe(0);
   }
+});
+
+test("the headless role never starts a settled helper on agent_settled", async () => {
+  const folder = mkdtempSync(join(tmpdir(), "lucid-pi-cwd-"));
+  const manual = manualSpawn();
+  const handlers = new Map<string, Handler>();
+  Object.assign(process.env, {
+    LUCID_PI_ATTEMPT: `${ATTEMPT}.${NONCE}`,
+    LUCID_PI_EXPECTED_SESSION: SESSION,
+    LUCID_PI_EXPECTED_CWD: folder,
+    LUCID_PI_ATTESTATION: join(mkdtempSync(join(tmpdir(), "lucid-pi-att-")), `${ATTEMPT}.json`),
+  });
+  lucidPiExtension(
+    { on: (event: string, handler: Handler) => handlers.set(event, handler) } as never,
+    LUCID,
+    manual.spawn,
+  );
+  await handlers.get("session_start")?.({}, context({ cwd: folder, mode: "json" }));
+  handlers.get("agent_settled")?.({}, context({ cwd: folder, mode: "json" }));
+  expect(manual.spawns).toHaveLength(0);
+  // The headless verification ran and completed; no interactive helper ever spawned.
+  expect(process.exitCode).toBe(0);
 });
 
 test("without LUCID_PI_ATTEMPT the extension registers nothing", () => {
@@ -206,8 +228,8 @@ const helperSpawn = () => {
         kill: () => {
           api.killed += 1;
         },
-        on: (event: "close" | "error", listener: () => void) => {
-          if (event === "close") closing.push(listener);
+        on: (event: "close" | "error" | "exit", listener: () => void) => {
+          if (event === "close" || event === "exit") closing.push(listener);
         },
         stdin: {
           end: (payload?: string) => {
@@ -227,10 +249,18 @@ const helperSpawn = () => {
   return api;
 };
 
-const loadInteractive = (spawn: PiHelperSpawn, lucid = LUCID, timers?: PiHelperTimers) => {
+const loadInteractive = (
+  spawn: PiHelperSpawn,
+  lucid = LUCID,
+  timers?: PiHelperTimers,
+  sendUserMessage?: (text: string, options: unknown) => void,
+) => {
   const handlers = new Map<string, Handler>();
   lucidPiExtension(
-    { on: (event: string, handler: Handler) => handlers.set(event, handler) } as never,
+    {
+      on: (event: string, handler: Handler) => handlers.set(event, handler),
+      sendUserMessage,
+    } as never,
     lucid,
     spawn,
     timers,
@@ -260,14 +290,19 @@ const manualSpawn = () => {
     readonly emitClose: () => void;
     readonly emitData: (chunk: unknown) => void;
     readonly emitError: () => void;
+    readonly emitExit: () => void;
     readonly kills: readonly string[];
   }
   const children: ManualChild[] = [];
-  const spawn: PiHelperSpawn = () => {
+  const spawns: { args: string[]; stdin: string }[] = [];
+  const spawn: PiHelperSpawn = (command, args) => {
     const kills: string[] = [];
     const closing: (() => void)[] = [];
     const data: ((chunk: unknown) => void)[] = [];
     const errors: (() => void)[] = [];
+    const exits: (() => void)[] = [];
+    const record = { args: [command, ...args], stdin: "" };
+    spawns.push(record);
     children.push({
       emitClose: () => {
         for (const listener of closing) listener();
@@ -278,23 +313,28 @@ const manualSpawn = () => {
       emitError: () => {
         for (const listener of errors) listener();
       },
+      emitExit: () => {
+        for (const listener of exits) listener();
+      },
       kills,
     });
     return {
       kill: (signal?: string) => {
         kills.push(signal ?? "");
       },
-      on: (event: "close" | "error", listener: () => void) => {
-        (event === "close" ? closing : errors).push(listener);
+      on: (event: "close" | "error" | "exit", listener: () => void) => {
+        (event === "close" ? closing : event === "error" ? errors : exits).push(listener);
       },
       stdin: {
-        end: () => {},
+        end: (payload?: string) => {
+          record.stdin = payload ?? "";
+        },
         on: () => {},
       },
       stdout: { on: (_event: "data", listener: (chunk: unknown) => void) => data.push(listener) },
     } satisfies PiHelperChild;
   };
-  return { children, spawn };
+  return { children, spawns, spawn };
 };
 
 /** A manual clock for the helper timeout: advancing it fires what elapsed. */
@@ -578,7 +618,342 @@ describe("interactive role", () => {
     const helper = helperSpawn();
     const handlers = loadInteractive(helper.spawn);
     await handlers.get("session_start")?.({}, tuiContext());
-    expect(handlers.get("input")?.({}, {})).toBeUndefined();
+    expect(await handlers.get("input")?.({}, {})).toBeUndefined();
+  });
+
+  describe("settled supervisor (RFC 28 steps 4-6)", () => {
+    /** The extension's delivery recorder for `pi.sendUserMessage`. */
+    const delivery = () => {
+      const sent: { options: unknown; text: string }[] = [];
+      return {
+        record: (text: string, options: unknown): void => {
+          sent.push({ options, text });
+        },
+        sent,
+      };
+    };
+    const offered = (payload: string): string =>
+      JSON.stringify({ kind: "listener", result: { kind: "offered", payload }, v: 1 });
+
+    test("agent_settled starts one settled helper; a second while it runs starts nothing", async () => {
+      const manual = manualSpawn();
+      const handlers = loadInteractive(manual.spawn);
+      // Before session_start sets the role, agent_settled starts nothing.
+      handlers.get("agent_settled")?.({}, tuiContext());
+      expect(manual.spawns).toHaveLength(0);
+      const starting = handlers.get("session_start")?.({}, tuiContext());
+      manual.children[0]?.emitClose();
+      await starting;
+      handlers.get("agent_settled")?.({}, tuiContext());
+      handlers.get("agent_settled")?.({}, tuiContext());
+      expect(manual.spawns.map((spawn) => spawn.args[3])).toEqual(["session-start", "settled"]);
+      expect(JSON.parse(manual.spawns[1]?.stdin ?? "{}")).toMatchObject({
+        event: "settled",
+        mode: "tui",
+        nativeSessionId: SESSION,
+        workingDirectory: "/work",
+      });
+      manual.children[1]?.emitClose();
+      // After it exits, the next agent_settled starts a new helper.
+      handlers.get("agent_settled")?.({}, tuiContext());
+      expect(manual.spawns.map((spawn) => spawn.args[3])).toEqual([
+        "session-start",
+        "settled",
+        "settled",
+      ]);
+      manual.children[2]?.emitClose();
+    });
+
+    test("an offered settled result calls sendUserMessage once with followUp delivery", async () => {
+      const manual = manualSpawn();
+      const { record, sent } = delivery();
+      const handlers = loadInteractive(manual.spawn, LUCID, undefined, record);
+      const starting = handlers.get("session_start")?.({}, tuiContext());
+      manual.children[0]?.emitClose();
+      await starting;
+      handlers.get("agent_settled")?.({}, tuiContext());
+      manual.children[1]?.emitData(offered("the offer"));
+      manual.children[1]?.emitClose();
+      await settle();
+      expect(sent).toEqual([
+        { options: { deliverAs: "followUp", expandPromptTemplates: false }, text: "the offer" },
+      ]);
+    });
+
+    test("a skipped or malformed settled result delivers nothing", async () => {
+      const manual = manualSpawn();
+      const { record, sent } = delivery();
+      const handlers = loadInteractive(manual.spawn, LUCID, undefined, record);
+      const starting = handlers.get("session_start")?.({}, tuiContext());
+      manual.children[0]?.emitClose();
+      await starting;
+      handlers.get("agent_settled")?.({}, tuiContext());
+      manual.children[1]?.emitData(
+        JSON.stringify({ kind: "listener", result: { kind: "skipped" }, v: 1 }),
+      );
+      manual.children[1]?.emitClose();
+      await settle();
+      handlers.get("agent_settled")?.({}, tuiContext());
+      manual.children[2]?.emitData("not json");
+      manual.children[2]?.emitClose();
+      await settle();
+      expect(sent).toEqual([]);
+    });
+
+    test("interactive input cancels the helper and never delivers its offer", async () => {
+      const manual = manualSpawn();
+      const clock = manualTimers();
+      const { record, sent } = delivery();
+      const handlers = loadInteractive(manual.spawn, LUCID, clock.timers, record);
+      const starting = handlers.get("session_start")?.({}, tuiContext());
+      manual.children[0]?.emitClose();
+      await starting;
+      handlers.get("agent_settled")?.({}, tuiContext());
+      manual.children[1]?.emitData(offered("stale offer"));
+      const input = handlers.get("input");
+      if (!input) throw new Error("Missing input handler");
+      let finished = false;
+      const cancelling = (async () => {
+        await input({ source: "interactive" }, {});
+        finished = true;
+      })();
+      expect(manual.children[1]?.kills).toEqual(["SIGTERM"]);
+      expect(finished).toBe(false);
+      clock.advance(2000);
+      expect(manual.children[1]?.kills).toEqual(["SIGTERM", "SIGKILL"]);
+      expect(finished).toBe(false);
+      manual.children[1]?.emitClose();
+      await cancelling;
+      expect(finished).toBe(true);
+      expect(sent).toEqual([]);
+      expect(manual.spawns.map((spawn) => spawn.args[3])).toEqual(["session-start", "settled"]);
+    });
+
+    test("input with an extension or rpc source does not cancel", async () => {
+      const manual = manualSpawn();
+      const handlers = loadInteractive(manual.spawn);
+      const starting = handlers.get("session_start")?.({}, tuiContext());
+      manual.children[0]?.emitClose();
+      await starting;
+      handlers.get("agent_settled")?.({}, tuiContext());
+      await handlers.get("input")?.({ source: "extension" }, {});
+      await handlers.get("input")?.({ source: "rpc" }, {});
+      expect(manual.children[1]?.kills).toEqual([]);
+      manual.children[1]?.emitClose();
+    });
+
+    test("session_shutdown cancels the settled helper before its own helper starts", async () => {
+      const manual = manualSpawn();
+      const handlers = loadInteractive(manual.spawn);
+      const starting = handlers.get("session_start")?.({}, tuiContext());
+      manual.children[0]?.emitClose();
+      await starting;
+      handlers.get("agent_settled")?.({}, tuiContext());
+      const shuttingDown = handlers.get("session_shutdown")?.({}, tuiContext());
+      // The running helper is terminated and awaited before the shutdown helper spawns.
+      expect(manual.children[1]?.kills).toEqual(["SIGTERM"]);
+      expect(manual.spawns.map((spawn) => spawn.args[3])).toEqual(["session-start", "settled"]);
+      manual.children[1]?.emitClose();
+      await settle();
+      expect(manual.spawns.map((spawn) => spawn.args[3])).toEqual([
+        "session-start",
+        "settled",
+        "session-shutdown",
+      ]);
+      manual.children[2]?.emitClose();
+      await shuttingDown;
+    });
+
+    test("session_start with an unrelated reason does not cancel a running helper", async () => {
+      const manual = manualSpawn();
+      const handlers = loadInteractive(manual.spawn);
+      const starting = handlers.get("session_start")?.({}, tuiContext());
+      manual.children[0]?.emitClose();
+      await starting;
+      handlers.get("agent_settled")?.({}, tuiContext());
+      const startup = handlers.get("session_start")?.({ reason: "startup" }, tuiContext());
+      manual.children[2]?.emitClose();
+      await startup;
+      expect(manual.children[1]?.kills).toEqual([]);
+      manual.children[1]?.emitClose();
+    });
+
+    test.each(["new", "resume", "fork", "reload"])(
+      "session_start with reason %s cancels the settled helper before re-registering",
+      async (reason) => {
+        const manual = manualSpawn();
+        const handlers = loadInteractive(manual.spawn);
+        const starting = handlers.get("session_start")?.({}, tuiContext());
+        manual.children[0]?.emitClose();
+        await starting;
+        handlers.get("agent_settled")?.({}, tuiContext());
+        const replacing = handlers.get("session_start")?.({ reason }, tuiContext());
+        expect(manual.children[1]?.kills).toEqual(["SIGTERM"]);
+        expect(manual.spawns.map((spawn) => spawn.args[3])).toEqual(["session-start", "settled"]);
+        manual.children[1]?.emitClose();
+        await settle();
+        expect(manual.spawns.map((spawn) => spawn.args[3])).toEqual([
+          "session-start",
+          "settled",
+          "session-start",
+        ]);
+        manual.children[2]?.emitClose();
+        await replacing;
+      },
+    );
+
+    test("a settled result over the 49152-byte bound is killed and never delivered", async () => {
+      const manual = manualSpawn();
+      const clock = manualTimers();
+      const { record, sent } = delivery();
+      const handlers = loadInteractive(manual.spawn, LUCID, clock.timers, record);
+      const starting = handlers.get("session_start")?.({}, tuiContext());
+      manual.children[0]?.emitClose();
+      await starting;
+      handlers.get("agent_settled")?.({}, tuiContext());
+      manual.children[1]?.emitData(offered("x".repeat(50_000)));
+      expect(manual.children[1]?.kills).toEqual(["SIGKILL"]);
+      manual.children[1]?.emitClose();
+      await settle();
+      expect(sent).toEqual([]);
+    });
+
+    test("a settled result whose payload is not a string delivers nothing", async () => {
+      const manual = manualSpawn();
+      const { record, sent } = delivery();
+      const handlers = loadInteractive(manual.spawn, LUCID, undefined, record);
+      const starting = handlers.get("session_start")?.({}, tuiContext());
+      manual.children[0]?.emitClose();
+      await starting;
+      handlers.get("agent_settled")?.({}, tuiContext());
+      manual.children[1]?.emitData(
+        JSON.stringify({ kind: "listener", result: { kind: "offered", payload: 42 }, v: 1 }),
+      );
+      manual.children[1]?.emitClose();
+      await settle();
+      expect(sent).toEqual([]);
+    });
+
+    test("agent_settled during session_shutdown starts no helper", async () => {
+      const manual = manualSpawn();
+      const handlers = loadInteractive(manual.spawn);
+      const starting = handlers.get("session_start")?.({}, tuiContext());
+      manual.children[0]?.emitClose();
+      await starting;
+      // Shutdown pends on its own helper; a settled event that fires meanwhile starts nothing.
+      const shuttingDown = handlers.get("session_shutdown")?.({}, tuiContext());
+      await settle();
+      handlers.get("agent_settled")?.({}, tuiContext());
+      expect(manual.spawns.map((spawn) => spawn.args[3])).toEqual([
+        "session-start",
+        "session-shutdown",
+      ]);
+      manual.children[1]?.emitClose();
+      await shuttingDown;
+      expect(manual.spawns.map((spawn) => spawn.args[3])).toEqual([
+        "session-start",
+        "session-shutdown",
+      ]);
+    });
+
+    test("a child that exits delivers its offer even though exit precedes close", async () => {
+      const manual = manualSpawn();
+      const { record, sent } = delivery();
+      const handlers = loadInteractive(manual.spawn, LUCID, undefined, record);
+      const starting = handlers.get("session_start")?.({}, tuiContext());
+      manual.children[0]?.emitClose();
+      await starting;
+      handlers.get("agent_settled")?.({}, tuiContext());
+      manual.children[1]?.emitData(offered("the offer"));
+      manual.children[1]?.emitExit();
+      manual.children[1]?.emitClose();
+      await settle();
+      expect(sent).toEqual([
+        { options: { deliverAs: "followUp", expandPromptTemplates: false }, text: "the offer" },
+      ]);
+    });
+
+    test("input waiting on a child that never exits or closes resolves after the final grace", async () => {
+      const manual = manualSpawn();
+      const clock = manualTimers();
+      const { record, sent } = delivery();
+      const handlers = loadInteractive(manual.spawn, LUCID, clock.timers, record);
+      const starting = handlers.get("session_start")?.({}, tuiContext());
+      manual.children[0]?.emitClose();
+      await starting;
+      handlers.get("agent_settled")?.({}, tuiContext());
+      manual.children[1]?.emitData(offered("stale offer"));
+      const input = handlers.get("input");
+      if (!input) throw new Error("Missing input handler");
+      let finished = false;
+      const cancelling = (async () => {
+        await input({ source: "interactive" }, {});
+        finished = true;
+      })();
+      // The child ignores SIGTERM and SIGKILL and never emits close or exit.
+      expect(manual.children[1]?.kills).toEqual(["SIGTERM"]);
+      expect(finished).toBe(false);
+      clock.advance(2_000);
+      expect(manual.children[1]?.kills).toEqual(["SIGTERM", "SIGKILL"]);
+      expect(finished).toBe(false);
+      clock.advance(1_000);
+      await cancelling;
+      expect(finished).toBe(true);
+      // The offer printed before the cancel is never delivered.
+      expect(sent).toEqual([]);
+    });
+
+    test("a child that exits without closing still resolves the cancel", async () => {
+      const manual = manualSpawn();
+      const clock = manualTimers();
+      const handlers = loadInteractive(manual.spawn, LUCID, clock.timers);
+      const starting = handlers.get("session_start")?.({}, tuiContext());
+      manual.children[0]?.emitClose();
+      await starting;
+      handlers.get("agent_settled")?.({}, tuiContext());
+      const input = handlers.get("input");
+      if (!input) throw new Error("Missing input handler");
+      let finished = false;
+      const cancelling = (async () => {
+        await input({ source: "interactive" }, {});
+        finished = true;
+      })();
+      expect(manual.children[1]?.kills).toEqual(["SIGTERM"]);
+      manual.children[1]?.emitExit();
+      await cancelling;
+      expect(finished).toBe(true);
+    });
+
+    test("a settled helper that never exits is killed with SIGKILL after 60 s", async () => {
+      const manual = manualSpawn();
+      const clock = manualTimers();
+      const { record, sent } = delivery();
+      const handlers = loadInteractive(manual.spawn, LUCID, clock.timers, record);
+      const starting = handlers.get("session_start")?.({}, tuiContext());
+      manual.children[0]?.emitClose();
+      await starting;
+      handlers.get("agent_settled")?.({}, tuiContext());
+      manual.children[1]?.emitData(offered("late offer"));
+      clock.advance(60_000);
+      expect(manual.children[1]?.kills).toEqual(["SIGKILL"]);
+      manual.children[1]?.emitClose();
+      await settle();
+      expect(sent).toEqual([]);
+    });
+
+    test("a throwing sendUserMessage does not throw out of the extension", async () => {
+      const manual = manualSpawn();
+      const handlers = loadInteractive(manual.spawn, LUCID, undefined, () => {
+        throw new Error("send failed");
+      });
+      const starting = handlers.get("session_start")?.({}, tuiContext());
+      manual.children[0]?.emitClose();
+      await starting;
+      handlers.get("agent_settled")?.({}, tuiContext());
+      manual.children[1]?.emitData(offered("undeliverable"));
+      expect(() => manual.children[1]?.emitClose()).not.toThrow();
+      await settle();
+    });
   });
 });
 

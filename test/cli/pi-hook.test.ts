@@ -8,13 +8,19 @@ import { commitOperation } from "../../src/cli/hooks/native-commit.js";
 import type { PiHookDeps } from "../../src/cli/hooks/pi.js";
 import { runPiHook } from "../../src/cli/hooks/pi.js";
 import { mapSubcommand } from "../../src/cli/mapping.js";
+import { listenStopFeedback, requestNativeListening } from "../../src/cli/native-listening.js";
 import { piSessionAuthority } from "../../src/cli/pi-commands.js";
 import { conversations } from "../../src/cli/record-addressing.js";
+import { readProcessOwner } from "../../src/process-owner.js";
 import { readConnection } from "../../src/store/connection-view.js";
 import { openWriter, viewConversation } from "../../src/store/conversation-host.js";
 import { acquireAppendLock } from "../../src/store/flock.js";
 import { saveNativeProposal } from "../../src/store/native-proposals.js";
-import { withNativeRegistration } from "../../src/store/native-registration.js";
+import type { NativeListenRequest } from "../../src/store/native-registration.js";
+import {
+  registerNativeSession,
+  withNativeRegistration,
+} from "../../src/store/native-registration.js";
 
 const SESSION = "pi-session-01";
 const OTHER_SESSION = "pi-session-02";
@@ -67,7 +73,7 @@ const capture = (event: string, over: Record<string, unknown> = {}) => ({
 
 const run = async (
   root: string,
-  event: "session-start" | "session-shutdown" | "tool-result",
+  event: "session-start" | "session-shutdown" | "settled" | "tool-result",
   body: unknown,
   hookDeps: Partial<PiHookDeps> = {},
 ) => runPiHook(conversations(root), event, JSON.stringify(body), deps(hookDeps));
@@ -98,6 +104,88 @@ function publicationRecord(root: string, conversationId: string): string {
   return conversationId;
 }
 
+/** One pi-cli record whose registration owner is this live test process, with a
+ * listen request and saved feedback: the record state a real settled helper
+ * reaches, built without the hook's process capture so the context-copy liveness
+ * checks (which read the real process table) corroborate the owner. */
+async function piListeningFixture(
+  root: string,
+  conversationId: string,
+  feedback: string,
+  prepare?: (host: ReturnType<typeof openWriter>) => Promise<void> | void,
+): Promise<{ dir: string; request: NativeListenRequest }> {
+  const owner = readProcessOwner(process.pid);
+  if (!owner) throw new Error("Test process identity unavailable");
+  const authority = { callerOwns: () => true, ownerPresence: () => true } as const;
+  const registered = registerNativeSession(
+    root,
+    {
+      harness: "pi",
+      interface: "pi-cli",
+      nativeSessionId: SESSION,
+      owner,
+      workingDirectory: root,
+    },
+    authority,
+  );
+  if (!registered.ok) throw new Error(registered.message);
+  const request = { actionId: crypto.randomUUID(), conversationId };
+  const written = withNativeRegistration(
+    root,
+    undefined,
+    (_binding, access) => access.writeListenRequest(request),
+    authority,
+  );
+  if (!written.ok) throw new Error(written.message);
+  publicationRecord(root, conversationId);
+  const dir = conversations(root).dirFor(conversationId);
+  const host = openWriter(dir, { connectionAuthority: () => registered.registration });
+  try {
+    expect(
+      host.writeConnection({
+        actionId: crypto.randomUUID(),
+        binding: registered.registration,
+        kind: "bound",
+      }).verdict,
+    ).toBe("accepted");
+    await prepare?.(host);
+    expect(
+      host.acceptInput({ id: "feedback", mode: "queue", text: feedback }, { managed: true })
+        .verdict,
+    ).toBe("accepted");
+  } finally {
+    host.close();
+  }
+  return { dir, request };
+}
+
+/** One published record bound to the registered Pi session, with a committed
+ * listen proposal: the state a real session reaches before `agent_settled`. */
+async function boundListeningRecord(root: string, conversationId: string): Promise<void> {
+  publicationRecord(root, conversationId);
+  expect(
+    await run(root, "session-start", { ...capture("session-start"), workingDirectory: root }),
+  ).toMatchObject({ kind: "registered" });
+  const binding = registered(root);
+  if (!binding.ok) throw new Error(binding.message);
+  const bind = saveNativeProposal(root, binding.value, { conversationId, kind: "bind" });
+  expect(
+    await run(root, "tool-result", {
+      ...capture("tool-result"),
+      markers: [`lucid-pi-proposal:${bind.nonce}`],
+      toolCallId: "call-bind",
+    }),
+  ).toMatchObject({ kind: "committed", v: 1 });
+  const listen = saveNativeProposal(root, binding.value, { conversationId, kind: "listen" });
+  const committed = await run(root, "tool-result", {
+    ...capture("tool-result"),
+    markers: [`lucid-pi-proposal:${listen.nonce}`],
+    toolCallId: "call-listen",
+  });
+  if (committed.kind !== "committed") throw new Error("Missing listen commit");
+  expect(committed.text).toContain("Listening requested");
+}
+
 describe("_pi-hook mapping", () => {
   test("maps a known event with an optional root and refuses everything else to help", () => {
     expect(mapSubcommand(["_pi-hook", "session-start"])).toEqual({
@@ -109,7 +197,7 @@ describe("_pi-hook mapping", () => {
       kind: "pi-hook",
       root: "/records",
     });
-    expect(mapSubcommand(["_pi-hook", "settled"]).kind).toBe("help");
+    expect(mapSubcommand(["_pi-hook", "settled"]).kind).toBe("pi-hook");
     expect(mapSubcommand(["_pi-hook", "session-start", "extra"]).kind).toBe("help");
     expect(mapSubcommand(["_pi-hook", "--root", "/records", "session-start"]).kind).toBe("help");
   });
@@ -360,15 +448,21 @@ test("tool-result commits a saved listen proposal for the registered session", a
   const root = mkdtempSync(join(tmpdir(), "lucid-pi-hook-listen-"));
   try {
     const conversationId = publicationRecord(root, "pi listen record");
-    expect(await run(root, "session-start", capture("session-start"))).toMatchObject({
-      kind: "registered",
-    });
+    expect(
+      await run(root, "session-start", { ...capture("session-start"), workingDirectory: root }),
+    ).toMatchObject({ kind: "registered" });
     const binding = registered(root);
     if (!binding.ok) throw new Error(binding.message);
-    const proposal = saveNativeProposal(root, binding.value, {
-      conversationId,
-      kind: "listen",
-    });
+    // Listening needs the record bound to this registration first, as a real session does.
+    const bind = saveNativeProposal(root, binding.value, { conversationId, kind: "bind" });
+    expect(
+      await run(root, "tool-result", {
+        ...capture("tool-result"),
+        markers: [`lucid-pi-proposal:${bind.nonce}`],
+        toolCallId: "call-bind",
+      }),
+    ).toMatchObject({ kind: "committed", v: 1 });
+    const proposal = saveNativeProposal(root, binding.value, { conversationId, kind: "listen" });
     const result = await run(root, "tool-result", {
       ...capture("tool-result"),
       markers: [`lucid-pi-proposal:${proposal.nonce}`],
@@ -377,15 +471,15 @@ test("tool-result commits a saved listen proposal for the registered session", a
     expect(result).toMatchObject({ kind: "committed", v: 1 });
     if (result.kind !== "committed") throw new Error("Missing commit result");
     expect(result.text).toContain(`Listening for ${conversationId}`);
-    // pi-cli has no verified Stop transport until RFC 28 slice 4: the commit
-    // reports the held transport instead of saving a listening request.
-    expect(result.text).toContain("no verified feedback transport");
+    // RFC 28 slice 4 gives pi-cli a verified feedback transport, so the commit
+    // saves the listening request the settled helper later consumes.
+    expect(result.text).toContain("Listening requested");
     expect(
       withNativeRegistration(root, undefined, (_binding, access) => access.readListenRequest(), {
         callerOwns: () => true,
         ownerPresence: () => true,
       }),
-    ).toMatchObject({ ok: true, value: { ok: true, value: null } });
+    ).toMatchObject({ ok: true, value: { ok: true, value: { conversationId } } });
     // The claimed proposal never commits twice.
     const replay = await run(root, "tool-result", {
       ...capture("tool-result"),
@@ -678,6 +772,349 @@ test("a busy registry saves nothing and tells the model to run the command again
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
+});
+
+/** Save one managed feedback input, as the person's saved feedback for the listener. */
+async function savedFeedback(dir: string, inputId: string, text: string): Promise<void> {
+  const host = openWriter(dir);
+  try {
+    expect(host.acceptInput({ id: inputId, mode: "queue", text }, { managed: true }).verdict).toBe(
+      "accepted",
+    );
+  } finally {
+    host.close();
+  }
+}
+
+describe("the settled listener helper", () => {
+  test("settled with no listen request returns a skipped listener", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-pi-hook-settled-skip-"));
+    try {
+      expect(await run(root, "session-start", capture("session-start"))).toMatchObject({
+        kind: "registered",
+      });
+      expect(await run(root, "settled", capture("settled"))).toEqual({
+        kind: "listener",
+        result: { kind: "skipped" },
+        v: 1,
+      });
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("settled after a committed listen proposal and saved feedback returns offered and records the offer", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-pi-hook-settled-offer-"));
+    try {
+      const conversationId = "pi settled record";
+      await boundListeningRecord(root, conversationId);
+      const dir = conversations(root).dirFor(conversationId);
+      const feedback = "Complete browser feedback for the Pi session.";
+      await savedFeedback(dir, "feedback", feedback);
+      let now = Date.now();
+      const result = await run(root, "settled", capture("settled"), {
+        now: () => now,
+        wait: async (ms: number) => {
+          now += ms;
+        },
+      });
+      if (result.kind !== "listener") throw new Error("Missing listener result");
+      expect(result.result.kind).toBe("offered");
+      if (result.result.kind !== "offered") throw new Error("Missing offer");
+      // pi-cli's transport encodes the prompt as plain text for `sendUserMessage`.
+      expect(result.result.payload).toContain(feedback);
+      expect(result.result.payload).toContain("lucid connection receipt");
+      // The record carries the offer-started fact as an in-flight sending offer,
+      // as the Claude Stop delivery does.
+      const offers = viewConversation(dir).state.connection?.offers ?? {};
+      expect(offers[result.result.offerId]?.kind).toBe("sending");
+      // The helper prints this result as one JSON line, and the extension kills a
+      // helper whose stdout passes 49,152 bytes: a direct offer stays below it.
+      expect(
+        Buffer.byteLength(JSON.stringify({ kind: "listener", result: result.result, v: 1 })),
+      ).toBeLessThanOrEqual(49_152);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("feedback whose JSON escaping passes the pi bound is held, never offered directly", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-pi-hook-settled-escape-"));
+    try {
+      // About 30,000 raw bytes: under a raw 40,000 bound, but JSON.stringify
+      // doubles it past 40,000, and the helper's own JSON line past 49,152.
+      const { dir, request } = await piListeningFixture(
+        root,
+        "pi escaped feedback record",
+        '"\n'.repeat(15_000),
+      );
+      let now = Date.now();
+      const result = await listenStopFeedback(
+        conversations(root),
+        "pi escaped feedback record",
+        { request, signal: new AbortController().signal, source: "explicit" },
+        {
+          authority: { callerOwns: () => true, ownerPresence: () => true },
+          now: () => now,
+          wait: async (ms: number) => {
+            now += ms;
+          },
+        },
+      );
+      // Never a direct offer: a payload whose JSON form exceeds the transport bound.
+      expect(result.kind).not.toBe("offered");
+      expect(result).toMatchObject({ kind: "stopped", reason: "expired" });
+      expect(viewConversation(dir).state.connection?.offers ?? {}).toEqual({});
+      expect(viewConversation(dir).state.connection?.heldInputs.feedback?.reason).toBe(
+        "context-too-large",
+      );
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("oversized context moves to a pi reference copy whose read command bounds bytes and lines", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-pi-hook-settled-reference-"));
+    let copy = "";
+    try {
+      const conversationId = "pi reference record";
+      const { dir, request } = await piListeningFixture(
+        root,
+        conversationId,
+        "Review the document.",
+        async (host) => {
+          // A large current document pushes the rendered context past the byte bound
+          // while the pending request stays small enough to carry inline.
+          expect(
+            (
+              await host.writeArtifact({
+                artifactId: "doc",
+                author: "agent",
+                bytes: `plain document text `.repeat(2_400),
+                contentType: "text/html",
+                version: 1,
+              })
+            ).verdict,
+          ).toBe("accepted");
+        },
+      );
+      let now = Date.now();
+      const result = await listenStopFeedback(
+        conversations(root),
+        conversationId,
+        { request, signal: new AbortController().signal, source: "explicit" },
+        {
+          authority: { callerOwns: () => true, ownerPresence: () => true },
+          now: () => now,
+          wait: async (ms: number) => {
+            now += ms;
+          },
+        },
+      );
+      expect(result.kind).toBe("offered");
+      if (result.kind !== "offered") throw new Error("Missing reference offer");
+      // Pi's Bash tool truncates by lines as well as bytes, so the read command
+      // carries both bounds.
+      expect(result.payload).toContain("--offset 0 --bytes 40000 --lines 1900");
+      copy = result.payload.match(/lucid context '([^']+)'/)?.[1] ?? "";
+      if (!copy) throw new Error("Missing context copy path");
+      const offers = viewConversation(dir).state.connection?.offers ?? {};
+      expect(offers[result.offerId]?.kind).toBe("sending");
+      expect(offers[result.offerId]?.offer.delivery).toMatchObject({ kind: "reference" });
+    } finally {
+      if (copy) rmSync(copy, { force: true, recursive: true });
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("settled whose registration owner is another Pi process refuses and starts no listener", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-pi-hook-settled-owner-"));
+    try {
+      const conversationId = "pi settled owner record";
+      await boundListeningRecord(root, conversationId);
+      const dir = conversations(root).dirFor(conversationId);
+      await savedFeedback(dir, "feedback", "Feedback for the wrong process.");
+      // A second Pi process (4343) nested under the registered owner (4242) claims
+      // the registered session: the registry corroborates the ancestry, but the
+      // helper's owner is not the registration's owner.
+      const nested = {
+        parentPid: () => OTHER_PI_PID,
+        probe: (pid: number) =>
+          pid === process.pid
+            ? {
+                executable: "/bin/agent-shell",
+                parentPid: OTHER_PI_PID,
+                pid,
+                startedAt: `${pid}:0`,
+              }
+            : pid === OTHER_PI_PID
+              ? { executable: PI_EXE, parentPid: PI_PID, pid: OTHER_PI_PID, startedAt: "4343:1" }
+              : pid === PI_PID
+                ? { executable: PI_EXE, parentPid: SHELL_PID, pid: PI_PID, startedAt: "4242:1" }
+                : pid === SHELL_PID
+                  ? { executable: "/bin/zsh", parentPid: 1, pid: SHELL_PID, startedAt: "4000:1" }
+                  : undefined,
+      };
+      const result = await run(root, "settled", capture("settled", { pid: OTHER_PI_PID }), nested);
+      expect(result).toEqual({
+        kind: "refused",
+        message:
+          "This Pi session's registration names a different Pi process, so Lucid does not listen in this session.",
+        reason: "proposal-session-mismatch",
+        v: 1,
+      });
+      const connection = viewConversation(dir).state.connection;
+      expect(connection?.listenerId ?? null).toBeNull();
+      expect(connection?.offers ?? {}).toEqual({});
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("settled from the same pid but a different process generation refuses", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-pi-hook-settled-generation-"));
+    try {
+      const conversationId = "pi settled generation record";
+      await boundListeningRecord(root, conversationId);
+      const dir = conversations(root).dirFor(conversationId);
+      await savedFeedback(dir, "feedback", "Feedback for a replaced process.");
+      // The parent check reads a newer process generation on the registered pid;
+      // the registry then corroborates the registered generation. A pid-only
+      // comparison would pass here and listen under the replaced process.
+      let ownerRead = 0;
+      const restarted = {
+        probe: (pid: number) => {
+          if (pid === PI_PID) {
+            ownerRead += 1;
+            return {
+              executable: PI_EXE,
+              parentPid: SHELL_PID,
+              pid: PI_PID,
+              startedAt: ownerRead === 1 ? "4242:2" : "4242:1",
+            };
+          }
+          return deps().probe(pid);
+        },
+      };
+      const result = await run(root, "settled", capture("settled"), restarted);
+      expect(result).toMatchObject({ kind: "refused", reason: "proposal-session-mismatch", v: 1 });
+      const connection = viewConversation(dir).state.connection;
+      expect(connection?.listenerId ?? null).toBeNull();
+      expect(connection?.offers ?? {}).toEqual({});
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("settled with no registration returns a skipped listener, not a refusal", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-pi-hook-settled-unregistered-"));
+    try {
+      // A capture whose parent chain no longer corroborates any registration.
+      expect(
+        await run(root, "settled", capture("settled", { nativeSessionId: OTHER_SESSION })),
+      ).toEqual({ kind: "listener", result: { kind: "skipped" }, v: 1 });
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("an aborted signal ends the settled wait without an offer", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-pi-hook-settled-abort-"));
+    try {
+      const conversationId = "pi settled abort record";
+      await boundListeningRecord(root, conversationId);
+      // No feedback is saved, so the listener waits; the wait seam aborts it.
+      const controller = new AbortController();
+      let now = Date.now();
+      const result = await run(root, "settled", capture("settled"), {
+        now: () => now,
+        signal: controller.signal,
+        wait: async (ms: number) => {
+          now += ms;
+          controller.abort();
+        },
+      });
+      if (result.kind !== "listener") throw new Error("Missing listener result");
+      expect(result.result.kind).not.toBe("offered");
+      expect(result.result).toEqual({ kind: "stopped", reason: "interrupted" });
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("an aborted signal passed through dispatch ends the settled wait interrupted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-pi-hook-settled-dispatch-"));
+    try {
+      const conversationId = "pi settled dispatch record";
+      await boundListeningRecord(root, conversationId);
+      // No feedback is saved, so the listener waits; only the signal dispatch passes
+      // can end the wait, and the injected hook adds nothing dispatch did not send.
+      const controller = new AbortController();
+      const fakeDeps = deps();
+      let now = Date.now();
+      let received: AbortSignal | undefined;
+      const output: string[] = [];
+      const result = await dispatch(["_pi-hook", "settled", "--root", root], {
+        onOutput: (line: string) => output.push(line),
+        piCaptureInput: (async function* () {
+          yield JSON.stringify(capture("settled"));
+        })(),
+        piHookFn: (records, event, text, hookDeps) => {
+          received = hookDeps?.signal;
+          return runPiHook(records, event, text, {
+            ...fakeDeps,
+            now: () => now,
+            signal: hookDeps?.signal,
+            wait: async (ms: number) => {
+              now += ms;
+              controller.abort();
+            },
+          });
+        },
+        rootDir: root,
+        signal: controller.signal,
+      } satisfies DispatchDeps);
+      expect(result).toEqual({ kind: "pi-hook" });
+      expect(received).toBe(controller.signal);
+      expect(JSON.parse(output[0] ?? "{}")).toEqual({
+        kind: "listener",
+        result: { kind: "stopped", reason: "interrupted" },
+        v: 1,
+      });
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("requestNativeListening for a pi-cli registration is requested, not transport-unverified", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-pi-hook-requested-"));
+    try {
+      const conversationId = "pi requested record";
+      publicationRecord(root, conversationId);
+      expect(
+        await run(root, "session-start", { ...capture("session-start"), workingDirectory: root }),
+      ).toMatchObject({ kind: "registered" });
+      const binding = registered(root);
+      if (!binding.ok) throw new Error(binding.message);
+      const bind = saveNativeProposal(root, binding.value, { conversationId, kind: "bind" });
+      expect(
+        await run(root, "tool-result", {
+          ...capture("tool-result"),
+          markers: [`lucid-pi-proposal:${bind.nonce}`],
+          toolCallId: "call-bind",
+        }),
+      ).toMatchObject({ kind: "committed", v: 1 });
+      const result = requestNativeListening(
+        conversations(root),
+        conversationId,
+        piSessionAuthority(SESSION, deps().probe),
+        binding.value.registrationId,
+      );
+      expect(result).toMatchObject({ conversationId, kind: "requested" });
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
 });
 
 describe("the dispatch capture reader", () => {

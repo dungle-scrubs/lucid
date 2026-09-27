@@ -37,6 +37,18 @@ const CLAUDE_FEEDBACK_BYTES = 19_900;
 // it with a preview at 29,771 (artifacts/evidence/claude-cli-native/slice-probe.mjs). A byte
 // slice never prints more characters than bytes, so 24,000 keeps a 5,000-character margin.
 const CLAUDE_CONTEXT_SLICE = 24_000;
+
+// Pi 0.87.1 delivers the offer through `pi.sendUserMessage`, which takes plain
+// text, so `encode` is the identity. The helper prints its result as one JSON
+// line and the extension kills a helper whose stdout exceeds 49,152 bytes
+// (RFC 28), so the bound is on the JSON-escaped payload: 40,000 leaves room
+// under 49,152 for the rest of the helper's result. Pi's Bash tool keeps 50
+// KiB or 2,000 lines of output (dist/core/tools/truncate.js), so `lucid context`
+// slices are bounded by bytes and by lines.
+const PI_FEEDBACK_BYTES = 40_000;
+const PI_CONTEXT_SLICE = 40_000;
+const PI_CONTEXT_LINES = 1_900;
+
 const CONTEXT_SLICE_MIN = 4_096;
 
 /** Claude Code lowers its Bash output limit through BASH_MAX_OUTPUT_LENGTH; hooks inherit it. */
@@ -61,6 +73,15 @@ const STOP_TRANSPORTS: Partial<Record<NativeInterface, NativeFeedbackTransport>>
   "codex-cli": {
     encode: (prompt) => JSON.stringify({ decision: "block", reason: prompt }),
     maxBytes: CODEX_FEEDBACK_BYTES,
+  },
+  "pi-cli": {
+    contextLines: PI_CONTEXT_LINES,
+    contextSlice: PI_CONTEXT_SLICE,
+    encode: (prompt) => prompt,
+    instructions:
+      "Run each Lucid command in its own Bash call, running the lucid binary directly. Lucid records receipt and response when that Bash call finishes and reports the result in the tool output.",
+    maxBytes: PI_FEEDBACK_BYTES,
+    measure: (payload) => Buffer.byteLength(JSON.stringify(payload), "utf8"),
   },
 };
 const UNVERIFIED_TRANSPORT = heldNativeFeedback(
