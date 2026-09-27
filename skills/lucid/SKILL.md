@@ -40,13 +40,42 @@ another record. Setup and publication alone do not establish listening.
 
 In a Claude Code CLI session without either marker, do the same with the
 differences in [Native Claude Code](https://github.com/dungle-scrubs/lucid/blob/main/docs/native-claude.md). If
-publication reports `registration-missing`, keep the conversation and tell
-the person the Claude Code integration is not set up in this session; do
-not claim notes will arrive.
+publication reports `headless-fallback`, keep the conversation and tell the
+person the Claude Code integration is not set up in this session: a new
+headless session answers their notes, not this one.
 
-Other ordinary native interfaces have no enabled authoring integration yet.
-Answer normally and explain that browser review requires a conversation
-started through `lucid chat`. Do not emit an uncaptured artifact fence.
+Any other interface (Pi, Muse, Cursor, a delegated worker) has no
+integration yet. It may still publish through `lucid artifact publish`.
+The request must carry its own `settings` and `workingDirectory`, so notes
+are answered by a headless session on the same model in the same folder.
+Without them the record takes Lucid's defaults. In Pi, read the values from
+the shell environment; do not recall them:
+
+```json
+{
+  "creationId": "<stable id for this document>",
+  "workingDirectory": "<absolute current folder>",
+  "settings": {
+    "harness": "pi",
+    "provider": "$PI_PROVIDER",
+    "model": "$PI_MODEL",
+    "effort": "$PI_REASONING_LEVEL",
+    "profile": "headless-turn"
+  },
+  "origin": {
+    "harness": "pi",
+    "nativeSessionId": "$PI_SESSION_ID",
+    "sessionFile": "$PI_SESSION_FILE"
+  },
+  "artifact": {"artifactId": "...", "bytes": "...", "contentType": "text/html", "version": 1},
+  "serverUrl": "http://127.0.0.1:17454"
+}
+```
+
+Omit `origin.sessionFile` when `PI_SESSION_FILE` is unset. The result's
+connection state is `headless-fallback`. Tell the person that a new headless
+session with the same model answers their notes, not this live session. Do
+not emit an uncaptured artifact fence.
 
 ## Emit through a Lucid host
 

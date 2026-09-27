@@ -384,7 +384,8 @@ no actions.
 
 ### 6. Skill and browser
 
-The skill (`~/dev/skills` source for `~/.agents/skills/lucid`) replaces
+The skill (`skills/lucid/SKILL.md` in this repository, shipped in the npm
+package and installed as `~/.agents/skills/lucid`) replaces
 "Other ordinary native interfaces have no enabled authoring integration
 yet" with this rule. An interface with no integration MAY publish through
 the CLI. The request MUST carry `settings` for its own harness and model,
@@ -592,7 +593,8 @@ Each unit has an observable outcome before the next unit depends on it.
 4. **Managed context.** The origin line on fresh dispatch (section 7).
 5. **Browser.** Label and tooltip, verified at 390, 768, and 1440 pixels
    in both themes (section 6).
-6. **Skill.** Update in `~/dev/skills`, then its link script.
+6. **Skill.** Update `skills/lucid/SKILL.md`; it reaches
+   `~/.agents/skills/lucid` with the next installed release.
 7. **Live confirmation.**
    a. A fresh publication from an interactive Pi session with declared
       `pi / zai / glm-5.3` settings falls back, and a browser note gets a
@@ -632,8 +634,10 @@ Each unit has an observable outcome before the next unit depends on it.
 
 1. Can hcn report the model, provider, and native session file of the
    calling session, so the skill copies values and does not recall them?
-   Not blocking: the skill can read them from the harness where it
-   exposes them.
+   Answered for Pi: Pi gives every shell command `PI_PROVIDER`,
+   `PI_MODEL`, `PI_REASONING_LEVEL`, `PI_SESSION_ID`, and
+   `PI_SESSION_FILE` (Pi docs, `environment-variables.md`), and the skill
+   copies them. Open for other harnesses.
 2. Should the tooltip link to Pi integration status (RFC 28)? Not
    blocking.
 
