@@ -192,7 +192,9 @@ export const dispatch = async (
     const result =
       mapped.interface === "claude-cli"
         ? (await import("./claude-setup.js")).setupClaudeHooks(records.rootDir, mapped.hooksFile)
-        : (await import("./codex-setup.js")).setupCodexHooks(records.rootDir, mapped.hooksFile);
+        : mapped.interface === "pi-cli"
+          ? (await import("./pi-setup.js")).setupPiExtension(records.rootDir, mapped.hooksFile)
+          : (await import("./codex-setup.js")).setupCodexHooks(records.rootDir, mapped.hooksFile);
     (deps.onOutput ?? console.log)(mapped.json ? JSON.stringify(result) : result.message);
     return { kind: "connection-setup", verdict: result.status };
   }
