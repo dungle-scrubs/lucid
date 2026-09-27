@@ -9,19 +9,25 @@ closed Pi session continues headlessly instead (below).
 
 ## Set up the extension
 
-Run `lucid connection setup --interface pi-cli --settings-file FILE [--json]`
+Run
+`lucid connection setup --interface pi-cli --settings-file ~/.pi/agent/settings.json [--json]`
 against Pi's user settings file: `$PI_CODING_AGENT_DIR/settings.json` when
-that variable is set, else `~/.pi/agent/settings.json`. Setup writes
-Lucid's extension under the configured record root and appends its absolute
-path to the `extensions` array in that file. It preserves every other
-setting and extension, creates a missing file, and makes no changes when
-its entry already matches. The extension file is named for its content, so
-a changed Lucid installation writes a new file; re-running setup replaces
-Lucid's old entry with the new path instead of adding a second one. An
-invalid settings file is a refusal; its contents are kept.
+that variable is set, else `~/.pi/agent/settings.json`. Run setup with an
+installed `lucid` binary, not through `npx` or `bunx`: the extension file
+pins the lucid command that ran setup, and a package-cache path can
+disappear. Setup writes Lucid's extension under the configured record
+root and appends its absolute path to the `extensions` array in that
+file. It preserves every other setting and extension, creates a missing
+file, and makes no changes when its entry already matches. The extension
+file is named for its content, so a changed Lucid installation writes a
+new file; re-running setup replaces Lucid's old entry with the new path
+instead of adding a second one. An invalid settings file is a refusal;
+its contents are kept.
 
-Start a new Pi session after setup so the extension's `session_start`
-registers it. Setup alone does not mean the session is listening.
+Restart Pi after setup; a running Pi does not load a new extension path.
+A new session's `session_start` registers it. Setup alone does not mean
+the session is listening. After a publish, confirm the session is
+connected with `lucid connection status CONVERSATION`.
 
 ## What the extension does
 
@@ -50,16 +56,36 @@ refuses with `proposal-ancestry-unverified`: Lucid cannot prove which Pi
 session ran the command when a JavaScript runtime or another Pi process
 sits in between.
 
+## Oversized notes
+
+A note and its context are delivered directly when the JSON-escaped
+message is at most 40,000 bytes: the extension's helper prints its result
+as one JSON line and is killed above 49,152 bytes, so Lucid bounds the
+escaped payload below that. When the conversation history, current
+documents and feedback do not fit, Lucid writes the complete context to a
+private copy and the message carries the feedback text and a
+`lucid context <path> --offset 0 --bytes 40000 --lines 1900` command. The
+session reads the copy in 40,000-byte slices, following `nextOffset`
+until `done` is true. Slices are also cut at 1,900 lines, because Pi's
+Bash tool keeps only the last 2,000 lines or 50 KiB of output.
+
+Lucid refuses an answer or question with `context-unread` until the copy
+has been read in order to its end, and with `context-missing` when the
+copy is gone. A refusal or failure response is always recorded. The copy
+is removed when the response is recorded.
+
 ## Headless resume
 
 After the interactive Pi session closes and Lucid confirms its departure, a
 bound record continues through `hcn` with Lucid's extension loaded into the
 headless run. The extension verifies the opened session and folder before
 the prompt can reach the model, closing the race where a missing session
-file would silently resume an empty new session. A proven refusal holds
-the note with reason `native-session-missing`: no automatic retry and no
-fresh session. Any other uncertain outcome stays held under the ordinary
-continuation rules.
+file would silently resume an empty new session. A proven refusal keeps
+the note saved and records the attempt as a harness refusal (`E-HUB-05`)
+that names why Pi did not open the bound session (`session-id-mismatch`,
+`folder-mismatch`, `session-empty`, or `verification-failed`); no
+automatic retry and no fresh session. Any other uncertain outcome stays
+held under the ordinary continuation rules.
 
 ## Limits
 

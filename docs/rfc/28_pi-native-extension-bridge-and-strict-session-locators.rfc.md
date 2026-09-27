@@ -466,7 +466,7 @@ states. `refused` never reaches `input` with `continue`.
 | A bind proposal is refused | Claim it and save the refusal beside the publication, as for Claude. |
 | Commit names a replaced registration | Refuse: `registration-replaced`. The record binding is unchanged. |
 | Helper result lost | Read current state; do not repeat. Offers follow RFC 26 uncertainty rules. |
-| Proven pre-model refusal (outcome table) | Hold the input with reason `native-session-missing`. No automatic retry and no fresh session. |
+| Proven pre-model refusal (outcome table) | Record a pre-start harness refusal (`E-HUB-05`, `harness-refusal`) naming the reason. No automatic retry and no fresh session. |
 | Uncertain headless outcome | Hold under RFC 26 uncertainty. No automatic retry. |
 | Session in a store hcn cannot see | hcn's guard refuses before spawn; the input stays held. |
 | Extension file missing at resume time | Refuse before invoking hcn: `native-extension-unavailable`. |
