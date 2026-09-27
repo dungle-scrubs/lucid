@@ -220,6 +220,8 @@ export interface HeadlessDeps {
         readonly native: NativeIntent;
         readonly nativeApprovals?: StreamTurnOptions["nativeApprovals"];
         readonly nativeTurn?: StreamTurnOptions["native"];
+        /** Admits the invocation through the bound record's native fence. */
+        readonly nativeDispatch?: <T>(invoke: () => T) => T;
         readonly notice?: string;
       }
   >;
@@ -1113,6 +1115,7 @@ const turnStrategy = (
             let composedPrompt: string;
             let nativeApprovals: StreamTurnOptions["nativeApprovals"];
             let nativeTurn: StreamTurnOptions["native"];
+            let nativeDispatch: (<T>(invoke: () => T) => T) | undefined;
             if (deps.prepareTurn) {
               const managedTurn = await deps
                 .prepareTurn({
@@ -1156,6 +1159,7 @@ const turnStrategy = (
                   },
                 };
               nativeTurn = managedTurn.nativeTurn;
+              nativeDispatch = managedTurn.nativeDispatch;
               ctx.preparedNotice(managedTurn.notice);
               resumeId =
                 managedTurn.native.kind === "resume" ? managedTurn.native.sessionId : undefined;
@@ -1186,15 +1190,21 @@ const turnStrategy = (
                 turnId,
                 ...(nativeApprovals
                   ? { nativeApprovals }
-                  : {
-                      ...(deps.model === undefined ? {} : { model: deps.model }),
-                      ...(deps.provider === undefined ? {} : { provider: deps.provider }),
-                      ...(deps.effort === undefined ? {} : { effort: deps.effort }),
-                    }),
+                  : nativeTurn?.settingsFingerprint !== undefined
+                    ? {}
+                    : {
+                        ...(deps.model === undefined ? {} : { model: deps.model }),
+                        ...(deps.provider === undefined ? {} : { provider: deps.provider }),
+                        ...(deps.effort === undefined ? {} : { effort: deps.effort }),
+                      }),
                 ...(attemptResume && resumeId !== undefined ? { resume: resumeId } : {}),
                 ...(nativeTurn ? { native: nativeTurn } : {}),
               });
-            let raw = nativeApprovals ? invoke() : ordinaryDispatch(deps, ctx, invoke);
+            let raw = nativeApprovals
+              ? invoke()
+              : nativeDispatch
+                ? nativeDispatch(invoke)
+                : ordinaryDispatch(deps, ctx, invoke);
             if (attemptResume || (deps.probeFirstTurn === true && spawns === 0)) {
               spawns += 1;
               const probe = raw[Symbol.asyncIterator]();

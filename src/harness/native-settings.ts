@@ -43,6 +43,11 @@ export function nativeContinuationSettings(
     provider.length === 0
   )
     return unavailable("invalid-native-settings");
+  const continuation =
+    raw.continuation ?? (raw.source === "codex-rollout-v1" ? "native-approvals" : undefined);
+  if (continuation === "resume")
+    return { continuation, effort, fingerprint, model, provider, status: "available" };
+  if (continuation !== "native-approvals") return unavailable("invalid-native-settings");
   const permissions = record(raw.permissions);
   if (
     permissions?.status !== "recorded" ||
@@ -52,5 +57,5 @@ export function nativeContinuationSettings(
     permissions.network !== "restricted"
   )
     return unavailable("native-permissions-unverified");
-  return { effort, fingerprint, model, provider, status: "available" };
+  return { continuation, effort, fingerprint, model, provider, status: "available" };
 }

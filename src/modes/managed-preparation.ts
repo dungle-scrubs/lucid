@@ -45,6 +45,7 @@ type ManagedPrepared =
       readonly kind: "ready";
       readonly native: NativeIntent;
       readonly nativeFingerprint?: string;
+      readonly nativeContinuation?: "native-approvals" | "resume";
       /** RFC 28: a resume of a bound Pi session carries its verification. */
       readonly piVerification?: PiVerification;
     });
@@ -232,6 +233,7 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
       const resume = native.kind === "resume" ? native.sessionId : undefined;
       let facts: HarnessFacts;
       let nativeFingerprint: string | undefined;
+      let nativeContinuation: "native-approvals" | "resume" | undefined;
       if (state.connection) {
         const binding = state.connection.binding;
         if (
@@ -265,6 +267,7 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
           provider: settings.provider,
         };
         nativeFingerprint = settings.fingerprint;
+        nativeContinuation = settings.continuation;
         facts = await runner.inspect(binding.harness);
       } else {
         const saved = preferenceState(host.dir).preference;
@@ -456,6 +459,7 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
         kind: "ready",
         native,
         ...(nativeFingerprint === undefined ? {} : { nativeFingerprint }),
+        ...(nativeContinuation === undefined ? {} : { nativeContinuation }),
         ...(piVerification === undefined ? {} : { piVerification }),
       };
     } catch (cause) {

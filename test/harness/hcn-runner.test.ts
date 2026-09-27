@@ -115,7 +115,7 @@ describe("streamTurn over hcn run --json", () => {
     expect(argv).toContain("--model");
   });
 
-  test("native passthrough puts args after -- and env in the process environment only", async () => {
+  test("native turn inputs render as hcn options, with env only in the process environment", async () => {
     const r = rig();
     const it = r.runner
       .streamTurn({
@@ -123,18 +123,54 @@ describe("streamTurn over hcn run --json", () => {
         prompt: "hi",
         turnId: "t",
         resume: "sess-1",
-        native: { env: { LUCID_PI_ATTEMPT: "secret-nonce" }, args: ["-e", "/x/lucid.js"] },
+        cwd: "/work",
+        native: {
+          env: { LUCID_PI_ATTEMPT: "secret-nonce" },
+          extensions: ["/x/lucid.js"],
+          settingsFingerprint: "f".repeat(64),
+        },
       })
       [Symbol.asyncIterator]();
     r.proc.exit(0);
     await it.next();
     const call = r.spawner.calls[0];
-    expect(call?.argv.slice(-5)).toEqual(["--prompt-file", "-", "--", "-e", "/x/lucid.js"]);
+    expect(call?.argv.slice(-7)).toEqual([
+      "-",
+      "--native-settings-fingerprint",
+      "f".repeat(64),
+      "--cwd",
+      "/work",
+      "--extension",
+      "/x/lucid.js",
+    ]);
     expect(call?.argv.join(" ")).not.toContain("secret-nonce");
     expect(call?.opts.env).toEqual({ LUCID_PI_ATTEMPT: "secret-nonce" });
   });
 
-  test("native passthrough refuses isolation", () => {
+  test("a settings fingerprint refuses model selectors and a missing resume or folder", () => {
+    const r = rig();
+    const native = { env: {}, extensions: [], settingsFingerprint: "f".repeat(64) };
+    for (const extra of [
+      { model: "m" },
+      { provider: "p" },
+      { effort: "high" },
+      { resume: undefined },
+      { cwd: undefined },
+    ])
+      expect(() =>
+        r.runner.streamTurn({
+          harness: "pi",
+          prompt: "hi",
+          turnId: "t",
+          resume: "s",
+          cwd: "/w",
+          native,
+          ...extra,
+        }),
+      ).toThrow("native settings fingerprint");
+  });
+
+  test("native turn inputs refuse isolation", () => {
     const r = rig();
     expect(() =>
       r.runner.streamTurn({
@@ -142,9 +178,9 @@ describe("streamTurn over hcn run --json", () => {
         prompt: "hi",
         turnId: "t",
         isolation: "tool-free",
-        native: { env: {}, args: ["-x"] },
+        native: { env: {}, extensions: ["/x"] },
       }),
-    ).toThrow("Native passthrough");
+    ).toThrow("Native turn inputs");
   });
 });
 

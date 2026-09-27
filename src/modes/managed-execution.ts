@@ -46,6 +46,7 @@ export interface ManagedExecution {
     Awaited<ReturnType<ManagedPreparation["prepare"]>> & {
       readonly nativeApprovals?: StreamTurnOptions["nativeApprovals"];
       readonly nativeTurn?: StreamTurnOptions["native"];
+      readonly nativeDispatch?: <T>(invoke: () => T) => T;
       readonly notice?: string;
     }
   >;
@@ -246,8 +247,32 @@ export function createManagedExecution(
         });
         return {
           ...result,
-          ...(result.piVerification ? { nativeTurn: piNativeTurn(result.piVerification) } : {}),
-          ...(result.nativeFingerprint === undefined
+          ...(result.nativeFingerprint !== undefined && result.nativeContinuation === "resume"
+            ? {
+                // RFC 35: an ordinary fingerprinted resume, admitted through the
+                // same native-execution fence as the approval transport.
+                nativeTurn: result.piVerification
+                  ? piNativeTurn(result.piVerification, result.nativeFingerprint)
+                  : { env: {}, extensions: [], settingsFingerprint: result.nativeFingerprint },
+                nativeDispatch: <T>(invoke: () => T): T => {
+                  let value: T | undefined;
+                  let invoked = false;
+                  const admitted = host.dispatchNativeExecution(input.turnId, () => {
+                    value = invoke();
+                    invoked = true;
+                    return undefined;
+                  });
+                  if (admitted.verdict === "refused" || !invoked) {
+                    managed.dispatchRejected(input.turnId, "dispatch-not-called");
+                    return refusedWrite(
+                      admitted.verdict === "refused" ? admitted.issue : "dispatch-not-called",
+                    );
+                  }
+                  return value as T;
+                },
+              }
+            : {}),
+          ...(result.nativeFingerprint === undefined || result.nativeContinuation === "resume"
             ? {}
             : {
                 nativeApprovals: {

@@ -342,7 +342,19 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
     if (opts.native && (opts.isolation || opts.nativeApprovals))
       throw new HarnessRefusal(
         "invalid-native",
-        "Native passthrough cannot combine with isolation or native approvals",
+        "Native turn inputs cannot combine with isolation or native approvals",
+      );
+    if (
+      opts.native?.settingsFingerprint !== undefined &&
+      (opts.resume === undefined ||
+        opts.cwd === undefined ||
+        opts.model !== undefined ||
+        opts.provider !== undefined ||
+        opts.effort !== undefined)
+    )
+      throw new HarnessRefusal(
+        "invalid-native",
+        "A native settings fingerprint needs an exact resume and folder, and no model selectors",
       );
     if (opts.nativeApprovals)
       return nativeApprovalStream(deps, opts, (event) =>
@@ -369,7 +381,14 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
       ...(opts.isolation ? ["--questions", "none"] : []),
       "--prompt-file",
       "-",
-      ...(opts.native && opts.native.args.length > 0 ? ["--", ...opts.native.args] : []),
+      ...(opts.native?.settingsFingerprint === undefined
+        ? []
+        : [
+            "--native-settings-fingerprint",
+            opts.native.settingsFingerprint,
+            ...(opts.cwd === undefined ? [] : ["--cwd", opts.cwd]),
+          ]),
+      ...(opts.native?.extensions ?? []).flatMap((path) => ["--extension", path]),
     ];
     log({ event: "hcn_run", turnId: opts.turnId, harness: opts.harness });
     const proc = deps.spawn(argv, {

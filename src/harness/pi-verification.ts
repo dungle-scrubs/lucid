@@ -73,15 +73,19 @@ export function preparePiVerification(opts: {
   };
 }
 
-export function piNativeTurn(verification: PiVerification): NativeTurnOptions {
+export function piNativeTurn(
+  verification: PiVerification,
+  settingsFingerprint: string,
+): NativeTurnOptions {
   return {
+    settingsFingerprint,
     env: {
       LUCID_PI_ATTEMPT: `${verification.attempt}.${verification.nonce}`,
       LUCID_PI_EXPECTED_SESSION: verification.expectedSession,
       LUCID_PI_EXPECTED_CWD: verification.expectedCwd,
       LUCID_PI_ATTESTATION: verification.attestationPath,
     },
-    args: ["-e", verification.extensionPath],
+    extensions: [verification.extensionPath],
   };
 }
 

@@ -61,16 +61,17 @@ test("a launch ID that is not a UUID refuses preparation", () => {
   ).toThrow("not a UUID");
 });
 
-test("the native turn carries the attempt in env and the extension after --", () => {
+test("the native turn carries the attempt in env, the extension, and the fingerprint", () => {
   const v = prepare();
-  expect(piNativeTurn(v)).toEqual({
+  expect(piNativeTurn(v, "f".repeat(64))).toEqual({
+    settingsFingerprint: "f".repeat(64),
     env: {
       LUCID_PI_ATTEMPT: `${LAUNCH}.${v.nonce}`,
       LUCID_PI_EXPECTED_SESSION: SESSION,
       LUCID_PI_EXPECTED_CWD: "/work",
       LUCID_PI_ATTESTATION: v.attestationPath,
     },
-    args: ["-e", v.extensionPath],
+    extensions: [v.extensionPath],
   });
 });
 
