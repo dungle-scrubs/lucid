@@ -1,11 +1,14 @@
-import { afterEach, beforeAll, expect, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  lucidPiExtension,
   materializePiExtension,
   type PiExtensionApi,
+  type PiHelperChild,
+  type PiHelperSpawn,
   piExtensionSource,
 } from "../../src/harness/pi-extension.js";
 
@@ -180,4 +183,236 @@ test("rpc and tui runs take no headless role, even with the variables set", () =
 
 test("without LUCID_PI_ATTEMPT the extension registers nothing", () => {
   expect(load({}).size).toBe(0);
+});
+
+// ---- Interactive role (RFC 28 steps 1-3): the tui handlers and the helper seam. ----
+
+const LUCID = { command: ["/usr/local/bin/lucid", "--quiet"], root: "/lucid/records" };
+
+/** A fake child_process: one spawn records its argv and stdin, then replies from `output`. */
+const helperSpawn = () => {
+  const spawns: { args: string[]; stdin: string }[] = [];
+  const api = {
+    killed: 0,
+    output: null as string | null,
+    spawns,
+    spawn: ((command: string, args: readonly string[]) => {
+      const record = { args: [command, ...args], stdin: "" };
+      spawns.push(record);
+      const data: ((chunk: unknown) => void)[] = [];
+      const closing: (() => void)[] = [];
+      const child: PiHelperChild = {
+        kill: () => {
+          api.killed += 1;
+        },
+        on: (event: "close" | "error", listener: () => void) => {
+          if (event === "close") closing.push(listener);
+        },
+        stdin: {
+          end: (payload?: string) => {
+            record.stdin = payload ?? "";
+          },
+          on: () => {},
+        },
+        stdout: { on: (_event: "data", listener: (chunk: unknown) => void) => data.push(listener) },
+      };
+      setTimeout(() => {
+        if (api.output !== null) for (const listener of data) listener(Buffer.from(api.output));
+        for (const listener of closing) listener();
+      }, 0);
+      return child;
+    }) satisfies PiHelperSpawn,
+  };
+  return api;
+};
+
+const loadInteractive = (spawn: PiHelperSpawn, lucid = LUCID) => {
+  const handlers = new Map<string, Handler>();
+  lucidPiExtension(
+    { on: (event: string, handler: Handler) => handlers.set(event, handler) } as never,
+    lucid,
+    spawn,
+  );
+  return handlers;
+};
+const tuiContext = (cwd = "/work") => ({
+  cwd,
+  mode: "tui",
+  sessionManager: {
+    getEntries: () => [{ type: "message" }],
+    getHeader: () => ({ id: SESSION }),
+    getSessionFile: () => "/work/session.jsonl",
+    getSessionId: () => SESSION,
+  },
+});
+const settle = () => new Promise((resolve) => setTimeout(resolve, 5));
+const bashResult = (text: string) => ({
+  content: [{ type: "text", text }],
+  toolCallId: "call-1",
+  toolName: "bash",
+});
+
+describe("interactive role", () => {
+  test("session_start runs the session-start helper with the capture on stdin", async () => {
+    const helper = helperSpawn();
+    const handlers = loadInteractive(helper.spawn);
+    await handlers.get("session_start")?.({}, tuiContext());
+    await settle();
+    expect(helper.spawns).toHaveLength(1);
+    expect(helper.spawns[0]?.args).toEqual([
+      "/usr/local/bin/lucid",
+      "--quiet",
+      "_pi-hook",
+      "session-start",
+      "--root",
+      "/lucid/records",
+    ]);
+    expect(JSON.parse(helper.spawns[0]?.stdin ?? "{}")).toEqual({
+      event: "session-start",
+      execPath: process.execPath,
+      mode: "tui",
+      nativeSessionId: SESSION,
+      pid: process.pid,
+      sessionFile: "/work/session.jsonl",
+      v: 1,
+      workingDirectory: "/work",
+    });
+  });
+
+  test("session_shutdown runs the session-shutdown helper", async () => {
+    const helper = helperSpawn();
+    const handlers = loadInteractive(helper.spawn);
+    await handlers.get("session_start")?.({}, tuiContext());
+    await handlers.get("session_shutdown")?.({}, tuiContext());
+    await settle();
+    expect(helper.spawns.map((spawn) => spawn.args[3])).toEqual([
+      "session-start",
+      "session-shutdown",
+    ]);
+  });
+
+  test("a bash tool result with one marker appends the helper's committed text", async () => {
+    const helper = helperSpawn();
+    helper.output = JSON.stringify({ kind: "committed", text: "Lucid results:\nok", v: 1 });
+    const handlers = loadInteractive(helper.spawn);
+    await handlers.get("session_start")?.({}, tuiContext());
+    const result = await handlers.get("tool_result")?.(
+      bashResult(`published\nlucid-pi-proposal:${"a".repeat(36)}`),
+      tuiContext(),
+    );
+    expect(result).toEqual({
+      content: [
+        { type: "text", text: `published\nlucid-pi-proposal:${"a".repeat(36)}` },
+        { type: "text", text: "Lucid results:\nok" },
+      ],
+    });
+    const capture = JSON.parse(helper.spawns[1]?.stdin ?? "{}");
+    expect(capture).toMatchObject({
+      event: "tool-result",
+      markers: [`lucid-pi-proposal:${"a".repeat(36)}`],
+      toolCallId: "call-1",
+    });
+  });
+
+  test("a helper refusal appends the refusal message", async () => {
+    const helper = helperSpawn();
+    helper.output = JSON.stringify({
+      kind: "refused",
+      message: "The Pi hook capture is invalid.",
+      reason: "invalid-capture",
+      v: 1,
+    });
+    const handlers = loadInteractive(helper.spawn);
+    await handlers.get("session_start")?.({}, tuiContext());
+    const result = await handlers.get("tool_result")?.(
+      bashResult(`lucid-pi-proposal:${"a".repeat(36)}`),
+      tuiContext(),
+    );
+    expect((result as { content: { text: string }[] }).content[1]?.text).toBe(
+      "Lucid refused: The Pi hook capture is invalid.",
+    );
+  });
+
+  test("a helper that prints nothing leaves the proposals unconfirmed", async () => {
+    const helper = helperSpawn();
+    const handlers = loadInteractive(helper.spawn);
+    await handlers.get("session_start")?.({}, tuiContext());
+    const result = await handlers.get("tool_result")?.(
+      bashResult(`lucid-pi-proposal:${"a".repeat(36)}`),
+      tuiContext(),
+    );
+    expect((result as { content: { text: string }[] }).content[1]?.text).toBe(
+      "Lucid could not confirm these proposals. They are not retried.",
+    );
+  });
+
+  test("a bash tool result without a marker returns undefined and starts nothing", async () => {
+    const helper = helperSpawn();
+    const handlers = loadInteractive(helper.spawn);
+    await handlers.get("session_start")?.({}, tuiContext());
+    expect(
+      await handlers.get("tool_result")?.(bashResult("ordinary output"), tuiContext()),
+    ).toBeUndefined();
+    expect(helper.spawns).toHaveLength(1);
+  });
+
+  test("seventeen markers refuse the batch without starting a helper", async () => {
+    const helper = helperSpawn();
+    const handlers = loadInteractive(helper.spawn);
+    await handlers.get("session_start")?.({}, tuiContext());
+    const seventeen = Array.from({ length: 17 }, () => `lucid-pi-proposal:${"a".repeat(36)}`);
+    const result = await handlers.get("tool_result")?.(
+      bashResult(seventeen.join("\n")),
+      tuiContext(),
+    );
+    expect((result as { content: unknown[] }).content).toHaveLength(2);
+    expect((result as { content: { text: string }[] }).content[1]?.text).toBe(
+      "Lucid: more than 16 proposals in one command; none was recorded.",
+    );
+    expect(helper.spawns).toHaveLength(1);
+  });
+
+  test("a non-bash tool result returns undefined", async () => {
+    const helper = helperSpawn();
+    const handlers = loadInteractive(helper.spawn);
+    await handlers.get("session_start")?.({}, tuiContext());
+    expect(
+      await handlers.get("tool_result")?.(bashResult("lucid-pi-proposal:x"), tuiContext()),
+    ).toBeDefined();
+    const read = await loadInteractive(helper.spawn).get("tool_result")?.(
+      { ...bashResult("lucid-pi-proposal:x"), toolName: "read" },
+      tuiContext(),
+    );
+    expect(read).toBeUndefined();
+  });
+
+  test("input in the interactive role never gates the prompt", async () => {
+    const helper = helperSpawn();
+    const handlers = loadInteractive(helper.spawn);
+    await handlers.get("session_start")?.({}, tuiContext());
+    expect(handlers.get("input")?.({}, {})).toBeUndefined();
+  });
+});
+
+describe("piExtensionSource with a lucid command", () => {
+  test("embeds the command and root and still exports a default function", () => {
+    const source = piExtensionSource(LUCID);
+    expect(source).toContain(`const LUCID = ${JSON.stringify(LUCID)};`);
+    expect(source).toContain(`const extension = ${lucidPiExtension.toString()};`);
+    expect(source).toContain("export default function (pi) { return extension(pi, LUCID); }");
+  });
+
+  test("without lucid it is byte-identical to before", () => {
+    expect(piExtensionSource()).toBe(
+      `// Lucid Pi extension (RFC 28). Written by Lucid; do not edit.\nexport default ${lucidPiExtension.toString()};\n`,
+    );
+  });
+
+  test("materializePiExtension hashes the command and root into the file name", () => {
+    const plain = materializePiExtension(root);
+    const wired = materializePiExtension(root, LUCID);
+    expect(wired).not.toBe(plain);
+    expect(readFileSync(wired, "utf8")).toContain(`const LUCID = ${JSON.stringify(LUCID)};`);
+    expect(materializePiExtension(root, { ...LUCID, root: "/other/records" })).not.toBe(wired);
+  });
 });
