@@ -253,7 +253,7 @@ export const dispatch = async (
             reason: "invalid-capture",
             v: 1 as const,
           }
-        : await runPiHook(records, mapped.event, text);
+        : await runPiHook(records, mapped.event, text, { signal: deps.signal });
     (deps.onOutput ?? console.log)(JSON.stringify(result));
     return { kind: "pi-hook" };
   }

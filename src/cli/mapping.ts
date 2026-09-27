@@ -133,11 +133,16 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
                 "The Claude Code hook reads its native callback from stdin; --root selects its configured record root.",
             };
     case "_pi-hook": {
-      const events = new Set<PiHookEvent>(["session-start", "session-shutdown", "tool-result"]);
+      const events = new Set<PiHookEvent>([
+        "session-start",
+        "session-shutdown",
+        "settled",
+        "tool-result",
+      ]);
       const piHookHelp = {
         kind: "help" as const,
         message:
-          "usage: lucid _pi-hook <session-start|session-shutdown|tool-result> [--root ROOT]\nThe Pi hook reads one JSON capture from stdin; --root selects its configured record root.",
+          "usage: lucid _pi-hook <session-start|session-shutdown|settled|tool-result> [--root ROOT]\nThe Pi hook reads one JSON capture from stdin; --root selects its configured record root.",
       };
       if (rest.length === 1 && events.has(rest[0] as PiHookEvent))
         return { event: rest[0] as PiHookEvent, kind: "pi-hook" };
