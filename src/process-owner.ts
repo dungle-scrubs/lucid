@@ -99,6 +99,44 @@ function processProbe(): ProcessProbe {
 
 const probe = processProbe();
 
+/** A parent-only read for a process whose full identity is unreadable.
+ * null means gone; undefined means unknown. It grants no identity. */
+type ParentProbe = (pid: number) => number | null | undefined;
+
+function parentProbe(): ParentProbe {
+  if (process.platform === "darwin") {
+    try {
+      const { dlopen, FFIType, ptr } = require("bun:ffi") as typeof import("bun:ffi");
+      const library = dlopen("/usr/lib/libproc.dylib", {
+        proc_pidinfo: {
+          args: [FFIType.i32, FFIType.i32, FFIType.u64, FFIType.ptr, FFIType.i32],
+          returns: FFIType.i32,
+        },
+      });
+      // Darwin proc_bsdshortinfo (PROC_PIDT_SHORTBSDINFO): 64 bytes; pid at 0,
+      // ppid at 4. Unlike proc_bsdinfo it is readable for root-owned processes.
+      const infoBytes = 64;
+      const shortBsdInfo = 13;
+      return (pid) => {
+        const info = Buffer.alloc(infoBytes);
+        if (library.symbols.proc_pidinfo(pid, shortBsdInfo, 0, ptr(info), infoBytes) !== infoBytes)
+          return absentOrUnknown(pid);
+        return info.readUInt32LE(0) === pid ? info.readUInt32LE(4) : undefined;
+      };
+    } catch {
+      // An unavailable backend leaves the ancestry unknown.
+    }
+  }
+  return () => undefined;
+}
+
+const parent = parentProbe();
+
+export function readParentPid(pid: number): number | null | undefined {
+  if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 2_147_483_647) return undefined;
+  return parent(pid);
+}
+
 /** Read identity fields only. null means gone; undefined means unknown. */
 export function readProcessOwner(pid: number): ProcessSnapshot | null | undefined {
   if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 2_147_483_647) return undefined;
