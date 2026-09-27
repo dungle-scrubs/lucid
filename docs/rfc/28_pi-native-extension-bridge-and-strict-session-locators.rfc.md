@@ -2,10 +2,10 @@
 number: 28
 title: "Pi native extension bridge and verified headless resume"
 type: protocol
-status: Draft
+status: Accepted
 author: "Claude Opus 5.5"
 date: 2026-09-27
-version: 5
+version: 6
 ---
 
 # RFC-28: Pi native extension bridge and verified headless resume
@@ -45,7 +45,8 @@ found three blocking defects: subagent commits, a verification that failed
 open, and a missing folder check. v4 answered them with a third probe round
 (Evidence, R1-R12). v5 answers the v4 review (Response to v3 review) with
 two readings of Pi's source (R13, R14) and an ancestry rule for proposals.
-The changes since v3:
+v6 applies the v5 review's minor fixes and is Accepted. The changes since
+v3:
 
 - Only the `input` handler stops a prompt before the model. It now denies
   by default and cannot throw. `ctx.shutdown()` in `before_agent_start` is
@@ -170,8 +171,11 @@ Source readings (v5, Pi 0.87.1):
   every extension's `input` handlers in order and returns on the first
   `{action: "handled"}`. No later handler runs, so none can undo it. A
   handler that throws is reported and skipped. A prompt reaches the model
-  only when no handler returns `handled`. Every user-message path goes
-  through `emitInput`, including `pi.sendUserMessage` from any extension.
+  only when no handler returns `handled`. `AgentSession.prompt`, and so
+  `pi.sendUserMessage` from any extension, runs `emitInput` before any
+  model call. Extension slash commands dispatch before `emitInput`, and
+  queued `nextTurn` custom messages ride on the next approved prompt;
+  both need installed extension code.
 - R14: `AgentSession.sendCustomMessage` with `triggerTurn: true`
   (`dist/core/agent-session.js`) starts a model turn without an `input`
   event. Only an installed extension can call it.
@@ -224,11 +228,16 @@ captured `pid`, and the parent executable to equal the captured
    refuses with `proposal-ancestry-unverified`, and prints that refusal in
    the tool output, when the owner is not an ancestor, or when any process
    between the command and the owner runs a JavaScript runtime (base name
-   `node`, `bun`, or `deno`) or the owner's executable. A nested Pi,
+   `node`, `bun`, or `deno`), an executable with base name `pi`, or the
+   owner's executable. The `pi` clause covers a standalone Pi binary
+   nested under an npm-installed Pi. A nested Pi,
    including one that resumed the parent session with the parent's
    `PI_SESSION_ID`, is such a process: Pi runs under a JavaScript runtime.
    Otherwise the command saves a proposal that carries the session ID and
-   a nonce, and prints a marker line. It changes no record.
+   a nonce, and prints a marker line. It changes no record. The model must
+   run the `lucid` binary directly; a JavaScript launcher (`npx`, `bunx`,
+   `pnpm`, `node <script>`) puts a runtime in the chain and refuses. The
+   skill text says so (slice 5).
 3. **Commit from `tool_result`.** For a `tool_result` whose `toolName` is
    `bash`, the extension extracts lines that start with the proposal
    marker prefix (at most 16; more refuses the batch) and starts `lucid
@@ -329,11 +338,15 @@ captured `pid`, and the parent executable to equal the captured
     `{action: "handled"}`. Its body is a single comparison inside a
     `try`/`catch` whose catch returns `handled`, so it cannot throw. Other
     extensions' `input` handlers cannot open the gate: the first `handled`
-    ends the chain (R13). This covers every user-message path. It does not
-    cover a turn that another installed extension starts with
-    `sendCustomMessage` and `triggerTurn` (R14). Such a turn emits agent
-    events, so the outcome table classifies it as uncertain, never as a
-    proven refusal. Lucid does not pass `-ne` to shut other extensions
+    ends the chain (R13). This covers the resume prompt, which never
+    starts with `/`, and every `prompt` call. It does not cover a turn
+    that another installed extension starts with `sendCustomMessage` and
+    `triggerTurn` (R14), or through its own slash command. With a
+    `refused` attestation, such a turn emits agent events, so the outcome
+    table classifies it as uncertain, never as a proven refusal. With a
+    `verified` attestation it runs in the verified session and counts as
+    part of the continuation; that is the user's own installed code, in
+    the trust model of Security Considerations. Lucid does not pass `-ne` to shut other extensions
     out: a session can depend on a provider or tool that one of them
     registers.
 11. A missing or broken extension stops Pi before any session opens (R1,
@@ -374,11 +387,14 @@ Attestation file (headless role), one JSON object, written with
 exclusive create:
 
 ```json
-{"v":1,"attempt":"<attempt ID>","nonce":"<nonce>","outcome":"verified | refused","reason":"session-id-mismatch | folder-mismatch | session-empty","expected":"<id>","opened":"<id>"}
+{"v":1,"attempt":"<attempt ID>","nonce":"<nonce>","outcome":"verified | refused","reason":"session-id-mismatch | folder-mismatch | session-empty | verification-failed","expected":"<id>","opened":"<id>"}
 ```
 
 `reason` appears only when `outcome` is `refused`. Lucid reads the file
 after hcn returns and ignores any file whose nonce or attempt differs.
+When `LUCID_PI_ATTEMPT` does not parse, the extension has no attempt to
+name, so it writes no file; the `input` gate stays closed, and the
+outcome is uncertain.
 
 Headless outcome, as Lucid classifies it:
 
@@ -525,7 +541,9 @@ Each slice has an observable outcome before the next depends on it.
    classify per the outcome table. Fake-hcn tests, plus
    `scripts/smoke-pi-resume.ts` with four live cases: control resume,
    raced resume (P1), folder mismatch, and a second extension whose
-   `input` handler returns `continue`.
+   `input` handler returns `continue`, run in both load orders. Each case
+   records the full list of hcn event kinds, and the refused cases must
+   match outcome table row 2.
 3. **Lucid: interactive role, registration and commits.** `_pi-hook
    session-start | session-shutdown | tool-result`; proposal commit reuses
    the Claude proposal store with the session check. Tests with injected
@@ -623,6 +641,17 @@ None.
 | N6 slice 1 status | Implementation Notes and the G3 row state branch status. |
 | N7 attempt format | Step 7 defines the format and validators. |
 
+## Response to v4 review (of v5)
+
+Verdict: accept with minors.
+
+| Finding | Disposition |
+|---|---|
+| D1 attestation reasons | `verification-failed` added; an unparsable attempt writes no file and stays uncertain. |
+| D2 coverage wording | R13 and step 10 name the slash-command and `nextTurn` paths, and the verified-attestation case. |
+| D3 row 2 at the hcn level | Slice 2 records full kind lists and runs the second extension in both load orders. |
+| D4 ancestry caveats | `pi` base name added to the refused set; direct-binary requirement stated. |
+
 ## References
 
 Normative:
@@ -638,4 +667,5 @@ Informative:
 - [v1 review](28_pi-native-extension-bridge-and-strict-session-locators.review-v1.md).
 - [v2 review](28_pi-native-extension-bridge-and-strict-session-locators.review-v2.md), of v3.
 - [v3 review](28_pi-native-extension-bridge-and-strict-session-locators.review-v3.md), of v4.
+- [v4 review](28_pi-native-extension-bridge-and-strict-session-locators.review-v4.md), of v5.
 - Pi docs `extensions.md`, `settings.md`, `environment-variables.md` (Pi 0.87.1).
