@@ -11,7 +11,13 @@ import {
   unlinkSync,
 } from "node:fs";
 import { join } from "node:path";
-import { ownerPresence, readParentPid, readProcessOwner } from "../process-owner.js";
+import {
+  ownerPresence,
+  type ProcessProbe,
+  type ProcessSnapshot,
+  readParentPid,
+  readProcessOwner,
+} from "../process-owner.js";
 import type { NativeBinding, NativeInterface } from "../protocol/connection.js";
 import { connectionId, parseNativeBinding, sameNativeHistory } from "../protocol/connection.js";
 import type { ProcessOwner } from "../protocol/process-owner.js";
@@ -100,21 +106,24 @@ export function callerAncestryOwns(
   return pid <= 1 ? false : undefined;
 }
 /** Requires ancestry and independent native-session proof; without an adapter it authorizes nothing.
- * Cache only caller ancestry within one command. Session and final owner checks stay fresh. */
+ * Cache only caller ancestry within one command. Session and final owner checks stay fresh.
+ * A hook that has already verified its parent passes the same process probe, so one command
+ * reads one process view (RFC 28: the parent check and the registration corroborate together). */
 export function nativeRegistrationAuthority(
   verifySession: (capture: NativeCapture) => boolean | undefined = () => undefined,
+  probe: ProcessProbe = readProcessOwner,
 ): RegistrationAuthority {
   const snapshots = new Map<number, ReturnType<typeof readProcessOwner>>();
-  const probe = (pid: number): ReturnType<typeof readProcessOwner> => {
-    if (!snapshots.has(pid)) snapshots.set(pid, readProcessOwner(pid));
-    return snapshots.get(pid);
+  const cached: ProcessProbe = (pid) => {
+    if (!snapshots.has(pid)) snapshots.set(pid, probe(pid));
+    return snapshots.get(pid) as ProcessSnapshot | null | undefined;
   };
   return {
     callerOwns: (capture) => {
-      const ancestry = callerAncestryOwns(capture.owner, probe);
+      const ancestry = callerAncestryOwns(capture.owner, cached);
       return ancestry === true ? verifySession(capture) : ancestry;
     },
-    ownerPresence,
+    ownerPresence: (owner) => ownerPresence(owner, cached),
   };
 }
 

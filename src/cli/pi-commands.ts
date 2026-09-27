@@ -32,13 +32,18 @@ export function piCommandSession(
 }
 
 /** Callback authority for a Pi session: caller ancestry reaches the registered owner and
- * the callback names the registered session. Hooks alone may use it; tool commands may not. */
-export function piSessionAuthority(nativeSessionId: string): RegistrationAuthority {
+ * the callback names the registered session. Hooks alone may use it; tool commands may not.
+ * A hook passes its own process probe so the parent check and this authority read one view. */
+export function piSessionAuthority(
+  nativeSessionId: string,
+  probe: (pid: number) => ReturnType<typeof readProcessOwner> = readProcessOwner,
+): RegistrationAuthority {
   return nativeRegistrationAuthority(
     (candidate) =>
       candidate.harness === "pi" &&
       candidate.interface === "pi-cli" &&
       candidate.nativeSessionId === nativeSessionId,
+    probe,
   );
 }
 
