@@ -2,10 +2,10 @@
 number: 34
 title: "Unbound publication falls back to headless with the producer's settings"
 type: feature
-status: Draft
+status: Accepted
 author: "Claude Opus 5.5"
 date: 2026-09-27
-version: 2
+version: 3
 ---
 
 # RFC-34: Unbound publication falls back to headless with the producer's settings
@@ -171,15 +171,19 @@ Rules:
 4. `settings` applies only on creation. A publication into an existing
    conversation MUST NOT change the driver preference. The person's choice
    in Settings wins after creation.
-5. `origin` is optional and applies only on creation. Its shape is closed:
+5. `origin` is optional and applies only on creation. Lucid validates it
+   only on a creation publish and ignores it on a publication into an
+   existing conversation, like `settings`. Its shape is closed:
    `harness` is a known harness name, `nativeSessionId` is at most 128
    characters from the wire-ID alphabet, and `sessionFile` is an absolute
    path of at most 4096 bytes with no control characters (the rules of the
    existing `path()` validator, `src/protocol/connection.ts:572-576`).
-   Every field is optional. An invalid `origin` refuses the request with
-   `E-HUB-03` before any durable write.
-6. Lucid stores `origin` in record metadata as `origin`, beside
-   `creation`. It is provenance only. It grants no execution authority,
+   Every field is optional. On a creation publish, an invalid `origin`
+   refuses the request with `E-HUB-03` before any durable write.
+6. Lucid stores `origin` inside the creation request in record metadata
+   (`creation.request.origin`). The creation receipt compares the whole
+   request, so a retry with the same creation ID must send the same
+   `origin`. It is provenance only. It grants no execution authority,
    selects no harness, and MUST NOT be passed to hcn as a resume target.
 7. The `driver-preference.ts` module comment that names the server as the
    only writer gains the creation carve-out that already exists in code.
@@ -195,7 +199,8 @@ body is exactly:
 ```
 
 Both IDs pass the existing `connectionId` validator. `parseConnectionFact`
-accepts exactly these three keys.
+reads these three keys, following the convention of the other connection
+facts.
 
 `NativePublication` (`src/protocol/connection.ts:312-326`) gains one field:
 
@@ -306,9 +311,24 @@ repeat of the same publication (same conversation ID, same artifact
 identity, version, and bytes). The artifact write is an idempotent
 repeat. The failure write reuses its ID, and the fallback write then
 succeeds. This also heals an existing record whose last failure is
-`owner-unknown` from the ancestry defect: after section 7 ships, the
+`owner-unknown` from the ancestry defect: after section 8 ships, the
 repeat produces a new `registration-missing` failure, and then the
 fallback.
+
+Healing fixes the hold, not the settings. Section 1 rule 4 keeps the
+driver preference unchanged on a publication into an existing record. A
+healed record that was created without `settings` therefore falls back
+with the user-config defaults, unless the person already changed the
+preference in Settings. The Settings control is the remedy for a model
+mismatch. If the saved model is unavailable, managed preparation refuses
+with `change-settings`.
+
+A verified binding and a fallback can race on one never-bound record, for
+example when an integrated session publishes into a record that a
+non-integrated publisher created. The append lock orders them. The first
+fact to commit decides, and the guard tables refuse the other: `bound`
+after fallback is refused (section 3), and `publication-fallback` after
+`bound` fails the `connection === null` row. Both outcomes are safe.
 
 ### 5. Admission after fallback, and what the connection panel shows
 
@@ -323,11 +343,17 @@ predicate. The remaining fences still apply unchanged:
   rechecks the predicate at attempt creation and at the dispatch boundary
   (RFC 26 F2, F4).
 
-No managed attempt can be in flight when the fallback is written. RFC 26
+No managed attempt can be in flight when the fallback is written. Two
+rules cover the two cases. An attempt that started before the
+requirement is captured in `legacyDelivery` at the request transition
+(`src/protocol/connection.ts:1024-1035`), and the guard row
+`hasUnsettledPublicationDelivery(state) === false` refuses the fallback
+until it settles. An attempt after the requirement cannot start: RFC 26
 F2 and F4 recheck the predicate at attempt creation, executor
 acquisition, and the dispatch boundary, and the predicate was true until
-the fallback append. So the guard table needs no separate
-unsettled-execution check.
+the fallback append. A pre-requirement attempt that ends `uncertain`
+never retires its captured count, so that record stays held, as RFC 26's
+no-reset rule requires.
 
 Notes dispatch once each. A note saved before the fallback is a queued
 input with no execution entry. After the fallback it becomes an eligible
@@ -337,7 +363,10 @@ govern these notes. A note saved after the fallback takes the same path.
 
 The connection projection gains one state, `headless-fallback`.
 `observeConnection` (`src/store/connection-view.ts:66`) checks
-`nativePublication.fallback` before its unbound branch:
+`nativePublication.fallback` first, before the `uncertainInputs` and
+`inFlight` checks of its unbound branch, and returns directly. The order
+is safe because the write-time guard requires settled legacy delivery,
+and the captured counts cannot grow after the requirement:
 
 - `state`: `headless-fallback`
 - `reason`: `registration-missing`
@@ -408,7 +437,7 @@ failure.
 `callerAncestryOwns` changes how it handles an ancestor that
 `readProcessOwner` cannot read:
 
-1. A new parent-only probe reads `proc_pidinfo` with flavor
+1. On Darwin, a new parent-only probe reads `proc_pidinfo` with flavor
    `PROC_PIDT_SHORTBSDINFO` (13, 64 bytes, parent PID at offset 4).
    Measured on this machine on 2026-09-27: it returns `872 → 741` for the
    root-owned `/usr/bin/login`, where `PROC_PIDTBSDINFO` fails. It returns
@@ -434,8 +463,11 @@ where it returned `undefined` before. The caller then gets
 registered owner to change user or privilege, which Claude Code and Codex
 do not do.
 
-The probe is Darwin-only, like `readProcessOwner`. On other platforms the
-walk keeps its current behavior.
+On Linux the parent-only probe reads field 4 of `/proc/<pid>/stat`, which
+is readable for processes of every user, where `readlink
+/proc/<pid>/exe` fails for a root-owned process. On other platforms the
+probe returns unknown, and the walk keeps its current behavior: a caller
+with an unreadable ancestor stays `owner-unknown` and held.
 
 ## Amendments to RFC 26
 
@@ -459,6 +491,13 @@ case only. Every other RFC 26 rule stays normative.
 7. "Only verified binding admits the already specified native continuation
    workflow." Unchanged for native continuation. Fallback admits managed
    dispatch, not native continuation.
+8. F1: distinct failed attempts "replace only the latest failure
+   projection, including after binding." After fallback, a new
+   `publication-connection-failed` is refused (section 3 rule 2).
+9. Section 8's "Publication succeeded, integration missing" row now
+   applies only to failure reasons other than `registration-missing`, or
+   to a `registration-missing` hold whose fallback was refused. Such
+   holds include `owner-unknown`.
 
 ## State Machine
 
@@ -498,7 +537,11 @@ fallback: bound refused; failure refused; requested repeat is a no-op.
   model can run a command, so the window is the hook's own startup. If it
   occurs, the record falls back and its notes go to a headless session and
   not to the live session. The notes are not lost, and no second native
-  process receives them. Recovery: the person publishes again from the
+  process receives them. A second case has the same shape: registration
+  lookup unlinks a registration whose owner probe reads as confirmed
+  absent (`src/store/native-registration.ts:269-274`). A false absent
+  reading, for example after PID reuse, removes a live session's
+  registration, and its next publication falls back. Recovery: the person publishes again from the
   live session into a new conversation. This RFC accepts that residual
   risk. The alternative keeps every non-integrated publication in a dead
   end.
@@ -550,9 +593,14 @@ Each unit has an observable outcome before the next unit depends on it.
 5. **Browser.** Label and tooltip, verified at 390, 768, and 1440 pixels
    in both themes (section 6).
 6. **Skill.** Update in `~/dev/skills`, then its link script.
-7. **Live confirmation.** Repeat the publication for record `40cf7112`,
-   confirm the fallback, and confirm that a browser note gets a reply from
-   a headless `pi / zai / glm-5.3` turn.
+7. **Live confirmation.**
+   a. A fresh publication from an interactive Pi session with declared
+      `pi / zai / glm-5.3` settings falls back, and a browser note gets a
+      reply from a headless turn on those settings in the publisher's
+      folder.
+   b. A repeat publication into record `40cf7112` falls back and keeps
+      that record's saved preference. That record's preference is already
+      `pi / zai / glm-5.3`, because the person changed it in Settings.
 
 ## Acceptance
 
@@ -576,7 +624,7 @@ Each unit has an observable outcome before the next unit depends on it.
   resumed dispatch does not. A record without `origin` dispatches without
   the line.
 - A publication into an existing record does not change the driver
-  preference or `origin`.
+  preference or `origin`, and an invalid `origin` on it is ignored.
 - The pre-amendment reader refuses a fallback record on fold.
 - The existing RFC 26 acceptance suite passes unchanged.
 
@@ -613,6 +661,23 @@ answered here.
 | R34-14, R34-15 ADR consistency | No change needed; fencing sentence kept in section 1 rule 6. |
 | R34-16 Open Question 3 should be decided | Applied. Repeat publication heals (section 4); status-read healing rejected in Alternatives. |
 | R34-17 copied-record portability | Applied. Section 7 and Security. |
+
+## Response to v2 review
+
+Every finding in
+[review v2](34_unbound-publication-headless-fallback.review-v2.md) is
+answered here.
+
+| Finding | Disposition |
+|---|---|
+| R34-18 healing fixes the hold, not the settings; plan step 7 | Applied. Section 4 states it; plan step 7 split into a fresh publication and a repeat publication. |
+| R34-19 prune path is a second false-fallback vector | Applied. Security, first bullet. |
+| R34-20 section 5 credits F2/F4 for the legacyDelivery guard | Applied. Section 5 names both cases and the uncertain-count consequence. |
+| R34-21 origin validation on existing-record publishes | Applied. Section 1 rule 5: validated only on creation. Rule 6 records the storage location as implemented. |
+| R34-22 F1 sentence and old section 8 row | Applied. Amendments 8 and 9. |
+| R34-23 Linux keeps the defect | Applied. Linux gets a `/proc/<pid>/stat` parent read; other platforms stay held, stated. |
+| R34-24 check order in `observeConnection` | Applied. Section 5. |
+| R34-25 bind-versus-fallback race | Applied. Section 4. |
 
 ## References
 
