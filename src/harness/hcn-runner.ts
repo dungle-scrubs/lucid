@@ -339,6 +339,11 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
     if (opts.signal?.aborted) throw new HarnessRefusal("aborted", "The turn was canceled");
     if (opts.isolation && opts.resume !== undefined)
       throw new HarnessRefusal("invalid-isolation", "An isolated turn cannot resume a session");
+    if (opts.native && (opts.isolation || opts.nativeApprovals))
+      throw new HarnessRefusal(
+        "invalid-native",
+        "Native passthrough cannot combine with isolation or native approvals",
+      );
     if (opts.nativeApprovals)
       return nativeApprovalStream(deps, opts, (event) =>
         safeRefusal(event, opts, "execution-check"),
@@ -364,9 +369,13 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
       ...(opts.isolation ? ["--questions", "none"] : []),
       "--prompt-file",
       "-",
+      ...(opts.native && opts.native.args.length > 0 ? ["--", ...opts.native.args] : []),
     ];
     log({ event: "hcn_run", turnId: opts.turnId, harness: opts.harness });
-    const proc = deps.spawn(argv, opts.cwd === undefined ? {} : { cwd: opts.cwd });
+    const proc = deps.spawn(argv, {
+      ...(opts.cwd === undefined ? {} : { cwd: opts.cwd }),
+      ...(opts.native ? { env: opts.native.env } : {}),
+    });
     let termination: Promise<void> | undefined;
     const terminate = (): void => {
       termination ??= (async () => {

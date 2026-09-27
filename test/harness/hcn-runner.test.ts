@@ -114,6 +114,38 @@ describe("streamTurn over hcn run --json", () => {
     expect(argv).toContain("sess-1");
     expect(argv).toContain("--model");
   });
+
+  test("native passthrough puts args after -- and env in the process environment only", async () => {
+    const r = rig();
+    const it = r.runner
+      .streamTurn({
+        harness: "pi",
+        prompt: "hi",
+        turnId: "t",
+        resume: "sess-1",
+        native: { env: { LUCID_PI_ATTEMPT: "secret-nonce" }, args: ["-e", "/x/lucid.js"] },
+      })
+      [Symbol.asyncIterator]();
+    r.proc.exit(0);
+    await it.next();
+    const call = r.spawner.calls[0];
+    expect(call?.argv.slice(-5)).toEqual(["--prompt-file", "-", "--", "-e", "/x/lucid.js"]);
+    expect(call?.argv.join(" ")).not.toContain("secret-nonce");
+    expect(call?.opts.env).toEqual({ LUCID_PI_ATTEMPT: "secret-nonce" });
+  });
+
+  test("native passthrough refuses isolation", () => {
+    const r = rig();
+    expect(() =>
+      r.runner.streamTurn({
+        harness: "claude",
+        prompt: "hi",
+        turnId: "t",
+        isolation: "tool-free",
+        native: { env: {}, args: ["-x"] },
+      }),
+    ).toThrow("Native passthrough");
+  });
 });
 
 describe("openSession over hcn session --json", () => {

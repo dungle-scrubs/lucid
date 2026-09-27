@@ -221,6 +221,14 @@ export interface StreamTurnOptions {
   readonly effort?: string;
   readonly cwd?: string;
   readonly turnId: string;
+  /** Native passthrough for one turn: `env` reaches the harness through the
+   * hcn process environment, never argv; `args` follow hcn's `--`. */
+  readonly native?: NativeTurnOptions;
+}
+
+export interface NativeTurnOptions {
+  readonly env: Readonly<Record<string, string>>;
+  readonly args: readonly string[];
 }
 
 export interface HarnessRunner {

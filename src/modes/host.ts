@@ -219,6 +219,7 @@ export interface HeadlessDeps {
         readonly prompt: string;
         readonly native: NativeIntent;
         readonly nativeApprovals?: StreamTurnOptions["nativeApprovals"];
+        readonly nativeTurn?: StreamTurnOptions["native"];
         readonly notice?: string;
       }
   >;
@@ -1111,6 +1112,7 @@ const turnStrategy = (
             activeAbort = new AbortController();
             let composedPrompt: string;
             let nativeApprovals: StreamTurnOptions["nativeApprovals"];
+            let nativeTurn: StreamTurnOptions["native"];
             if (deps.prepareTurn) {
               const managedTurn = await deps
                 .prepareTurn({
@@ -1153,6 +1155,7 @@ const turnStrategy = (
                     };
                   },
                 };
+              nativeTurn = managedTurn.nativeTurn;
               ctx.preparedNotice(managedTurn.notice);
               resumeId =
                 managedTurn.native.kind === "resume" ? managedTurn.native.sessionId : undefined;
@@ -1189,6 +1192,7 @@ const turnStrategy = (
                       ...(deps.effort === undefined ? {} : { effort: deps.effort }),
                     }),
                 ...(attemptResume && resumeId !== undefined ? { resume: resumeId } : {}),
+                ...(nativeTurn ? { native: nativeTurn } : {}),
               });
             let raw = nativeApprovals ? invoke() : ordinaryDispatch(deps, ctx, invoke);
             if (attemptResume || (deps.probeFirstTurn === true && spawns === 0)) {

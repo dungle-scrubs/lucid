@@ -1,9 +1,11 @@
+import { dirname } from "node:path";
 import { shellCommand } from "../cli/invocation.js";
 import {
   diagnosticMessage,
   failureDiagnostic,
   selectionProblem,
 } from "../harness/compatibility.js";
+import { type PiVerification, preparePiVerification } from "../harness/pi-verification.js";
 import type { HarnessFacts, HarnessRunner } from "../harness/runner.js";
 import { composeAnnotationPrompt } from "../protocol/annotations.js";
 import { composeArtifactPrompt } from "../protocol/artifacts.js";
@@ -43,6 +45,8 @@ type ManagedPrepared =
       readonly kind: "ready";
       readonly native: NativeIntent;
       readonly nativeFingerprint?: string;
+      /** RFC 28: a resume of a bound Pi session carries its verification. */
+      readonly piVerification?: PiVerification;
     });
 interface ManagedPreparationDeps {
   readonly cwd: string;
@@ -401,7 +405,29 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
           );
         return { kind: "held", issue: started.issue };
       }
-      if (closed || input.signal.aborted) {
+      let piVerification: PiVerification | undefined;
+      let unavailable: string | undefined;
+      const bound = host.state().connection;
+      if (bound?.binding.interface === "pi-cli" && native.kind === "resume") {
+        const launch = Object.values(bound.launches).find(
+          (pending) => pending.launch.execution?.turnId === input.turnId,
+        );
+        try {
+          if (!launch) throw new Error("The native launch is not recorded.");
+          piVerification = preparePiVerification({
+            root: dirname(host.dir),
+            recordDir: host.dir,
+            launchId: launch.launch.id,
+            sessionId: native.sessionId,
+            workingDirectory: bound.binding.workingDirectory,
+          });
+        } catch (cause) {
+          unavailable = `Lucid could not prepare its Pi extension (native-extension-unavailable): ${
+            cause instanceof Error ? cause.message : String(cause)
+          }`;
+        }
+      }
+      if (closed || input.signal.aborted || unavailable !== undefined) {
         const ended = host.writeExecution({
           kind: "attempt-ended",
           inputId: input.inputId,
@@ -412,7 +438,10 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
             failure: {
               code: "E-HUB-07",
               evidence: "dispatch-not-called",
-              reason: "Preparation was cancelled before task dispatch.",
+              reason: (unavailable ?? "Preparation was cancelled before task dispatch.").slice(
+                0,
+                4096,
+              ),
             },
           },
         });
@@ -427,6 +456,7 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
         kind: "ready",
         native,
         ...(nativeFingerprint === undefined ? {} : { nativeFingerprint }),
+        ...(piVerification === undefined ? {} : { piVerification }),
       };
     } catch (cause) {
       if (input.signal.aborted || closed) return { kind: "held" };

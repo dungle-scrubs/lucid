@@ -1,10 +1,17 @@
+import {
+  classifyPiResume,
+  isAgentEventKind,
+  isNativeExit3,
+  type PiVerification,
+  piNativeTurn,
+} from "../harness/pi-verification.js";
 import type {
   NativeApprovalChannel,
   NativeApprovalEvents,
   StreamTurnOptions,
 } from "../harness/runner.js";
 import { EventKind } from "../protocol/events.js";
-import { deriveAttemptOutcome } from "../protocol/execution.js";
+import { type AttemptOutcome, deriveAttemptOutcome } from "../protocol/execution.js";
 import type { Frame } from "../protocol/frames.js";
 import type { ConversationHost } from "../store/conversation-host.js";
 import { createManagedApprovals } from "./managed-approvals.js";
@@ -18,6 +25,7 @@ interface OwnedAttempt {
   readonly inputId: string;
   mayHaveRun: boolean;
   refused: false | "harness-refusal" | "dispatch-not-called";
+  pi?: { readonly verification: PiVerification; agentEvents: boolean; nativeExit3: boolean };
 }
 const executionEvents: ReadonlySet<string> = new Set([
   EventKind.approvalRequest,
@@ -37,12 +45,46 @@ export interface ManagedExecution {
   readonly prepare: (input: Parameters<ManagedPreparation["prepare"]>[0]) => Promise<
     Awaited<ReturnType<ManagedPreparation["prepare"]>> & {
       readonly nativeApprovals?: StreamTurnOptions["nativeApprovals"];
+      readonly nativeTurn?: StreamTurnOptions["native"];
       readonly notice?: string;
     }
   >;
   readonly sendFrame: (frame: Frame) => ReturnType<ConversationHost["handleFrame"]>;
   /** The source has drained this turn, including its process cleanup. */
   turnSettled(turnId: string): void;
+}
+
+/** RFC 28's outcome table over the ordinary derivation. A verified resume keeps
+ * it; a proven refusal is a pre-model refusal; anything else never counts as
+ * a completed continuation of the bound session. */
+function piAttemptOutcome(
+  pi: NonNullable<OwnedAttempt["pi"]>,
+  derived: AttemptOutcome,
+): AttemptOutcome {
+  const result = classifyPiResume(pi.verification, {
+    completed: derived.kind === "completed",
+    agentEvents: pi.agentEvents,
+    nativeExit3: pi.nativeExit3,
+  });
+  if (result.kind === "verified") return derived;
+  if (result.kind === "refused")
+    return {
+      kind: "pre-start-failed",
+      failure: {
+        code: "E-HUB-05",
+        evidence: "harness-refusal",
+        reason: `Pi did not open the bound session (${result.reason}), so the resume stopped before the model. The original session may be gone. The note stays saved; retry after repair.`,
+      },
+    };
+  if (derived.kind !== "completed") return derived;
+  return {
+    kind: "uncertain",
+    failure: {
+      code: "E-HUB-07",
+      evidence: "terminal-error",
+      reason: `Lucid could not confirm that Pi resumed the bound session (${result.detail}). The turn's output is not accepted as its continuation. Inspect the workspace before continuing.`,
+    },
+  };
 }
 
 export class ExecutionSettlementError extends Error {
@@ -77,11 +119,12 @@ export function createManagedExecution(
         execution.attempt !== attempt.attempt
       )
         return;
-      const outcome = deriveAttemptOutcome(
+      const derived = deriveAttemptOutcome(
         state,
         execution,
         !attempt.mayHaveRun && attempt.refused,
       );
+      const outcome = attempt.pi ? piAttemptOutcome(attempt.pi, derived) : derived;
       const settled = host.writeExecution({
         kind: "attempt-ended",
         inputId: attempt.inputId,
@@ -191,9 +234,19 @@ export function createManagedExecution(
           inputId: input.inputId,
           mayHaveRun: false,
           refused: false,
+          ...(result.piVerification
+            ? {
+                pi: {
+                  verification: result.piVerification,
+                  agentEvents: false,
+                  nativeExit3: false,
+                },
+              }
+            : {}),
         });
         return {
           ...result,
+          ...(result.piVerification ? { nativeTurn: piNativeTurn(result.piVerification) } : {}),
           ...(result.nativeFingerprint === undefined
             ? {}
             : {
@@ -229,6 +282,10 @@ export function createManagedExecution(
         executionEvents.has(String(frame.event.kind))
       )
         attempt.mayHaveRun = true;
+      if (attempt?.pi && frame.kind === "event") {
+        if (isAgentEventKind(String(frame.event.kind))) attempt.pi.agentEvents = true;
+        if (isNativeExit3(frame.event)) attempt.pi.nativeExit3 = true;
+      }
       const result = host.handleFrame(JSON.stringify(frame));
       if (
         attempt &&
