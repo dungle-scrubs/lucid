@@ -6,7 +6,7 @@
       "name": "@dungle-scrubs/lucid",
       "dependencies": {
         "@assistant-ui/react": "^0.10",
-        "@dungle-scrubs/harness-cli-normalizer": "0.7.5",
+        "@dungle-scrubs/harness-cli-normalizer": "0.7.6",
         "@radix-ui/react-popover": "^1.1.23",
         "@radix-ui/react-tooltip": "^1.2.16",
         "@tanstack/react-form": "1.33.5",
@@ -71,7 +71,7 @@
 
     "@csstools/css-tokenizer": ["@csstools/css-tokenizer@4.0.0", "", {}, "sha512-QxULHAm7cNu72w97JUNCBFODFaXpbDg+dP8b/oWFAZ2MTRppA3U00Y2L1HqaS4J6yBqxwa/Y3nMBaxVKbB/NsA=="],
 
-    "@dungle-scrubs/harness-cli-normalizer": ["@dungle-scrubs/harness-cli-normalizer@0.7.5", "", { "dependencies": { "koffi": "3.2.1" }, "bin": { "hcn": "dist/cli.js" } }, "sha512-wiwbkJiPMTgRgc3QDODHUtxvA0ic4pv+eocYrOqbE2S79onRGF+XpE+wkoiblSnUYc2idCSGho1GJwupjOYL+w=="],
+    "@dungle-scrubs/harness-cli-normalizer": ["@dungle-scrubs/harness-cli-normalizer@0.7.6", "", { "dependencies": { "koffi": "3.2.1" }, "bin": { "hcn": "dist/cli.js" } }, "sha512-j9y/lrI7x3Tun8ZqDZ6rq+76ZBKRlI954ifDNtdB7Qx2XAshOL+zE8J4KsxqBocVwINPX7iPJxlwS5RTcMBLOw=="],
 
     "@exodus/bytes": ["@exodus/bytes@1.15.1", "", { "peerDependencies": { "@noble/hashes": "^1.8.0 || ^2.0.0" }, "optionalPeers": ["@noble/hashes"] }, "sha512-S6mL0yNB/Abt9Ei4tq8gDhcczc4S3+vQ4ra7vxnAf+YHC02srtqxKKZghx2Dq6p0e66THKwR6r8N6P95wEty7Q=="],
 
