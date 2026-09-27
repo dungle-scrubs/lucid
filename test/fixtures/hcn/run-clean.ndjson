@@ -1,14 +1,14 @@
-{"kind":"identity","sessionId":"60900bf5-34a9-41f1-bf7f-b1f14b3bb817","authority":"harness-minted","capabilities":{"vision":true,"images":true,"streaming":"token","session":true,"source":"curated","confidence":"medium","escalation":{"supported":true,"source":"runtime-verified","confidence":"high","observedOn":{"harness":"claude","model":"sonnet","version":"2.1.281","date":"2026-09-24"}},"compactionReporting":{"source":"stream","states":["started","compacted","failed"],"tokens":true}}}
+{"kind":"identity","sessionId":"c13d5d4e-cbe7-40cd-9b8f-fc430963325b","authority":"harness-minted","capabilities":{"vision":true,"images":true,"streaming":"token","session":true,"source":"curated","confidence":"medium","escalation":{"supported":true,"source":"runtime-verified","confidence":"high","observedOn":{"harness":"claude","model":"sonnet","version":"2.1.281","date":"2026-09-24"}},"compactionReporting":{"source":"stream","states":["started","compacted","failed"],"tokens":true}}}
 {"kind":"progress","label":"hook_started"}
 {"kind":"progress","label":"hook_started"}
 {"kind":"progress","label":"hook_started"}
 {"kind":"progress","label":"hook_started"}
 {"kind":"progress","label":"hook_started"}
-{"kind":"progress","label":"hook_response"}
 {"kind":"progress","label":"hook_response"}
 {"kind":"progress","label":"hook_response"}
 {"kind":"progress","label":"hook_response"}
 {"kind":"progress","label":"hook_progress"}
+{"kind":"progress","label":"hook_response"}
 {"kind":"progress","label":"hook_response"}
 {"kind":"progress","label":"status"}
 {"kind":"token","text":"ok"}
