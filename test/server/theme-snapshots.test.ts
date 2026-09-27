@@ -19,4 +19,5 @@ test("real snapshots retain static adaptive graphics and preserve nonconforming 
     );
     expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: "" });
   }
-});
+  // Two node + jsdom processes: 4-6 s on a loaded machine, past bun's 5 s default.
+}, 30000);
