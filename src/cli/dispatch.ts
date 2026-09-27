@@ -76,6 +76,9 @@ export interface DispatchDeps {
   /** Claude Code session reported to a tool command; null disables detection. Defaults to the
    * environment unless a test injects `nativeAuthority`. */
   readonly claudeSession?: string | null;
+  /** Pi session reported to a tool command; null disables detection. Defaults to the
+   * environment unless a test injects `nativeAuthority`. */
+  readonly piSession?: string | null;
   readonly injectFn?: (stdin: string) => Promise<InjectResult>;
   readonly readStdinFn?: () => Promise<string>;
   /** Sink for help / confirmation lines — defaults to `console.log` in `runCli`. */
@@ -106,6 +109,7 @@ export type DispatchResult =
     }
   | { readonly kind: "codex-hook" }
   | { readonly kind: "claude-hook" }
+  | { readonly kind: "pi-hook" }
   | { readonly kind: "connection-listen"; readonly verdict: "requested" | "held" | "pending" }
   | { readonly kind: "connection-setup"; readonly verdict: "installed" | "unchanged" | "refused" }
   | { readonly kind: "connection-control"; readonly verdict: "accepted" | "refused" | "pending" }
@@ -235,10 +239,23 @@ export const dispatch = async (
   }
   if (mapped.kind === "connection-listen") {
     const claudeSession = await commandClaudeSession(deps);
+    const piSession = await commandPiSession(deps);
     const records = (deps.conversationsFactory ?? conversations)(deps.rootDir);
     if (claudeSession) {
       const { proposeClaudeOperation } = await import("./claude-commands.js");
       const result = proposeClaudeOperation(records, claudeSession, {
+        conversationId: mapped.conversationId,
+        kind: "listen",
+      });
+      (deps.onOutput ?? console.log)(proposalOutput(result, mapped.json));
+      return {
+        kind: "connection-listen",
+        verdict: result.verdict === "pending" ? "pending" : "held",
+      };
+    }
+    if (piSession) {
+      const { proposePiOperation } = await import("./pi-commands.js");
+      const result = proposePiOperation(records, piSession, {
         conversationId: mapped.conversationId,
         kind: "listen",
       });
@@ -273,11 +290,32 @@ export const dispatch = async (
         break;
     }
     const claudeSession = control.kind === "cancel-input" ? null : await commandClaudeSession(deps);
+    const piSession = control.kind === "cancel-input" ? null : await commandPiSession(deps);
     if (claudeSession && control.kind !== "cancel-input") {
       const { proposeClaudeOperation } = await import("./claude-commands.js");
       const result = proposeClaudeOperation(
         records,
         claudeSession,
+        control.kind === "receipt"
+          ? { conversationId: mapped.conversationId, kind: "receipt", offerId: control.offerId }
+          : {
+              conversationId: mapped.conversationId,
+              kind: "respond",
+              offerId: control.offerId,
+              outcome: control.outcome,
+            },
+      );
+      (deps.onOutput ?? console.log)(proposalOutput(result, mapped.json));
+      return {
+        kind: "connection-control",
+        verdict: result.verdict === "pending" ? "pending" : "refused",
+      };
+    }
+    if (piSession && control.kind !== "cancel-input") {
+      const { proposePiOperation } = await import("./pi-commands.js");
+      const result = proposePiOperation(
+        records,
+        piSession,
         control.kind === "receipt"
           ? { conversationId: mapped.conversationId, kind: "receipt", offerId: control.offerId }
           : {
@@ -317,13 +355,16 @@ export const dispatch = async (
       "./artifact-publish.js"
     );
     const claudeSession = await commandClaudeSession(deps);
+    const piSession = await commandPiSession(deps);
     const result = await publishArtifact(
       withUnmanagedMarker(await readPublicationRequest(mapped.request), mapped.allowUnmanaged),
       deps.rootDir,
       deps.nativeAuthority,
       claudeSession
         ? (await import("./claude-commands.js")).claudePublicationConnector(claudeSession)
-        : undefined,
+        : piSession
+          ? (await import("./pi-commands.js")).piPublicationConnector(piSession)
+          : undefined,
     );
     (deps.onOutput ?? console.log)(
       mapped.json
@@ -566,4 +607,11 @@ async function commandClaudeSession(deps: DispatchDeps): Promise<string | null |
   if (deps.claudeSession !== undefined) return deps.claudeSession;
   if (deps.nativeAuthority) return null;
   return (await import("./claude-commands.js")).claudeCommandSession();
+}
+
+/** The Pi session is resolved only after the Claude session; both name a proposal path. */
+async function commandPiSession(deps: DispatchDeps): Promise<string | null | undefined> {
+  if (deps.piSession !== undefined) return deps.piSession;
+  if (deps.nativeAuthority) return null;
+  return (await import("./pi-commands.js")).piCommandSession();
 }
