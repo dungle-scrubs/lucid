@@ -5,7 +5,7 @@ type: protocol
 status: Draft
 author: "Claude Opus 5.5"
 date: 2026-09-27
-version: 4
+version: 5
 ---
 
 # RFC-28: Pi native extension bridge and verified headless resume
@@ -42,8 +42,10 @@ in an empty session under the old ID.
 
 v3 replaced v2 with a design built on native probes. The v3 review (G1-G7)
 found three blocking defects: subagent commits, a verification that failed
-open, and a missing folder check. v4 answers them with a third probe round
-(Evidence, R1-R9):
+open, and a missing folder check. v4 answered them with a third probe round
+(Evidence, R1-R12). v5 answers the v4 review (Response to v3 review) with
+two readings of Pi's source (R13, R14) and an ancestry rule for proposals.
+The changes since v3:
 
 - Only the `input` handler stops a prompt before the model. It now denies
   by default and cannot throw. `ctx.shutdown()` in `before_agent_start` is
@@ -54,8 +56,9 @@ open, and a missing folder check. v4 answers them with a third probe round
 - The check compares the working folder as well as the session ID.
 - A commit requires the proposal's session to be the registered session.
   Pi gives each session, and each subagent process, its own
-  `PI_SESSION_ID` (R8, R9). In-process SDK sessions stay behind an
-  activation gate.
+  `PI_SESSION_ID` (R8, R9). A proposal made under a nested Pi process
+  refuses, even when that process resumed the parent session. In-process
+  SDK sessions stay behind an activation gate.
 
 The design reuses the Claude Code adapter's proven shape instead of the
 v2 extension tool and 45-second in-handler wait. That removes v2's session
@@ -161,6 +164,18 @@ The v3 prototype's `before_agent_start` shutdown never ran in P1: `input`
 had already returned `handled`. R5 and R7 show it would not have stopped
 the model.
 
+Source readings (v5, Pi 0.87.1):
+
+- R13: `ExtensionRunner.emitInput` (`dist/core/extensions/runner.js`) runs
+  every extension's `input` handlers in order and returns on the first
+  `{action: "handled"}`. No later handler runs, so none can undo it. A
+  handler that throws is reported and skipped. A prompt reaches the model
+  only when no handler returns `handled`. Every user-message path goes
+  through `emitInput`, including `pi.sendUserMessage` from any extension.
+- R14: `AgentSession.sendCustomMessage` with `triggerTurn: true`
+  (`dist/core/agent-session.js`) starts a model turn without an `input`
+  event. Only an installed extension can call it.
+
 ## Protocol Overview
 
 ### Roles by mode
@@ -204,9 +219,16 @@ captured `pid`, and the parent executable to equal the captured
 2. **Propose from Bash.** The model runs ordinary Lucid commands in Pi's
    Bash tool: `lucid artifact publish`, `lucid connection resume-listen`,
    `receipt`, `respond`. As for Claude Code, a command run inside Pi only
-   proposes. It reads `PI_SESSION_ID` (a locator that proves nothing),
-   saves a proposal that carries that session ID and a nonce, and prints a
-   marker line. It changes no record.
+   proposes. It reads `PI_SESSION_ID` (a locator that proves nothing).
+   It walks its own process ancestry up to the registered owner. It
+   refuses with `proposal-ancestry-unverified`, and prints that refusal in
+   the tool output, when the owner is not an ancestor, or when any process
+   between the command and the owner runs a JavaScript runtime (base name
+   `node`, `bun`, or `deno`) or the owner's executable. A nested Pi,
+   including one that resumed the parent session with the parent's
+   `PI_SESSION_ID`, is such a process: Pi runs under a JavaScript runtime.
+   Otherwise the command saves a proposal that carries the session ID and
+   a nonce, and prints a marker line. It changes no record.
 3. **Commit from `tool_result`.** For a `tool_result` whose `toolName` is
    `bash`, the extension extracts lines that start with the proposal
    marker prefix (at most 16; more refuses the batch) and starts `lucid
@@ -222,12 +244,16 @@ captured `pid`, and the parent executable to equal the captured
    hook uses. Claude needs `agent_id` because its subagents share the
    parent's session ID. Pi's do not: a Pi subagent process has its own
    session ID (R8, R9), so its proposals fail the session check, and its
-   output reaches the parent as a non-`bash` tool result. A proposal from
-   a headless or RPC Pi is never committed, because no `tui` callback
-   exists there. In-process sessions that another extension creates
-   through Pi's SDK are not covered by R8 or R9. They stay behind the
+   output reaches the parent as a non-`bash` tool result. A nested Pi
+   that resumed the parent session passes the session check, so step 2's
+   ancestry rule refuses it instead. A proposal from a headless or RPC Pi
+   is never committed, because no `tui` callback exists there. In-process
+   sessions that another extension creates through Pi's SDK are not
+   covered by R8 or R9. They stay behind the
    `subagent-provenance-unverified` activation gate (Implementation
-   Notes).
+   Notes). As for Claude, a refused bind proposal is claimed, and its
+   refusal is saved beside the publication, so the browser explains why
+   the record did not connect.
 4. **Listen at `agent_settled`.** When listening is requested for a bound
    record, the extension starts `lucid _pi-hook settled` at
    `agent_settled` and does not await it. The helper runs
@@ -267,31 +293,49 @@ captured `pid`, and the parent executable to equal the captured
    folder: `hcn run pi --resume <id> --cwd <folder> ... -- -e <extension
    path>`. hcn passes `-e <path>` to Pi with no separator (R11). `-e`
    loads the extension even when discovery is off (`-ne`). Environment:
-   - `LUCID_PI_ATTEMPT`: the launch attempt ID and a 256-bit random nonce.
+   - `LUCID_PI_ATTEMPT`: `<attempt ID>.<nonce>`. The attempt ID passes
+     RFC 26's ID validator; the nonce is 64 lowercase hexadecimal
+     characters from a cryptographic source. A value that does not parse
+     is treated as a failed check.
    - `LUCID_PI_EXPECTED_SESSION`: the session ID.
    - `LUCID_PI_EXPECTED_CWD`: the stored folder, as a real path.
-   - `LUCID_PI_ATTESTATION`: the attestation file path, under the record's
-     private directory.
+   - `LUCID_PI_ATTESTATION`: the attestation file path,
+     `<record private directory>/pi-attestation/<attempt ID>.json`. One
+     file per attempt, so exclusive create never meets an earlier file.
 8. The extension factory reads the four variables and deletes them from
    `process.env`, so no tool the model runs can read them (R8).
 9. In `session_start`, the extension checks, in order:
    - `sessionManager.getSessionId()` and `getHeader().id` equal the
      expected ID; else `session-id-mismatch`;
-   - the real paths of `getHeader().cwd` and `ctx.cwd` equal the expected
-     folder; else `folder-mismatch`;
+   - `getHeader().cwd` and `ctx.cwd` each match the stored folder: equal
+     to its original spelling, or equal after both sides resolve to real
+     paths (RFC 26 keeps the original spelling and does not let a real
+     path replace it); else `folder-mismatch`;
    - at least one entry of type `message` exists; else `session-empty`. A
      new session has 2 non-message entries (`model_change`,
-     `thinking_level_change`), so "no entries" is the wrong test.
+     `thinking_level_change`), so "no entries" is the wrong test. A bound
+     session always has messages: Lucid binds from a committed Bash tool
+     call, so the session already holds the user message and the
+     assistant's tool call.
 
-   It writes the attestation file (`verified` or `refused` with the
-   reason) before `session_start` returns. On refusal it sets exit code 3.
+   The checks run inside a `try`/`catch`. A thrown error is a refusal with
+   reason `verification-failed`. The extension writes the attestation
+   file (`verified` or `refused` with the reason) before `session_start`
+   returns. On refusal it sets exit code 3. If the write itself fails,
+   the `input` gate stays closed and the outcome is uncertain.
 10. The `input` handler is the only pre-model gate (R4-R7). It returns
     `{action: "continue"}` only when step 9 wrote `verified`. In every
     other case, including a `session_start` that threw (R3), it returns
     `{action: "handled"}`. Its body is a single comparison inside a
     `try`/`catch` whose catch returns `handled`, so it cannot throw. Other
-    extensions' `input` handlers cannot open the gate: the model runs only
-    when every handler lets the prompt through.
+    extensions' `input` handlers cannot open the gate: the first `handled`
+    ends the chain (R13). This covers every user-message path. It does not
+    cover a turn that another installed extension starts with
+    `sendCustomMessage` and `triggerTurn` (R14). Such a turn emits agent
+    events, so the outcome table classifies it as uncertain, never as a
+    proven refusal. Lucid does not pass `-ne` to shut other extensions
+    out: a session can depend on a provider or tool that one of them
+    registers.
 11. A missing or broken extension stops Pi before any session opens (R1,
     R2). Lucid also refuses before invoking hcn when the extension file is
     absent: `native-extension-unavailable`.
@@ -340,9 +384,14 @@ Headless outcome, as Lucid classifies it:
 
 | hcn result | Attestation | Agent events in the stream | Classification |
 |---|---|---|---|
-| success | `verified`, nonce matches | any | Continuation in the bound session. |
+| success | `verified`, nonce matches | at least one | Continuation in the bound session. |
 | `native`, `nativeExitCode: 3` | `refused`, nonce matches | none | Proven pre-model refusal (Amendment 1). |
-| any other result, or any attestation mismatch | missing, stale, or contradicting | any | Uncertain. The attempt holds under RFC 26 uncertainty; the turn's output is not accepted as the bound continuation. |
+| any other combination | any, or none | any | Uncertain. The attempt holds under RFC 26 uncertainty; the turn's output is not accepted as the bound continuation. |
+
+Agent events are every hcn event kind except `identity`, `progress`,
+`error`, `failure`, and `done`. A kind Lucid does not know counts as an
+agent event, so an hcn release that adds kinds can only move an outcome
+toward uncertain.
 
 hcn needs no change for this table. The marker is Lucid's own protocol,
 not a Pi behavior, so it does not belong in hcn (ADR 0005).
@@ -352,12 +401,15 @@ itself, run in Pi's Bash tool; only the commit point differs:
 
 | Operation | RFC 26 command | Validators | Commit point |
 |---|---|---|---|
-| publish | `lucid artifact publish --request FILE` | existing publication validators | `tool_result` helper, step 3 checks |
+| publish | `lucid artifact publish --request FILE` | existing publication validators | `tool_result` helper, step 3 checks; a refused bind is saved beside the publication |
 | resume-listen | `lucid connection resume-listen ID` | existing | same |
 | receipt | `lucid connection receipt ID --offer O` | existing offer/epoch checks | same |
 | respond | `lucid connection respond ID --offer O --request FILE` | existing | same |
 
-Lock order is unchanged: registration lock before record append lock.
+Every row also carries step 2's ancestry rule and step 3's session rule;
+their refusals are `proposal-ancestry-unverified` and
+`proposal-session-mismatch`. Lock order is unchanged: registration lock
+before record append lock.
 Repeats use the existing exact offer and result identities.
 
 ## State Machine
@@ -391,6 +443,8 @@ states. `refused` never reaches `input` with `continue`.
 | Helper input over 64 KiB, malformed, or with unknown fields | Refuse before parsing or mutation. |
 | More than 16 marker lines in one tool result | Refuse the batch; nothing commits. |
 | Proposal session is not the registered session | Refuse the proposal: `proposal-session-mismatch`. |
+| A JavaScript runtime or the owner's executable sits between the command and the owner | Refuse the proposal: `proposal-ancestry-unverified`. |
+| A bind proposal is refused | Claim it and save the refusal beside the publication, as for Claude. |
 | Commit names a replaced registration | Refuse: `registration-replaced`. The record binding is unchanged. |
 | Helper result lost | Read current state; do not repeat. Offers follow RFC 26 uncertainty rules. |
 | Proven pre-model refusal (outcome table) | Hold the input with reason `native-session-missing`. No automatic retry and no fresh session. |
@@ -434,8 +488,12 @@ the ordinary managed driver for a bound record.
   registration and proves nothing.
 - The model cannot forge an attestation. The nonce and the file path
   leave `process.env` before any tool runs (R8). A refusal also requires
-  exit 3 and an empty agent stream, which a run that reached the model
-  cannot produce.
+  exit 3 and a stream with no agent events, which a run that reached the
+  model cannot produce.
+- The ancestry rule in step 2 targets nested agents, not a hostile
+  model. A command that disguises a JavaScript runtime under another
+  executable name is same-user code, outside the boundary, as it is for
+  the Claude adapter.
 - Helper input is bounded and closed. The capture never travels in tool
   parameters, artifacts, or browser requests.
 - The verify-after-open check reads session metadata only. It never reads
@@ -459,12 +517,15 @@ Each slice has an observable outcome before the next depends on it.
    `PI_CODING_AGENT_SESSION_DIR` (flat), else
    `<PI_CODING_AGENT_DIR>/sessions/<slug>`, else
    `~/.pi/agent/sessions/<slug>`. Tests with a non-default agent folder
-   and a flat session folder. Bump the Lucid pin and re-capture fixtures.
+   and a flat session folder. Status: committed on hcn branch
+   `fix/pi-store-root`; release, Lucid pin bump, and fixture re-capture
+   pending.
 2. **Lucid: headless role.** Ship the extension; pass `-e` and the four
    variables on Pi resume through the harness seam; read the attestation;
    classify per the outcome table. Fake-hcn tests, plus
-   `scripts/smoke-pi-resume.ts` with three live cases: control resume,
-   raced resume (P1), and a folder mismatch.
+   `scripts/smoke-pi-resume.ts` with four live cases: control resume,
+   raced resume (P1), folder mismatch, and a second extension whose
+   `input` handler returns `continue`.
 3. **Lucid: interactive role, registration and commits.** `_pi-hook
    session-start | session-shutdown | tool-result`; proposal commit reuses
    the Claude proposal store with the session check. Tests with injected
@@ -482,9 +543,11 @@ Activation gates (v1 F6). `pi-cli` stays unavailable until all pass:
 
 - Recorded: TUI, RPC, JSON, print, and terminal-less controls (P2, P4).
 - `subagent-provenance-unverified`: a negative-control lane in which
-  (a) a nested `pi` run from the TUI's Bash tool proposes, and (b) an
-  extension creates an in-process SDK session that proposes. Nothing may
-  commit in either case.
+  (a) a nested `pi` run from the TUI's Bash tool proposes, (b) a nested
+  `pi` that resumed the parent session with `PI_SESSION_ID` proposes, and
+  (c) an extension creates an in-process SDK session that proposes.
+  Nothing may commit in any case; (a) and (b) refuse with
+  `proposal-ancestry-unverified` or `proposal-session-mismatch`.
 - Live Pi TUI publish, note delivery, receipt, response, departure, and
   verified headless resume.
 
@@ -535,12 +598,30 @@ None.
 | Finding | Disposition |
 |---|---|
 | G1 subagent commits | Step 3: the proposal session must be the registered session; Pi subagent processes have their own session ID (R8, R9). In-process SDK sessions are an activation gate. |
-| G2 verification fails open | Step 10: `input` denies by default and cannot throw (R3, R4). A missing or throwing extension stops Pi (R1, R2). Uncertain outcomes never count as success. |
-| G3 argv and folder | The hcn `--` delimits hcn's own options; the child argv has none (R11). Folder check added (step 9). Slice 1 is a prerequisite and is done. |
+| G2 verification fails open | A missing extension or a throwing factory stops Pi (R1, R2). A throwing handler does not (R3, R4); step 10's deny-by-default `input` handler, which cannot throw, contains it. Uncertain outcomes never count as success. |
+| G3 argv and folder | The hcn `--` delimits hcn's own options; the child argv has none (R11). Folder check added (step 9). Slice 1 is a prerequisite; it is committed on an hcn branch, with release and pin pending. |
 | G4 marker spoofing | Marker replaced by the nonce-keyed attestation file plus exit 3 plus an empty agent stream. Exit 3 is unused by Pi (R10). |
 | G5 injection races | Supervisor with one helper and one outstanding offer; `sendUserMessage` failure is delivery-uncertain; reload handled by the old runtime's `session_shutdown`; 45 seconds is a listener bound with no native deadline. |
 | G6 Amendment 1 overclaims | Narrowed to this attempt; RFC 26 retry rule restated; lazy write is observation, not definition. |
 | G7 RFC 26 deviations | Launch notice is existing behavior (step 7); folder (Amendment 3); transport stays unverified until acceptance (Amendment 2); binding kept across replacement (step 1); headless proposals never commit (step 3). |
+
+## Response to v3 review (of v4)
+
+| Finding | Disposition |
+|---|---|
+| M1 verified with no agent events | Outcome table row 1 requires at least one agent event. |
+| M2 agent events undefined | Defined below the outcome table; unknown kinds count. |
+| M3 attestation path | One file per attempt ID (step 7). |
+| M4 multi-extension semantics | R13: the first `handled` ends the chain. R14's custom-message turn is named in step 10 and classified uncertain. `-ne` rejected, with the reason. |
+| M5 `session_start` throws before writing | Checks run in `try`/`catch`; a throw writes `refused` with `verification-failed` (step 9). |
+| M6 nested Pi resumes the parent session | Step 2 ancestry rule; activation gate case (b). |
+| M7 bind refusal | Step 3 and the error table: claimed and saved beside the publication. |
+| N1 per-operation table | Ancestry and session rules stated for every row. |
+| N3 empty bound session | Step 9 states why a bound session has messages. |
+| N4 folder spelling | Step 9 accepts the original spelling or real-path equality. |
+| N5 G2 row overclaims | Row corrected. |
+| N6 slice 1 status | Implementation Notes and the G3 row state branch status. |
+| N7 attempt format | Step 7 defines the format and validators. |
 
 ## References
 
@@ -556,4 +637,5 @@ Informative:
 - [RFC 34](34_unbound-publication-headless-fallback.rfc.md): headless fallback for unconnected publishers.
 - [v1 review](28_pi-native-extension-bridge-and-strict-session-locators.review-v1.md).
 - [v2 review](28_pi-native-extension-bridge-and-strict-session-locators.review-v2.md), of v3.
+- [v3 review](28_pi-native-extension-bridge-and-strict-session-locators.review-v3.md), of v4.
 - Pi docs `extensions.md`, `settings.md`, `environment-variables.md` (Pi 0.87.1).
