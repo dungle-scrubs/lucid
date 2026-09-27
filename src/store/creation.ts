@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Settings } from "../config/user-config.js";
+import type { PublicationOrigin } from "../protocol/publication-origin.js";
 import { DiscoveryIndex } from "./discovery.js";
 import { type AppendLock, acquireAppendLock, LockError } from "./flock.js";
 import { WorkingFolderError } from "./project-directory.js";
@@ -19,6 +20,7 @@ export class CreationError extends Error {
 }
 export interface CreationRequest {
   readonly settings?: Partial<Settings>;
+  readonly origin?: PublicationOrigin;
   readonly workingDirectory: string | null;
   readonly handoff?: boolean;
 }

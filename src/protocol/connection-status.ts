@@ -20,6 +20,7 @@ export interface ConnectionStatus {
     | "resume-failed"
     | "hold-connected"
     | "hold-detaching"
+    | "headless-fallback"
     | "closed";
 }
 

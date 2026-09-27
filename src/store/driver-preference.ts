@@ -11,8 +11,9 @@ export type { DriverPreference } from "../protocol/driver-settings.js";
  * is the append-only truth of what happened, and folding a preference into
  * it would either freeze the choice or litter the truth with supersessions.
  *
- * **Who writes it:** the server, on the browser's behalf. Nothing else. A
- * driver only reads - the driver in force is already in the log, on the
+ * **Who writes it:** record creation writes revision 1 from the creation
+ * request's settings, which a publisher may declare for itself. After that,
+ * only the server writes it, on the browser's behalf. A driver only reads - the driver in force is already in the log, on the
  * attach and identity events, and a driver rewriting the file to record
  * what it spawned under would be two writers where the design allows one.
  *

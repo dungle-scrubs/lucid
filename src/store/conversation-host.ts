@@ -334,6 +334,8 @@ export interface ConversationHost {
     readonly message: string;
     readonly reason: string;
   }): ReduceResult;
+  /** Ends a never-bound requirement after the current registration-missing failure. */
+  recordPublicationFallback(): ReduceResult;
   captureDispatch(
     inputId: string,
     from: number | ((state: ChannelState) => number),
@@ -760,7 +762,11 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     reconnectCompletionId?: string,
   ): { readonly fact: ConnectionFact | null; readonly result: ReduceResult } => {
     const fact = parseConnectionFact(raw);
-    if (fact?.kind === "publication-requested" || fact?.kind === "publication-connection-failed")
+    if (
+      fact?.kind === "publication-requested" ||
+      fact?.kind === "publication-connection-failed" ||
+      fact?.kind === "publication-fallback"
+    )
       return { fact, result: reduceConnection(state, fact, at) };
     if (fact?.kind === "reconnect-settled") {
       if (state.connection?.actions[fact.actionId] === JSON.stringify(fact))
@@ -1187,6 +1193,18 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
                 actionId: state.nativePublication?.requestedActionId ?? crypto.randomUUID(),
                 kind: "publication-requested",
               },
+        };
+      }),
+    recordPublicationFallback: () =>
+      writeConnection((state) => {
+        const failure = state.nativePublication?.failure;
+        if (!failure) return { issue: "connection-not-admitted" };
+        return {
+          fact: {
+            actionId: state.nativePublication?.fallback?.actionId ?? crypto.randomUUID(),
+            failureActionId: failure.actionId,
+            kind: "publication-fallback",
+          },
         };
       }),
     recordReconnectResult: ({ launchId, result }) =>

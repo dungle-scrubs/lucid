@@ -12,6 +12,7 @@ import { confirmedContextThrough } from "../protocol/context-coverage.js";
 import type { ExecutionDriver, ExecutionHold, NativeIntent } from "../protocol/execution.js";
 import type { ProtocolIssue } from "../protocol/frames.js";
 import { HubError } from "../protocol/hub-errors.js";
+import { creationOrigin, originReference } from "../protocol/publication-origin.js";
 import type { ChannelState } from "../protocol/reducer.js";
 import type { OfferedContext } from "../store/context-offer.js";
 import { offerProjectedContext, renderAttachmentReferences } from "../store/context-offer.js";
@@ -336,6 +337,11 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
               "This fresh attempt continues the original input after an interrupted attempt. Partial workspace effects may already exist. Inspect the current workspace state before continuing the original request; do not assume that earlier work was undone.",
             ]
           : []),
+        ...(native.kind === "resume"
+          ? []
+          : [originReference(creationOrigin(readRecordMetadata(host.dir)))].filter(
+              (line): line is string => line !== null,
+            )),
         `Read the complete quoted source with lucid context ${shellCommand([offered.path])} --offset 0 --bytes 65536 --json. Follow nextOffset to read later slices.`,
         renderAttachmentReferences(offered.attachments),
       ].join("\n\n");

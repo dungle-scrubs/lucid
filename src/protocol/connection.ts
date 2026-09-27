@@ -317,6 +317,12 @@ export interface NativePublication {
     readonly message: string;
     readonly reason: string;
   } | null;
+  /** Terminal: a never-bound publication whose caller had no registration runs as managed. */
+  readonly fallback: {
+    readonly actionId: string;
+    readonly at: number;
+    readonly failureActionId: string;
+  } | null;
   readonly legacyDelivery: {
     readonly epoch: number;
     readonly inFlight: number;
@@ -326,8 +332,14 @@ export interface NativePublication {
 }
 
 export function requiresNativeConnection(state: ChannelState): boolean {
-  return state.nativePublication !== null || state.connection !== null;
+  return (
+    state.connection !== null ||
+    (state.nativePublication !== null && state.nativePublication.fallback === null)
+  );
 }
+
+/** The only failure that proves no verified registration is an ancestor of the publisher. */
+export const FALLBACK_FAILURE_REASON = "registration-missing";
 
 export function awaitingNativeBinding(state: ChannelState): boolean {
   return requiresNativeConnection(state) && state.connection === null;
@@ -341,6 +353,11 @@ export function hasUnsettledPublicationDelivery(state: ChannelState): boolean {
 export type ConnectionFact =
   | { readonly actionId: string; readonly kind: "publication-requested" }
   | { readonly actionId: string; readonly kind: "hold-released" }
+  | {
+      readonly actionId: string;
+      readonly failureActionId: string;
+      readonly kind: "publication-fallback";
+    }
   | {
       readonly actionId: string;
       readonly kind: "publication-connection-failed";
@@ -569,7 +586,7 @@ const positive = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 const isStamp = (value: unknown): value is string =>
   typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
-const path = (value: unknown): value is string =>
+export const path = (value: unknown): value is string =>
   typeof value === "string" &&
   value.startsWith("/") &&
   new TextEncoder().encode(value).length <= 4096 &&
@@ -629,6 +646,10 @@ export function parseConnectionFact(value: unknown): ConnectionFact | null {
   if (!object(value) || !connectionId(value.actionId)) return null;
   if (value.kind === "publication-requested") return { actionId: value.actionId, kind: value.kind };
   if (value.kind === "hold-released") return { actionId: value.actionId, kind: value.kind };
+  if (value.kind === "publication-fallback")
+    return connectionId(value.failureActionId)
+      ? { actionId: value.actionId, failureActionId: value.failureActionId, kind: value.kind }
+      : null;
   if (value.kind === "publication-connection-failed") {
     if (
       typeof value.reason !== "string" ||
@@ -1003,7 +1024,31 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
   let next = state;
   if (prior !== serialized) {
     const actions = { ...state.connection?.actions, [fact.actionId]: serialized };
-    if (fact.kind === "publication-requested" || fact.kind === "publication-connection-failed") {
+    if (fact.kind === "publication-fallback") {
+      const publication = state.nativePublication;
+      if (
+        !publication ||
+        state.connection !== null ||
+        publication.failure?.actionId !== fact.failureActionId ||
+        publication.failure.reason !== FALLBACK_FAILURE_REASON
+      )
+        return refuseConnection(state, now, "connection-not-admitted");
+      if (hasUnsettledPublicationDelivery(state))
+        return refuseConnection(state, now, "execution-blocked");
+      if (publication.fallback) return refuseConnection(state, now, "connection-conflict");
+      next = {
+        ...state,
+        nativePublication: {
+          ...publication,
+          actions: { ...publication.actions, [fact.actionId]: serialized },
+          fallback: { actionId: fact.actionId, at: now, failureActionId: fact.failureActionId },
+        },
+        seq: state.seq + 1,
+      };
+    } else if (
+      fact.kind === "publication-requested" ||
+      fact.kind === "publication-connection-failed"
+    ) {
       const publication = state.nativePublication;
       if (
         fact.kind === "publication-requested" &&
@@ -1011,7 +1056,7 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
         publication.requestedActionId !== fact.actionId
       )
         return refuseConnection(state, now, "connection-conflict");
-      if (fact.kind === "publication-connection-failed" && !publication)
+      if (fact.kind === "publication-connection-failed" && (!publication || publication.fallback))
         return refuseConnection(state, now, "connection-not-admitted");
       next = {
         ...state,
@@ -1021,6 +1066,7 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
             fact.kind === "publication-connection-failed"
               ? { actionId: fact.actionId, at: now, message: fact.message, reason: fact.reason }
               : (publication?.failure ?? null),
+          fallback: publication?.fallback ?? null,
           legacyDelivery: publication?.legacyDelivery ?? {
             epoch: state.epoch,
             inFlight: state.inFlightInputs,
@@ -1041,6 +1087,8 @@ export function reduceConnection(state: ChannelState, raw: unknown, now: number)
       if (state.holdRelease) return refuseConnection(state, now, "connection-conflict");
       next = { ...state, holdRelease: { actionId: fact.actionId, at: now }, seq: state.seq + 1 };
     } else if (fact.kind === "bound") {
+      if (state.nativePublication?.fallback && !state.connection)
+        return refuseConnection(state, now, "connection-conflict");
       if (
         !state.connection &&
         (hasUnsettledExecution(state) || hasUnsettledPublicationDelivery(state))

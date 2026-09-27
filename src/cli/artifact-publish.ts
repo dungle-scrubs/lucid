@@ -2,10 +2,11 @@ import { isAbsolute } from "node:path";
 import { readUserConfig } from "../config/user-config.js";
 import { declaredTheme, refuseUnmanaged } from "../protocol/artifact-theme.js";
 import type { NativeBinding } from "../protocol/connection.js";
-import { PUBLICATION_MESSAGE_MAX } from "../protocol/connection.js";
+import { FALLBACK_FAILURE_REASON, PUBLICATION_MESSAGE_MAX } from "../protocol/connection.js";
 import { settingsShape } from "../protocol/driver-settings.js";
 import { ARTIFACT_BYTES_MAX, isWireId } from "../protocol/frames.js";
 import { HubError } from "../protocol/hub-errors.js";
+import { parsePublicationOrigin } from "../protocol/publication-origin.js";
 import type { ConnectionStatus } from "../store/connection-view.js";
 import { connectionFailure, observeConnection } from "../store/connection-view.js";
 import { openWriter } from "../store/conversation-host.js";
@@ -109,6 +110,16 @@ export async function publishArtifact(
       "Provide a bounded HTML artifact, valid artifactId, and positive version.",
       "E-HUB-03",
     );
+  // Origin is creation provenance: it is inert, and unvalidated, on an existing record.
+  const origin =
+    conversationId !== undefined || value.origin === undefined
+      ? undefined
+      : parsePublicationOrigin(value.origin);
+  if (origin === null)
+    throw new HubError(
+      "origin accepts only harness, nativeSessionId, and an absolute sessionFile.",
+      "E-HUB-03",
+    );
   if (typeof serverUrl !== "string" || !URL.canParse(serverUrl))
     throw new HubError("Provide the local Lucid serverUrl.", "E-HUB-03");
   // The size bound runs before any parsing or durable writes, so an
@@ -172,7 +183,7 @@ export async function publishArtifact(
       const created = await createWithReceipt(
         records.rootDir,
         String(creationId),
-        { settings, workingDirectory },
+        { settings, workingDirectory, ...(origin ? { origin } : {}) },
         async () => settings,
         records.discoveryIndex,
       );
@@ -260,6 +271,9 @@ export function connectPublication(
     ownerPresence: authority.ownerPresence,
   });
   try {
+    // Fallback is terminal: a later publication changes no connection state.
+    if (host.state().nativePublication?.fallback)
+      return { ...fallbackStatus(host), persistence: "saved" };
     const connection = withNativeRegistration(
       records.rootDir,
       reference,
@@ -310,7 +324,10 @@ function saveConnectionFailure(
     reason: status.reason ?? "connection-setup-required",
   };
   try {
-    if (host.recordNativePublication(attempt).verdict === "accepted") return status;
+    if (host.recordNativePublication(attempt).verdict === "accepted") {
+      if (attempt.reason !== FALLBACK_FAILURE_REASON) return status;
+      return recordFallback(host, status);
+    }
   } catch {
     /* Artifact success is independent of diagnostic persistence. */
   }
@@ -322,6 +339,31 @@ function saveConnectionFailure(
     reason: "connection-result-unrecorded",
     state: "setup-required",
   };
+}
+
+/** The saved failure is the second append; a refused or failed fallback leaves the record held. */
+function recordFallback(
+  host: ReturnType<typeof openWriter>,
+  failure: PublicationConnection,
+): PublicationConnection {
+  try {
+    if (host.recordPublicationFallback().verdict === "accepted")
+      return { ...fallbackStatus(host), persistence: "saved" };
+  } catch {
+    /* The saved failure keeps the record held; repeating the publication retries. */
+  }
+  return {
+    ...failure,
+    message: `${failure.message} The headless fallback was not saved; repeat the same publication to retry it.`,
+  };
+}
+
+function fallbackStatus(host: ReturnType<typeof openWriter>): ConnectionStatus {
+  return observeConnection(host.state(), {
+    executorPresent: presenceHeld(host.dir),
+    now: Date.now(),
+    ownerPresence: () => undefined,
+  });
 }
 
 /** Save a connection refusal found before binding was attempted. */

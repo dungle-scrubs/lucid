@@ -189,6 +189,7 @@ describe("the way in", () => {
           version: 1,
         },
         creationId: "unbound-http",
+        registration: "not-a-registration-reference",
         serverUrl: server.url,
         settings: { harness: "codex", model: "test", effort: "high", profile: "headless-turn" },
         workingDirectory: root,
@@ -204,7 +205,7 @@ describe("the way in", () => {
       nativeSessionId: null,
       interface: null,
       state: "setup-required",
-      reason: "registration-missing",
+      reason: "invalid-registration",
       actions: ["setup-instructions"],
     });
     expect(connection.instructions).toHaveLength(1);

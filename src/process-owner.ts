@@ -104,6 +104,18 @@ const probe = processProbe();
 type ParentProbe = (pid: number) => number | null | undefined;
 
 function parentProbe(): ParentProbe {
+  if (process.platform === "linux") {
+    return (pid) => {
+      try {
+        const text = readFileSync(`/proc/${pid}/stat`, "utf8");
+        // The parenthesized command can itself contain spaces or a closing parenthesis.
+        const parentPid = Number(text.slice(text.lastIndexOf(")") + 2).split(/\s+/)[1]);
+        return Number.isSafeInteger(parentPid) ? parentPid : undefined;
+      } catch {
+        return absentOrUnknown(pid);
+      }
+    };
+  }
   if (process.platform === "darwin") {
     try {
       const { dlopen, FFIType, ptr } = require("bun:ffi") as typeof import("bun:ffi");
