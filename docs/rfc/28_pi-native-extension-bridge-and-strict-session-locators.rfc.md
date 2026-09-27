@@ -461,6 +461,7 @@ states. `refused` never reaches `input` with `continue`.
 | More than 16 marker lines in one tool result | Refuse the batch; nothing commits. |
 | Proposal session is not the registered session | Refuse the proposal: `proposal-session-mismatch`. |
 | A JavaScript runtime or the owner's executable sits between the command and the owner | Refuse the proposal: `proposal-ancestry-unverified`. |
+| A Bash command runs without `PI_SESSION_ID` | No proposal is made; the publication reports `owner-unknown`. Pi sets the variable only when its Bash tool receives the tool context. An extension that replaces the Bash tool must pass that context to Pi's built-in tool. |
 | A bind proposal is refused | Claim it and save the refusal beside the publication, as for Claude. |
 | Commit names a replaced registration | Refuse: `registration-replaced`. The record binding is unchanged. |
 | Helper result lost | Read current state; do not repeat. Offers follow RFC 26 uncertainty rules. |
