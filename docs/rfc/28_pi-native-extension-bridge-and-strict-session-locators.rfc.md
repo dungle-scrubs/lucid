@@ -1,165 +1,405 @@
 ---
 number: 28
-title: "Pi native extension bridge and strict session locators"
+title: "Pi native extension bridge and verified headless resume"
 type: protocol
 status: Draft
-author: Codex
-date: 2026-09-13
-version: 2
+author: "Claude Opus 5.5"
+date: 2026-09-27
+version: 3
 ---
 
-# RFC-28: Pi native extension bridge and strict session locators
+# RFC-28: Pi native extension bridge and verified headless resume
 
 ## Abstract
 
-Pi exposes its current conversation through an extension API, but Lucid's verified command integration currently covers Codex only. Pi can also store a session outside the directory implied by its working folder. This proposal connects the current Pi session through a bounded extension bridge and carries its captured storage location to HCN for strict resume. It refines the Pi lane of RFC 26 without enabling that lane before native acceptance.
+An interactive Pi session can publish a Lucid artifact, but browser notes
+cannot reach it, and Lucid cannot resume it headlessly after it closes.
+RFC 34 now answers those notes from a new headless session. This RFC
+connects the Pi session itself. A Lucid extension for Pi registers the
+interactive session, commits the session's Lucid commands from Pi's
+`tool_result` callback, and delivers each note into the live session while
+Pi is idle. After the interactive session closes, Lucid resumes the same
+session headlessly through hcn. The same extension, loaded into that
+headless run, checks the session that Pi opened and stops the run before
+any model call if Pi opened a different or a new session. That closes the
+lookup/open race that blocked v2, without a change to Pi.
 
 ## Introduction
 
-This draft is parked while the verified Codex lane completes. Version 2 records a native strict-resume blocker and the unresolved v1 review; it is not accepted for implementation. The proposed bridge and locator contracts below do not establish Pi support.
+RFC 26 defines native continuity: the session that published an artifact
+receives its browser notes, and after that session closes, Lucid resumes
+the same session headlessly. Claude Code and Codex CLI have this through
+their hooks. Pi has none of it. A Pi session that publishes gets RFC 34's
+fallback: a new headless session answers, without the original
+conversation.
 
-The person using this is the same person reading and annotating agent-authored artifacts described in CONTEXT.md. Lucid routes a live agent conversation into a durable record and back to the current reader. Current-session delivery and exact same-session resume serve that purpose and hold the scope already accepted in RFC 26 and ticket 05. This is a machine-made proposal under the standing instruction to continue implementation autonomously.
+v2 of this RFC was parked on two problems. The v1 review (F1-F8) found the
+protocol underspecified. A native probe showed a race: Pi's
+`--session-id <id>` creates a new session when the session file disappears
+between hcn's check and Pi's open, so a headless resume could silently run
+in an empty session under the old ID.
 
-The existing command authority uses Codex's native session/thread context. Pi's documented shell environment supplies session ID and file, but those values alone do not distinguish an interactive parent from a same-ID child or establish lifecycle generation. Pi's extension context supplies the current run mode, session manager and cancellation signal. Native acceptance, rather than a hardcoded package version, determines support.
+v3 is a redesign built on native probes run on 2026-09-27 (Evidence
+below):
 
-This proposal covers Pi CLI integration, durable session locators, and HCN's Pi strict-resume operation. It does not add a general IPC server, replace Bash tools, supervise unrelated sessions, import native history into Lucid, expose model-selected ownership, or enable another interface. Native approvals and settings retain RFC 27's existing preservation requirements. Unsupported Pi settings or resume operations continue to hold feedback.
+- The race is closed by verification after open, inside Pi, before the
+  model. Proven end to end through hcn with fault injection.
+- Pi's extension context reports the run mode, and only the interactive
+  terminal reports `tui`. Proven for TUI, RPC, JSON, and terminal-less
+  print runs.
+- Pi's `agent_settled` event is the end of a run; `agent_end` fires once
+  per automatic retry. An extension can inject a user message while Pi is
+  idle, with no blocking wait.
+
+The design reuses the Claude Code adapter's proven shape instead of the
+v2 extension tool and 45-second in-handler wait. That removes v2's session
+file locator and its payload version 4.
+
+The person using this is the reader who annotates agent-authored artifacts
+(`CONTEXT.md`). Lucid routes a live agent conversation into a durable
+record and back to that reader. For a Pi author, this RFC makes the notes
+reach the author's own session. It holds the scope RFC 26 accepted for
+native interfaces.
+
+Out of scope, with reasons:
+
+- Sessions stored outside Pi's default store (`--session-dir`, a custom
+  `sessionDir` setting). Only default-store sessions become eligible for
+  headless resume. Others stay held. This removes v2's locator.
+- SDK-embedded Pi and RPC clients. They never report `tui`, so they never
+  register. RFC 34's fallback still covers their publications.
+- Interactive reconnect (reopening the Pi TUI through Lucid). RFC 26's
+  protected reconnect stays Codex-only.
+- Transcript import. RFC 26 ruled it out.
 
 ## Terminology
 
-The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RECOMMENDED, MAY, and OPTIONAL in this document are to be interpreted as described in RFC 2119.
+The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD
+NOT, RECOMMENDED, MAY, and OPTIONAL in this document are to be interpreted
+as described in RFC 2119.
 
-- **Extension capture**: identity and lifecycle context read by the trusted Pi extension from its current callback, never from tool parameters.
-- **Bridge helper**: one Lucid child process invoked directly by the extension for one bounded operation. It is not a daemon or a replacement Pi session.
-- **Native locator**: the exact native session-file location captured by the integration. It identifies storage, not execution authority.
-- **Lifecycle generation**: RFC 26's registration generation, replaced on native session replacement and invalidated on teardown.
-- **Tool operation**: one of publish, resume-listen, receipt or respond exposed by the Pi Lucid extension tool. It has the semantics of the corresponding RFC 26 command.
+- **Lucid Pi extension**: a TypeScript extension that ships in the Lucid
+  npm package and loads into Pi. One file serves the interactive and the
+  headless role; `ctx.mode` selects the role.
+- **Pi hook helper**: `lucid _pi-hook <event>`, a short-lived child process
+  that the extension starts for one event. It reads one bounded JSON
+  capture on stdin and writes one bounded JSON result on stdout.
+- **Capture**: what the extension reads from its own callback context:
+  mode, session ID, session file, working folder, and for `tool_result` the
+  tool call ID and command text.
+- **Verify-after-open**: the headless-role check. Pi opens a session; the
+  extension compares it with the expected session before the prompt
+  reaches the model.
+- **Idle injection**: the extension calls `pi.sendUserMessage` while
+  `ctx.isIdle()` is true.
+
+## Evidence
+
+Pi 0.87.1, hcn 0.7.3, 2026-09-27. Provider: a closed local port, so a
+model call appears as `Connection error.` and no traffic leaves the
+machine. Implementation slice 3 turns P1 into a repeatable live script
+(`scripts/smoke-pi-resume.ts`).
+
+| Probe | Observation |
+|---|---|
+| E1 | Extensions load in `-p --mode json` (`ctx.mode: "json"`). Order: `session_start`, `input` (`source: "interactive"`), `before_agent_start`. |
+| E3 | Resume of an existing session with the expected ID: allowed; model reached. |
+| E4, E7 | Missing session file: Pi creates a new session with the same ID, 2 entries, 0 message entries. Extension refuses; 0 model calls; exit 3; no session file written. |
+| E6 | Opened session ID differs from expected: refused; 0 model calls. |
+| P1 | The real race through `hcn run pi --resume`: hcn's guard passes, a shim moves the file aside, Pi creates a new session. Refused; 0 model calls. hcn reports `class: "native"`, `nativeExitCode: 3`, and the extension's marker in `message`. Control run without the shim reached the model. |
+| P2 | TUI (Herdr pane): `mode: "tui"`. RPC: `mode: "rpc"`, `hasUI: true`. |
+| P3 | TUI: a timer 1.5 s after `session_start` saw `isIdle: true`, called `sendUserMessage(text, {deliverAs: "followUp", expandPromptTemplates: false})`; Pi recorded `input` with `source: "extension"` and ran. Retries: 4 `agent_end`, 1 `agent_settled`. `ctx.shutdown()` in `agent_settled` exited Pi. |
+| P4 | No terminal and no `-p`: `mode: "print"`. A Pi started from another agent's Bash tool cannot report `tui`. |
+
+hcn defect found during P1: the Pi descriptor's store template is
+`{home}/.pi/sessions/{cwdSlug}` (`src/knowledge/pi.ts`), but Pi stores
+sessions under `<PI_CODING_AGENT_DIR or ~/.pi/agent>/sessions`. The resume
+guard therefore refuses valid resumes unless the agent folder is exactly
+`~/.pi`. `src/cli/store-root.ts` already resolves the correct folder.
 
 ## Protocol Overview
 
-1. At Pi session_start, the extension captures the current native context. Only verified TUI parent use is eligible. RPC, JSON, print, headless launch roles and unverified provenance MUST NOT register.
-2. The extension directly starts a short bridge helper for registration. The helper corroborates the parent's kernel PID/start/executable identity and validates the capture before using existing registration storage.
-3. The model uses a dedicated Lucid extension tool. Its parameters contain only existing public operation data. The extension captures current identity again and invokes the helper without a shell. This is the Pi equivalent of the RFC 26 CLI operations; ordinary shell environment values do not authorize these operations.
-4. Resume-listen records intent and returns. After the native response ends, the extension uses agent_end's verified native cancellation signal to wait for at most 45 seconds. A missing signal or unsupported delivery transport holds feedback and does not mark the session ready.
-5. The shared listener selects at most one input under the existing executor lease, records offer-started, releases that lease, and returns the full offer instruction. The extension sends that instruction into the same Pi session through sendUserMessage with follow-up delivery and template expansion disabled. Transport alone is not receipt.
-6. The model invokes the receipt tool operation before work and respond afterward. Both revalidate native context, generation, offer and epoch. The next agent_end may listen again only while the existing listener intent remains enabled. Expiry or interruption requires explicit resume-listen.
-7. On confirmed interactive departure, Lucid passes the stored identity, folder and locator to HCN. Existing handoff guards still govern execution. HCN validates and translates the locator; Lucid does not construct Pi flags or search Pi's session directories.
+### Roles by mode
 
-Session replacement or shutdown MUST abort pending waits and await owned helper cleanup before old callback state can be discarded. The extension MUST NOT reuse captured session-manager objects across replacement. Independent tool operations may not select work; only the existing listener owns that step.
+The extension reads `ctx.mode` in `session_start`:
+
+| Mode | Role |
+|---|---|
+| `tui` | Interactive: registration, command commits, idle injection. |
+| `json` or `print`, with `LUCID_PI_EXPECTED_SESSION` set | Headless resume: verify-after-open only. |
+| `json` or `print` without it, `rpc`, anything else | None. The extension does nothing. |
+
+Three independent proofs compose; none substitutes for another (v1 F5):
+
+1. The kernel identity of the helper's direct parent proves which process
+   started the helper.
+2. `ctx.mode === "tui"`, read in the extension callback, proves the role.
+3. Registration generation, offer ID, and epoch prove the specific work,
+   as in RFC 26.
+
+A parent match alone MUST NOT be treated as role proof.
+
+### Interactive role
+
+1. **Register.** On `session_start` in `tui` mode, the extension starts
+   `lucid _pi-hook session-start` with the capture. The helper reads its
+   direct parent's identity (PID, start time, executable) with
+   `readProcessOwner(process.ppid)`, requires the executable to be the Pi
+   entry point's interpreter, and calls `registerNativeSession` with
+   interface `pi-cli`, harness `pi`, the captured session ID, and the
+   captured working folder. The owner is the Pi process. A `session_start`
+   with reason `new`, `resume`, or `fork` replaces the registration with a
+   new generation. `session_shutdown` runs `lucid _pi-hook
+   session-shutdown`, which removes it.
+2. **Propose from Bash.** The model runs ordinary Lucid commands in Pi's
+   Bash tool: `lucid artifact publish`, `lucid connection resume-listen`,
+   `receipt`, `respond`. As for Claude Code, a command run inside Pi only
+   proposes. It finds the registration by `PI_SESSION_ID` (a locator that
+   proves nothing), saves a proposal with a nonce, and prints a marker
+   line. It changes no record.
+3. **Commit from `tool_result`.** The extension's `tool_result` handler for
+   the Bash tool starts `lucid _pi-hook tool-result` with the capture and
+   the tool output. The helper finds proposal markers in the output,
+   checks parent identity and role, and commits each proposal through the
+   same host operations the Claude PostToolUse hook uses. A command run
+   by a Pi subagent process, an RPC client, or a background job has no
+   `tui` parent callback, so its proposal is never committed.
+4. **Listen at `agent_settled`.** When listening is requested for a bound
+   record, the extension starts `lucid _pi-hook settled` at
+   `agent_settled` and does not await it. The helper runs
+   `listenAtNativeStop` with RFC 26's 45-second bound. If it returns an
+   offer, the helper prints the offer instruction and exits.
+5. **Inject when idle.** On the helper's result, the extension calls
+   `pi.sendUserMessage(offer, {deliverAs: "followUp",
+   expandPromptTemplates: false})` if `ctx.isIdle()`. If Pi is busy
+   because the person typed, the extension still delivers with `followUp`,
+   so Pi queues the offer after the current run. Transport is not receipt:
+   the model records receipt with `lucid connection receipt` before work
+   and the outcome with `respond` after, both committed in step 3.
+6. **Cancel.** Person input (`input` with `source: "interactive"`) while a
+   helper waits, `session_shutdown`, or session replacement kills the
+   waiting helper (SIGTERM, then SIGKILL after 2 s) and awaits its exit.
+   A helper killed before it recorded an offer leaves the input saved. A
+   helper killed after it recorded `offer-started` leaves the offer
+   delivery-uncertain, as RFC 26 defines; a later `agent_settled` MUST NOT
+   replay it.
+
+### Headless role (verify-after-open)
+
+7. On confirmed interactive departure (RFC 26 section 6), Lucid resumes
+   through hcn with the stored session ID and folder, and passes the
+   extension explicitly: `hcn run pi --resume <id> ... -- -e <extension
+   path>`, with environment `LUCID_PI_EXPECTED_SESSION=<id>`. `-e` loads
+   the extension even when hcn disables discovery (`-ne`).
+8. In `session_start`, the extension compares
+   `sessionManager.getSessionId()` and `getHeader().id` with the expected
+   ID, and counts entries of type `message`.
+   - Both IDs equal the expected ID and at least one message exists:
+     allow.
+   - An ID differs: refuse with `session-id-mismatch`.
+   - No message entries: refuse with `session-empty`. A new session has 2
+     non-message entries (`model_change`, `thinking_level_change`), so
+     "no entries" is the wrong test.
+9. On refusal, the extension writes one marker line to stderr, sets exit
+   code 3, and its `input` handler returns `{action: "handled"}`, so the
+   prompt never reaches the model. Pi writes no session file for a
+   session with no content (E7).
 
 ## Message Formats
 
-The extension tool accepts a closed tagged object. Unknown fields MUST be rejected, including identity or owner overrides.
+Helper stdin, one UTF-8 JSON object, at most 64 KiB; a larger input is
+refused before parsing:
 
-| Operation | Public fields |
-| --- | --- |
-| publish | requestFile, an absolute publication request path |
-| resume-listen | conversationId |
-| receipt | conversationId, offerId |
-| respond | conversationId, offerId, requestFile |
+```json
+{
+  "v": 1,
+  "event": "session-start | session-shutdown | tool-result | settled",
+  "mode": "tui",
+  "nativeSessionId": "<id>",
+  "sessionFile": "/abs/path.jsonl",
+  "workingDirectory": "/abs/folder",
+  "toolCallId": "<id, tool-result only>",
+  "output": "<Bash tool output, tool-result only, at most 48 KiB>"
+}
+```
 
-Existing publication and response validators retain their size limits and semantics. Tool text, artifacts and browser requests MUST NOT carry an extension capture.
+The helper refuses unknown `event` values, unknown fields, and any `mode`
+other than `tui`. IDs and paths use RFC 26's validators.
 
-The private helper request is UTF-8 JSON on a dedicated inherited pipe, bounded to 64 KiB. Model-generated artifact/response bytes stay in their existing bounded request files. The request has bridgeVersion 1, operation, public fields, and capture. Capture contains mode, nativeSessionId, nativeSessionFile when present, workingDirectory, owner PID/start/executable, and the expected registration ID/generation after registration. IDs and paths retain RFC 26's validators. The helper independently reads its direct parent's kernel identity; a mismatch or unavailable observation refuses before registration or control admission. Callback provenance is trusted only from the installed extension entry point, under the same-user native-code trust boundary below.
+Helper stdout, one JSON object: the existing `NativeListenerResult` for
+`settled`, the existing registration and proposal results for the other
+events. A missing, malformed, or truncated result is unconfirmed; the
+extension reads current state and does not repeat the operation.
 
-Helper operations and lifecycle events are closed unions. Registration is a lifecycle operation, not a tool parameter. Helpers return one bounded JSON result using existing publication/control/listener result types. A missing, malformed or lost result is unconfirmed. Receipt and response repeats use the existing exact offer/result identities; they do not select another input.
+Refusal marker (headless role), one stderr line:
 
-A Pi binding additionally stores nativeLocator: {kind: "pi-session-file", path: string}. The path is captured from getSessionFile(), not a requested working directory or filename convention. It is an absolute bounded path. No file at startup means storage is not yet established; capture may register the live identity, but binding/resume eligibility requires later verification. Original folder spelling remains intact, with realpath only supplementary.
+```
+lucid-pi-session: {"v":1,"refused":"session-empty","expected":"<id>","opened":"<id>"}
+```
 
-HCN receives the existing native ID/cwd plus an optional --session-file PATH input for Pi operations. The harness seam owns this option. HCN MUST verify a bounded regular native Pi session header, exact ID, stored folder, and an unambiguous native lookup in that file's directory. Unsupported header formats, ephemeral storage, missing files, conflicting matches and folder refusals MUST fail before native creation. A locator does not replace exact-ID validation.
+hcn maps a Pi exit code 3 whose stderr contains exactly one such line to a
+new failure class `session-substituted`, `retryable: false`, carrying the
+parsed fields. Other output keeps the existing `native` class.
 
-Strict resume requires the native open operation to refuse when the exact session disappears after preflight. HCN MUST NOT use --session-id, which can create a session, or a missing-path form of --session. The installed Pi 0.85.1 full-UUID --session plus --session-dir form also fails this requirement: an isolated native fault-injection run deleted the selected test file between lookup and open, and Pi reached session_start with a different native ID at the old path. The earlier successful-resume and initially-missing-ID probes do not close this race. HCN preflight alone cannot make this native form strict. The Pi launch lane therefore MUST remain unavailable until a native strict-open operation is established. HCN does not rename, copy or synthesize a session file to bypass this requirement.
+Per-operation mapping (v1 F4). Each Pi operation is the RFC 26 CLI command
+itself, run in Pi's Bash tool; only the commit point differs:
 
-HCN owns interpreter-aware launch for the verified Pi CLI entry point. It resolves the supported Node entry point and interpreter without a shell, supervises the process it actually starts, and reports that process's kernel identity. Arbitrary shebang wrappers remain unsupported. Startup prompt data uses native end-of-options handling and is never interpreted as flags. The saved model, provider, effort and supported permissions are not replaced by browser preferences.
+| Operation | RFC 26 command | Validators | Commit point |
+|---|---|---|---|
+| publish | `lucid artifact publish --request FILE` | existing publication validators | `tool_result` helper, as Claude PostToolUse |
+| resume-listen | `lucid connection resume-listen ID` | existing | same |
+| receipt | `lucid connection receipt ID --offer O` | existing offer/epoch checks | same |
+| respond | `lucid connection respond ID --offer O --request FILE` | existing | same |
+
+Lock order is unchanged: registration lock before record append lock.
+Repeats use the existing exact offer and result identities.
 
 ## State Machine
 
-The bridge has unverified, registered, requested, waiting, offered, and closed states. These are integration states; the durable host retains authority.
+Integration states; the durable host keeps authority.
 
-- unverified -> registered: eligible TUI lifecycle plus corroborated owner and accepted registration.
-- registered -> requested: explicit resume-listen accepted for the exact bound record.
-- requested -> waiting: matching current agent_end, non-aborted native signal, verified full-context transport, and acquired executor lease.
-- waiting -> offered: durable offer-started succeeds; the helper returns its complete instruction and releases the lease.
-- offered -> requested: exact receipt and terminal outcome are recorded and continuation remains enabled.
-- waiting -> registered: 45-second expiry, native cancellation, signal loss or transport refusal. Readiness is revoked; accepted input remains saved or explicitly uncertain according to whether an offer was recorded.
-- any live state -> closed: session shutdown/replacement, native owner loss or helper teardown. No state transition infers receipt or closed ownership from a timeout.
+- `none -> registered`: `session_start` in `tui` mode, helper accepted.
+- `registered -> waiting`: `agent_settled` with a listen request for a
+  bound record; helper started.
+- `waiting -> offered`: the helper recorded `offer-started` and returned
+  the instruction; the extension delivered it.
+- `waiting -> registered`: 45-second expiry, person input, or helper
+  failure before an offer. Input stays saved.
+- `offered -> registered`: receipt and outcome recorded; continuation
+  follows RFC 26.
+- any state `-> none`: `session_shutdown` or replacement; waiting helper
+  killed and awaited first.
 
-An unresolved offer prevents another selection. A lost helper result after offer-started remains delivery-uncertain; a later agent_end MUST NOT replay it. Native session replacement creates a new generation and requires new explicit selection. Compaction that retains the same current session is not replacement, but transport/context limits are rechecked.
+Headless role: `opened -> allowed` or `opened -> refused`; no other
+states.
 
 ## Error Handling
 
-Existing host and HCN typed failures remain authoritative. The integration adds these setup/transport reasons:
+| Condition | Behavior |
+|---|---|
+| Helper parent is not a Pi interpreter process | Refuse registration: `native-context-unverified`. |
+| `mode` is not `tui` in an interactive-role event | The extension does not start a helper. |
+| Helper input over 64 KiB or malformed | Refuse before parsing or mutation. |
+| Helper result lost | Read current state; do not repeat. Offers follow RFC 26 uncertainty rules. |
+| `session-substituted` from hcn | Lucid records a proven pre-model refusal for the attempt (Amendment 1 below) and holds the input with reason `native-session-missing`. No retry, no fresh session. |
+| Session outside Pi's default store | hcn's guard refuses before spawn; input stays held. |
+| Extension missing at resume time | Lucid refuses the Pi continuation before invoking hcn: `native-extension-unavailable`. |
 
-| Reason | Behavior |
-| --- | --- |
-| subagent-provenance-unverified | No registration or readiness; explain that this Pi invocation cannot be verified as the interactive parent. |
-| native-context-unverified | Refuse the operation; preserve publication and feedback through the existing failure boundary. |
-| native-signal-unavailable | Do not enter listening; ask for explicit resume-listen in a supported native turn. |
-| native-locator-unverified | Keep continuation held; verify the captured native file before resume. |
-| bridge-result-unconfirmed | Read current state; do not repeat uncertain dispatch. Exact receipt/response readback remains supported. |
+No error authorizes a fresh session, a different model, or a fallback to
+the ordinary managed driver for a bound record.
 
-No error authorizes a fresh native session, a different model, arbitrary native arguments, or a global installation. A rejected Pi bridge operation cannot fall through to the ordinary managed driver. Cancellation ends only this owned wait/helper operation; it does not stop an unrelated native response.
+## Amendments to RFC 26
+
+1. RFC 26 accepts as proven pre-start refusal only hcn
+   `spawn-not-attempted` and Lucid `dispatch-not-called`. This RFC adds
+   hcn `session-substituted` for the Pi lane: the process started, but the
+   extension stopped it before the prompt reached the model, and Pi wrote
+   no session file. It counts as a pre-model refusal. It is not evidence
+   that the original session is gone; the input stays held.
+2. RFC 26 section 5 lists Pi CLI integration as pending native acceptance.
+   This RFC is that acceptance contract for `pi-cli`.
 
 ## Security Considerations
 
-The trusted components are the installed Pi extension, its native API context, Lucid's helper/host, and HCN's normalized native operation. Models, artifact scripts and browser payloads cannot nominate a native owner. The helper is not a public authority API; it accepts extension capture only over its direct parent-owned pipe and rejects mismatched ownership, mode, generation and bounded input.
-
-Same-user arbitrary native code is outside the sandbox boundary: an installed extension already has full filesystem/process authority. This contract does not claim that a malicious same-user process cannot impersonate extension code. It does require independent kernel owner corroboration, native callback context, and negative native evidence for ordinary model and subagent invocation. If that distinction cannot be established for the installed Pi integration, the adapter remains unavailable rather than treating absent markers as parent proof.
-
-The helper MUST acquire registration locks before record append locks and MUST use existing host controls. It neither imports a second lock backend into Node nor owns a second mapping of session-to-record authority. Native file paths are private record metadata, not rendered credentials or browser-controlled launch inputs. No environment values, credentials or native history are copied into diagnostics. Only the identified session's header is needed for locator validation; native history stays with Pi.
+- Same-user native code is outside the boundary, as in RFC 26: an
+  installed Pi extension already has the user's authority. This RFC does
+  not claim that a malicious same-user process cannot impersonate the
+  extension.
+- A model cannot nominate an owner. Bash commands only propose; commits
+  need the parent callback in `tui` mode. `PI_SESSION_ID` locates a
+  registration and proves nothing.
+- Helper input is bounded and closed. The capture never travels in tool
+  parameters, artifacts, or browser requests.
+- The verify-after-open check reads session metadata only. It never reads
+  or copies history.
+- Session file paths are private record metadata.
 
 ## Versioning
 
-Bridge version 1 is a private closed protocol. Unsupported bridge versions refuse. Existing Codex command behavior and old native records remain readable.
-
-Pi locator-bearing binding facts MUST use a critical protocol revision that older readers refuse before dispatch; silently ignoring nativeLocator is prohibited. The proposed allocation is execution payloadVersion 4, carrying connection facts. Current readers support versions 1-3 and refuse other execution payload versions. Every fact that carries a locator, including nested binding copies, requires version 4; it cannot be written as an extra field under version 2. Closed locator decoding, equality, replay and old-reader refusal remain unimplemented and require review. Existing records are not rewritten or assigned guessed locators. Registration without a verified locator cannot make a record eligible for Pi headless continuation. The HCN package pin and captured recordings change deliberately only after the new operation is built and checked. Local source acceptance does not imply publication or installation.
+No new execution payload version. `pi-cli` bindings use the existing
+`bound` fact; no locator is stored. The helper protocol has `v: 1`;
+unsupported versions refuse. The extension and Lucid ship in one package,
+so they share one version. hcn's `session-substituted` class is additive;
+an older hcn reports `native`, which Lucid treats as an uncertain outcome
+and holds, which is safe. The Lucid hcn pin moves deliberately with
+re-captured fixtures.
 
 ## Implementation Notes
 
-Implementation proceeds in reviewed vertical slices:
+Each slice has an observable outcome before the next depends on it.
 
-1. Extension capture and helper admission. Tests attach to real registration/host APIs with injected process facts; native controls prove TUI eligibility, non-TUI/subagent exclusion, wrong owner, replacement generation and teardown.
-2. Publication plus explicit tool receipt/respond. Real records prove preserved artifact failure evidence, duplicate readback, wrong/cross-offer refusal and actual outcomes. No listener is enabled merely by file installation.
-3. Bounded agent_end transport. Fake-clock tests prove selection/cancellation races and full-context retention. Native Pi proves 45-second expiry, Escape cancellation, complete offer delivery, explicit receipt and response, and no hidden second Pi session.
-4. Durable locator and HCN strict lookup/launch. Tests prove critical-reader refusal, exact native header/folder matching, ambiguity, missing-ID refusal, and interpreter process identity. A real custom-directory session proves same ID and retained native context after process exit.
-5. Integrate supported settings, recordings and the package pin; run all Lucid/HCN gates and scoped Muse review. Enable only the operation whose native evidence is complete. Other interface acceptance stays separate.
+1. **hcn: store root.** The Pi resume guard uses `store-root.ts`
+   resolution (`PI_CODING_AGENT_DIR` or `~/.pi/agent`, then `sessions`).
+   Test with a non-default agent folder.
+2. **hcn: `session-substituted`.** Map the marker to the typed class.
+   Recorded fixture from a real refused run.
+3. **Lucid: headless role.** Ship the extension; pass `-e` and
+   `LUCID_PI_EXPECTED_SESSION` on Pi resume through the harness seam; map
+   `session-substituted`. Fake-hcn tests plus the P1 fault-injection lane
+   as a live script.
+4. **Lucid: interactive role, registration and commits.** `_pi-hook
+   session-start | session-shutdown | tool-result`; proposal commit reuses
+   the Claude proposal store. Tests with injected process facts; live Pi
+   TUI publish in a Herdr pane.
+5. **Lucid: listening and idle injection.** `_pi-hook settled`, cancel on
+   person input, delivery. Live: a browser note reaches the Pi TUI, the
+   model records receipt and outcome.
+6. **Setup and docs.** `lucid connection setup --interface pi-cli` adds the
+   extension to Pi settings; `docs/native-pi.md`; skill text.
 
-No automatic runtime activation is authorized by this draft. Existing RFC 26/27 acceptance gates still apply. Browser instructions for Pi refer to the extension tool operations and exact record, not the Codex-only shell listener command.
+Activation gates (v1 F6): TUI, RPC, JSON, print, and terminal-less
+controls (P2, P4) are recorded. A live Pi TUI publish, note delivery,
+receipt, response, departure, and verified headless resume must all pass
+before `pi-cli` is enabled.
 
-Alternatives: a Bash override was rejected because it replaces an unrelated tool and can discard another extension's behavior. Session environment alone was rejected as insufficient parent/generation evidence, despite Pi's documented per-command injection. A long-lived session broker was deferred because per-operation child helpers preserve the existing host ownership model without a new listener socket. HCN-wide session discovery was rejected because the caller already has an exact captured locator and HCN owns no cross-process registry.
+## Alternatives Considered
+
+- **Upstream Pi strict-open option.** Not needed: verify-after-open inside
+  Pi closes the race without it. Still welcome; it would let the refusal
+  happen before process start.
+- **v2 extension tool with a 45-second wait in `agent_end`.** `agent_end`
+  fires per retry, and a blocking handler stalls the TUI. Replaced by the
+  Bash-plus-`tool_result` commit and non-blocking `agent_settled` helper.
+- **v2 session-file locator with payload version 4.** Only needed for
+  non-default stores. Dropped; those sessions stay held.
+- **A long-lived broker process per session.** Per-event helpers keep host
+  ownership unchanged.
 
 ## Open Questions
 
-1. Direct-child callback authority remains proposed. A native TUI parent and its direct JSON child loaded the same synthetic session ID and reported different callback modes. That proves only this pair. SDK, RPC, nested TUI and root-parent provenance still need negative controls. A failing control blocks activation, not an automatic relaxation of the rule.
-2. Execution payloadVersion 4 is the machine-made proposed critical allocation. Closed locator shape, path bounds, nested copies, HCN request grammar, header bounds, ambiguity rules and interpreter resolution still require a complete specification and review before implementation. No locator-bearing records are written by this draft.
-3. agent_end supplied a live native AbortSignal in the 45-second and Escape probes, but it is a low-level run boundary, not agent_settled. Retry, compaction, queued follow-ups, exact signal ownership, supervision and readiness revocation still need a reviewed contract. The current Protocol Overview is a candidate, not a settled implementation instruction.
-4. The native strict-open requirement is currently blocked by the demonstrated lookup/open race. Options are a supported native strict-open operation or retaining the unsupported lane. A second preflight, path copy, new session or silent identity substitution does not meet the accepted contract. Codex completion continues independently.
+1. Should the extension also inject when a helper returns an offer while
+   Pi is busy (queued `followUp`), or hold it until the next
+   `agent_settled`? This draft queues it. Queuing delivers sooner; holding
+   keeps one offer per idle point.
+2. Should `lucid connection setup --interface pi-cli` install the extension
+   through `pi install` or by editing Pi settings directly? This draft
+   prefers `pi install npm:@dungle-scrubs/lucid` if the package layout
+   supports it.
 
 ## Response to v1 review
 
-The [Muse v1 review](28_pi-native-extension-bridge-and-strict-session-locators.review-v1.md) remains active. No Pi implementation is admitted by this revision.
-
-- F1: proposed payloadVersion 4 is named above; full codec and reader behavior remains to be specified and reviewed.
-- F2: the native race now blocks launch. Exact HCN grammar, bounds, directory rules and interpreter resolution remain unresolved; preflight cannot substitute for native strict open.
-- F3: native AbortSignal observations are retained, while agent_end versus settled behavior is explicitly unresolved.
-- F4: exact per-operation validator, transaction, idempotency and sendUserMessage mappings remain required.
-- F5: direct-parent identity alone is not role or work authority. Callback role proof and generation/offer/epoch revalidation remain separate requirements needing a precise predicate.
-- F6: the native same-ID JSON child control passed. Other provenance controls remain activation gates.
-- F7: locator bounds and ambiguity semantics remain unresolved. Normal custom-directory resume is no longer described as strict-open proof.
-- F8: helper supervision, byte-overrun refusal and replacement/reload cleanup ordering remain unresolved.
-
-Native observations and the fault-injection recipe are retained under ignored artifacts/evidence/interactive-artifact-wayfinder/pi-negative-acceptance.md. They are test evidence, not a permanent claim that a future Pi release behaves the same way.
+| Finding | Disposition |
+|---|---|
+| F1 locator wire revision | Removed: no locator, no new payload version. |
+| F2 hcn strict lookup undefined | Replaced by verify-after-open and the typed `session-substituted` class, with the store-root fix. |
+| F3 45-second `agent_end` wait | Replaced by non-blocking `agent_settled` helper and idle injection (P3). |
+| F4 per-operation mapping | Table in Message Formats: the operations are the RFC 26 commands. |
+| F5 trust composition | Stated in Protocol Overview: process, role, work; none substitutes. |
+| F6 provenance controls | P2 and P4 recorded; live TUI acceptance remains the activation gate. |
+| F7 locator bounds | Removed with the locator. |
+| F8 helper lifecycle | Protocol Overview step 6 and State Machine: kill, await, then re-register. |
 
 ## References
 
 Normative:
 
-- [RFC 26](26_interactive-artifact-conversation-continuity.rfc.md) - publication, durable delivery, ownership, handoff and native acceptance.
-- [RFC 27](27_native-approvals-during-headless-continuation.rfc.md) - native settings and approval preservation during continuation.
-- [HCN ownership](../adr/0005-hcn-owns-harness-differences.md) - normalization and process supervision boundary.
-- [Kernel locks](../adr/0003-kernel-locks-divide-append-authority-from-execution.md) - one append/executor locking model.
+- [RFC 26](26_interactive-artifact-conversation-continuity.rfc.md): continuity, publication, delivery, handoff.
+- [RFC 27](27_native-approvals-during-headless-continuation.rfc.md): native settings during continuation.
+- [ADR 0005](../adr/0005-hcn-owns-harness-differences.md): hcn owns harness differences.
+- [ADR 0003](../adr/0003-kernel-locks-divide-append-authority-from-execution.md): lock model.
 
 Informative:
 
-- [Pi extension documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md) - current-session callbacks, run mode, cancellation and native messaging; the installed 0.85.1 documentation supplies the tested API shape.
-- [Pi environment documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/environment-variables.md) - per-command session injection and its optional disabling.
-- [Pi session format](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/session-format.md) - native identity and session manager methods.
+- [RFC 34](34_unbound-publication-headless-fallback.rfc.md): headless fallback for unconnected publishers.
+- [v1 review](28_pi-native-extension-bridge-and-strict-session-locators.review-v1.md).
+- Pi docs `extensions.md`, `environment-variables.md` (Pi 0.87.1).

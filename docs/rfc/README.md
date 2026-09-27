@@ -12,7 +12,7 @@ It is a draft: a parked `headless-session` run holds presence forever and blocks
 RFC 30 defines [native feedback context by reference](30_native-feedback-context-by-reference.rfc.md).
 It is accepted for implementation after two Muse review passes and amends RFC 26's transport-limit rule. Claude Code is measured and enabled; Codex keeps inline-only delivery until its own slice is measured.
 
-RFC 28 drafts the [Pi native extension bridge and strict session locators](28_pi-native-extension-bridge-and-strict-session-locators.rfc.md). It is parked with unresolved protocol review and a demonstrated native lookup/open race. Pi stays unavailable; the verified Codex lane continues independently.
+RFC 28 drafts the [Pi native extension bridge and verified headless resume](28_pi-native-extension-bridge-and-strict-session-locators.rfc.md). v3 replaces the parked v2: a Lucid Pi extension registers the TUI session, commits commands from `tool_result`, injects notes while Pi is idle, and verifies the session Pi opened before a headless resume reaches the model. Pi stays unavailable until its live acceptance passes.
 
 RFC 27 defines [native approvals during headless continuation](27_native-approvals-during-headless-continuation.rfc.md).
 It is accepted for implementation after two Muse review passes. Native transport and browser acceptance remain required.
