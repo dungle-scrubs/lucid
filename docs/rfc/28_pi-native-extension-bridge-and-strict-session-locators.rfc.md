@@ -466,7 +466,7 @@ states. `refused` never reaches `input` with `continue`.
 | A bind proposal is refused | Claim it and save the refusal beside the publication, as for Claude. |
 | Commit names a replaced registration | Refuse: `registration-replaced`. The record binding is unchanged. |
 | Helper result lost | Read current state; do not repeat. Offers follow RFC 26 uncertainty rules. |
-| Proven pre-model refusal (outcome table) | Hold the input with reason `native-session-missing`. No automatic retry and no fresh session. |
+| Proven pre-model refusal (outcome table) | Record a pre-start harness refusal (`E-HUB-05`, `harness-refusal`) naming the reason. No automatic retry and no fresh session. |
 | Uncertain headless outcome | Hold under RFC 26 uncertainty. No automatic retry. |
 | Session in a store hcn cannot see | hcn's guard refuses before spawn; the input stays held. |
 | Extension file missing at resume time | Refuse before invoking hcn: `native-extension-unavailable`. |
@@ -519,6 +519,11 @@ the ordinary managed driver for a bound record.
   model. A command that disguises a JavaScript runtime under another
   executable name is same-user code, outside the boundary, as it is for
   the Claude adapter.
+- An in-process SDK session that an extension forces to the parent's
+  session ID can save a proposal. Nothing commits it on its own. It would
+  commit if the parent's own Bash output repeated its marker before the
+  proposal expires (10 minutes). Reusing the parent's ID takes extension
+  code the user installed, which is same-user code, outside the boundary.
 - Helper input is bounded and closed. The capture never travels in tool
   parameters, artifacts, or browser requests.
 - The verify-after-open check reads session metadata only. It never reads
@@ -577,6 +582,27 @@ Activation gates (v1 F6). `pi-cli` stays unavailable until all pass:
   `proposal-ancestry-unverified` or `proposal-session-mismatch`.
 - Live Pi TUI publish, note delivery, receipt, response, departure, and
   verified headless resume.
+
+Gate results, 2026-09-27, Pi 0.87.1, local Qwen through LM Studio. The
+helper command was wrapped in a script that logs every start; a TUI run
+confirmed the log records a real `session-start`.
+
+- Mode controls: print, JSON, RPC, and no-terminal runs each reached the
+  model, started no helper, and registered nothing.
+- (a) A nested `pi -p --no-session` publish reported
+  `registration-missing`: its own session is not registered, so no
+  proposal was saved.
+- (b) A nested `pi -p --session "$PI_SESSION_ID"` publish refused with
+  `proposal-ancestry-unverified`; nothing was saved.
+- (c) An in-process SDK session with its own ID behaved as (a). One forced
+  to the parent's session ID saved a proposal, and nothing committed it:
+  the SDK session's Lucid extension is not in `tui` mode, and the parent's
+  extension does not see the SDK session's tool results.
+- Live TUI lanes: a `--json` publish bound its record; a browser note
+  arrived as a follow-up, and the model recorded receipt and an answer;
+  `/reload` while listening left no helper and disabled the listener; a
+  quit Pi closed its bound record. `scripts/smoke-pi-resume.ts` passed
+  for the headless resume.
 
 ## Alternatives Considered
 

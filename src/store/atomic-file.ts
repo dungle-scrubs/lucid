@@ -1,6 +1,7 @@
 import {
   closeSync,
   constants,
+  fchmodSync,
   fsyncSync,
   openSync,
   renameSync,
@@ -17,7 +18,7 @@ export function syncPath(dir: string): void {
     closeSync(fd);
   }
 }
-export function atomicSidecar(path: string, value: unknown): void {
+export function atomicSidecar(path: string, value: unknown, mode: number = 0o600): void {
   const tmp = `${path}.${crypto.randomUUID()}.part`;
   let created = false;
   let renamed = false;
@@ -25,10 +26,13 @@ export function atomicSidecar(path: string, value: unknown): void {
     const fd = openSync(
       tmp,
       constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
-      0o600,
+      mode,
     );
     created = true;
     try {
+      // Set the mode on the temporary file before the rename: a completed rename
+      // then always leaves the destination with its intended mode.
+      fchmodSync(fd, mode);
       writeFileSync(fd, JSON.stringify(value));
       fsyncSync(fd);
     } finally {

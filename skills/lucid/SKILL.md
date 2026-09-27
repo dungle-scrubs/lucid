@@ -6,9 +6,9 @@ description: >
   diagrams, specs, walkthroughs, and other structured answers the user may
   want to annotate at an element or phrase. Requires the lucid artifact
   protocol marker supplied by `lucid chat` or `lucid run`, or a native
-  Codex CLI or Claude Code session using Lucid publication and connection
-  commands.
-compatibility: Requires lucid; native listening requires the Codex CLI or Claude Code integration.
+  Codex CLI, Claude Code, or Pi session using Lucid publication and
+  connection commands.
+compatibility: Requires lucid; native listening requires the Codex CLI, Claude Code, or Pi integration.
 ---
 
 # Lucid artifact authoring
@@ -44,7 +44,16 @@ publication reports `headless-fallback`, keep the conversation and tell the
 person the Claude Code integration is not set up in this session: a new
 headless session answers their notes, not this one.
 
-Any other interface (Pi, Muse, Cursor, a delegated worker) has no
+In a Pi CLI session, follow
+[Native Pi](https://github.com/dungle-scrubs/lucid/blob/main/docs/native-pi.md):
+publish, request listening, and record receipt and response by running each
+Lucid command in Pi's Bash tool with the `lucid` binary run directly - not
+through `npx`, `bunx`, `pnpm`, `node <script>`, or a nested `pi`, which refuse
+with `proposal-ancestry-unverified`. The extension records the command when
+the Bash call finishes. Without the extension set up, publication reports
+`headless-fallback` and the fallback below applies.
+
+Any other interface (Muse, Cursor, a delegated worker) has no
 integration yet. It may still publish through `lucid artifact publish`.
 The request must carry its own `settings` and `workingDirectory`, so notes
 are answered by a headless session on the same model in the same folder.

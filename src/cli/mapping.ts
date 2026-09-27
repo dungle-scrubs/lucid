@@ -22,7 +22,7 @@ export type MappedCommand =
   | {
       readonly kind: "connection-setup";
       readonly hooksFile: string;
-      readonly interface: "claude-cli" | "codex-cli";
+      readonly interface: "claude-cli" | "codex-cli" | "pi-cli";
       readonly json: boolean;
     }
   | { readonly kind: "connection-listen"; readonly conversationId: string; readonly json: boolean }
@@ -161,19 +161,19 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
       const help = {
         kind: "help",
         message:
-          "usage: lucid connection setup --interface codex-cli --hooks-file FILE [--json]\nlucid connection setup --interface claude-cli --settings-file FILE [--json]\nConfigure hooks in an explicit source file; native trust and listening are separate steps.\nlucid connection status CONVERSATION [--json]\nRead current native connection and ownership evidence.\nlucid connection resume-listen CONVERSATION [--json]\nRequest listening in the verified Codex CLI or Claude Code session and return immediately. Finish the native turn; its Stop hook waits up to 45 seconds for complete saved feedback. This acknowledgement does not mean listening has started. Expiry or interruption requires explicit resume-listen.\nlucid connection receipt CONVERSATION --offer OFFER [--json]\nRecord receipt from the verified native session that received the offer.\nlucid connection respond CONVERSATION --offer OFFER --request FILE [--json]\nRecord one answer, question, refusal, or failure after receipt. FILE contains {kind,text}. Repeating the same result is safe. lucid connection cancel-input CONVERSATION --input INPUT [--json]\nCancel saved feedback only before dispatch begins.\nThese commands do not start a native process.",
+          "usage: lucid connection setup --interface codex-cli --hooks-file FILE [--json]\nlucid connection setup --interface claude-cli --settings-file FILE [--json]\nlucid connection setup --interface pi-cli --settings-file FILE [--json]\nConfigure hooks or an extension in an explicit source file; native trust and listening are separate steps.\nlucid connection status CONVERSATION [--json]\nRead current native connection and ownership evidence.\nlucid connection resume-listen CONVERSATION [--json]\nRequest listening in the verified Codex CLI, Claude Code, or Pi session and return immediately. Finish the native turn; its Stop hook or settled listener waits up to 45 seconds for complete saved feedback. This acknowledgement does not mean listening has started. Expiry or interruption requires explicit resume-listen.\nlucid connection receipt CONVERSATION --offer OFFER [--json]\nRecord receipt from the verified native session that received the offer.\nlucid connection respond CONVERSATION --offer OFFER --request FILE [--json]\nRecord one answer, question, refusal, or failure after receipt. FILE contains {kind,text}. Repeating the same result is safe. lucid connection cancel-input CONVERSATION --input INPUT [--json]\nCancel saved feedback only before dispatch begins.\nThese commands do not start a native process.",
       } as const;
       const id = rest[1];
       if (rest[0] === "setup") {
         const setupHelp = {
           kind: "help" as const,
           message:
-            "usage: lucid connection setup --interface codex-cli --hooks-file FILE [--json]\nConfigure Lucid in an explicit Codex hooks.json source file, preserving unrelated hooks. Review and trust changed hooks in Codex /hooks; a later SessionStart registers the native session.\nlucid connection setup --interface claude-cli --settings-file FILE [--json]\nConfigure Lucid in an explicit Claude Code settings.json source file, preserving unrelated settings and hooks. Accept workspace trust, then start a new session or run /clear so SessionStart registers it.\nThese commands do not start a native process or establish listening readiness.",
+            "usage: lucid connection setup --interface codex-cli --hooks-file FILE [--json]\nConfigure Lucid in an explicit Codex hooks.json source file, preserving unrelated hooks. Review and trust changed hooks in Codex /hooks; a later SessionStart registers the native session.\nlucid connection setup --interface claude-cli --settings-file FILE [--json]\nConfigure Lucid in an explicit Claude Code settings.json source file, preserving unrelated settings and hooks. Accept workspace trust, then start a new session or run /clear so SessionStart registers it.\nlucid connection setup --interface pi-cli --settings-file FILE [--json]\nConfigure Lucid's Pi extension in an explicit Pi settings.json source file, preserving unrelated settings and extensions. Start a new Pi session so the extension's session_start registers it.\nThese commands do not start a native process or establish listening readiness.",
         };
         const fileFlag =
           rest[2] === "codex-cli"
             ? "--hooks-file"
-            : rest[2] === "claude-cli"
+            : rest[2] === "claude-cli" || rest[2] === "pi-cli"
               ? "--settings-file"
               : null;
         if (
@@ -188,7 +188,7 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
         return {
           kind: "connection-setup",
           hooksFile: rest[4],
-          interface: rest[2] as "claude-cli" | "codex-cli",
+          interface: rest[2] as "claude-cli" | "codex-cli" | "pi-cli",
           json: rest[5] === "--json",
         };
       }

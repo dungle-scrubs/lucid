@@ -170,7 +170,9 @@ export function requestNativeListening(
             conversationId,
             kind: "requested",
             message:
-              "Listening requested. Finish this native turn; the Stop hook will wait up to 45 seconds for saved feedback. Expiry or interruption requires another explicit resume-listen.",
+              registration.interface === "pi-cli"
+                ? "Listening requested. Finish this turn; after Pi settles, Lucid waits up to 45 seconds for complete saved feedback. This acknowledgement does not mean listening has started."
+                : "Listening requested. Finish this native turn; the Stop hook will wait up to 45 seconds for saved feedback. Expiry or interruption requires another explicit resume-listen.",
           }
         : heldNativeFeedback(saved.reason, saved.message);
     },
