@@ -72,16 +72,19 @@ type ListenRequestResult =
   | { readonly conversationId: string; readonly kind: "requested"; readonly message: string }
   | Extract<NativeListenerResult, { kind: "held" }>;
 
-/** Select a record for the next Stop. This command neither waits nor grants readiness. */
+/** Select a record for the next Stop. This command neither waits nor grants readiness.
+ * `reference`, when set, is the registration id the commit names; the lookup refuses a
+ * registration that was replaced after the caller resolved it (RFC 28 step 3). */
 export function requestNativeListening(
   records: Conversations,
   conversationId: string,
   authority: RegistrationAuthority = nativeCommandAuthority(),
+  reference?: string,
 ): ListenRequestResult {
   const dir = commandRecordDir(records, conversationId);
   const result = withNativeRegistration(
     records.rootDir,
-    undefined,
+    reference,
     (registration, access): ListenRequestResult => {
       if (!STOP_TRANSPORTS[registration.interface]) return UNVERIFIED_TRANSPORT;
       const state = viewConversation(dir).state;

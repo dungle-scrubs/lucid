@@ -408,6 +408,43 @@ test("a proposal commits once, within its lifetime, for the lifecycle that saved
   }
 });
 
+test("a commit names its registration: a proposal from a replaced generation refuses and changes nothing", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-claude-generation-"));
+  try {
+    const owner = readProcessOwner(process.pid);
+    if (!owner) throw new Error("Test process identity unavailable");
+    const start = {
+      cwd: root,
+      hook_event_name: "SessionStart",
+      session_id: SESSION,
+      source: "startup",
+    } as const;
+    expect(await captureClaudeAuthor(root, start, native(owner))).toMatchObject({ ok: true });
+    const first = await captureClaudeAuthor(
+      root,
+      { ...start, hook_event_name: "Stop" },
+      native(owner),
+    );
+    if (!first.ok || !("registration" in first)) throw new Error("Missing generation 1");
+    const conversationId = "claude replaced record";
+    const { dir } = conversations(root).ensure(conversationId, { workingDirectory: root });
+    const stale = saveClaudeProposal(root, first.registration, {
+      conversationId,
+      kind: "receipt",
+      offerId: crypto.randomUUID(),
+    });
+    // The same owner re-registers: generation 2 replaces generation 1 under the same key.
+    expect(await captureClaudeAuthor(root, start, native(owner))).toMatchObject({ ok: true });
+    const before = viewConversation(dir).state.seq;
+    const result = await commit(root, owner, `lucid-claude-proposal:${stale.nonce}`);
+    if (result.kind !== "committed") throw new Error("Missing replacement refusal");
+    expect(result.context).toContain(`${stale.nonce}: not recorded. stale-registration`);
+    expect(viewConversation(dir).state.seq).toBe(before);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test("a Claude Code command without a registered session refuses and keeps the publication", async () => {
   const root = mkdtempSync(join(tmpdir(), "lucid-claude-unregistered-"));
   try {

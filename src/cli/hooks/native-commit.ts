@@ -8,7 +8,9 @@ import type { Conversations } from "../record-addressing.js";
 
 /** Commit one proposed operation through the host operations every native
  * lifecycle callback shares (RFC 28 step 3: Pi commits through the same
- * operations the Claude PostToolUse hook uses). */
+ * operations the Claude PostToolUse hook uses). Every operation names the
+ * registration it commits under, so a registration replaced between the
+ * callback's lookup and the commit refuses instead of committing. */
 export function commitOperation(
   records: Conversations,
   operation: NativeOperation,
@@ -27,14 +29,23 @@ export function commitOperation(
       return `Connection for ${conversationId}: ${status.state}. ${status.message}`;
     }
     case "listen":
-      return `Listening for ${conversationId}: ${requestNativeListening(records, conversationId, authority).message}`;
+      return `Listening for ${conversationId}: ${
+        requestNativeListening(records, conversationId, authority, registration.registrationId)
+          .message
+      }`;
     case "receipt":
     case "respond": {
       const control: ConnectionControl =
         operation.kind === "receipt"
           ? { kind: "receipt", offerId: operation.offerId }
           : { kind: "respond", offerId: operation.offerId, outcome: operation.outcome };
-      const result = runConnectionControl(records, conversationId, control, authority);
+      const result = runConnectionControl(
+        records,
+        conversationId,
+        control,
+        authority,
+        registration.registrationId,
+      );
       return `${operation.kind === "receipt" ? "Receipt" : "Response"} for offer ${operation.offerId}: ${result.verdict}. ${result.message}`;
     }
   }

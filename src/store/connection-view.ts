@@ -445,6 +445,7 @@ export function readConnection(
     nativeConnectionRequired: requiresNativeConnection(state),
     nativeSessionId: binding?.nativeSessionId ?? null,
     observedAt,
+    registrationId: binding?.registrationId ?? null,
     savedPreference: preferenceState(dir).preference,
   };
 }

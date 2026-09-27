@@ -9,6 +9,7 @@ import {
   type PiExtensionApi,
   type PiHelperChild,
   type PiHelperSpawn,
+  type PiHelperTimers,
   piExtensionSource,
 } from "../../src/harness/pi-extension.js";
 
@@ -226,12 +227,13 @@ const helperSpawn = () => {
   return api;
 };
 
-const loadInteractive = (spawn: PiHelperSpawn, lucid = LUCID) => {
+const loadInteractive = (spawn: PiHelperSpawn, lucid = LUCID, timers?: PiHelperTimers) => {
   const handlers = new Map<string, Handler>();
   lucidPiExtension(
     { on: (event: string, handler: Handler) => handlers.set(event, handler) } as never,
     lucid,
     spawn,
+    timers,
   );
   return handlers;
 };
@@ -251,6 +253,77 @@ const bashResult = (text: string) => ({
   toolCallId: "call-1",
   toolName: "bash",
 });
+
+/** A spawn seam the test drives by hand: each child's events fire only when told. */
+const manualSpawn = () => {
+  interface ManualChild {
+    readonly emitClose: () => void;
+    readonly emitData: (chunk: unknown) => void;
+    readonly emitError: () => void;
+    readonly kills: readonly string[];
+  }
+  const children: ManualChild[] = [];
+  const spawn: PiHelperSpawn = () => {
+    const kills: string[] = [];
+    const closing: (() => void)[] = [];
+    const data: ((chunk: unknown) => void)[] = [];
+    const errors: (() => void)[] = [];
+    children.push({
+      emitClose: () => {
+        for (const listener of closing) listener();
+      },
+      emitData: (chunk: unknown) => {
+        for (const listener of data) listener(chunk);
+      },
+      emitError: () => {
+        for (const listener of errors) listener();
+      },
+      kills,
+    });
+    return {
+      kill: (signal?: string) => {
+        kills.push(signal ?? "");
+      },
+      on: (event: "close" | "error", listener: () => void) => {
+        (event === "close" ? closing : errors).push(listener);
+      },
+      stdin: {
+        end: () => {},
+        on: () => {},
+      },
+      stdout: { on: (_event: "data", listener: (chunk: unknown) => void) => data.push(listener) },
+    } satisfies PiHelperChild;
+  };
+  return { children, spawn };
+};
+
+/** A manual clock for the helper timeout: advancing it fires what elapsed. */
+const manualTimers = () => {
+  let now = 0;
+  let sequence = 0;
+  const pending = new Map<number, { at: number; handler: () => void }>();
+  const timers: PiHelperTimers = {
+    clearTimeout: (handle: unknown) => {
+      pending.delete(handle as number);
+    },
+    setTimeout: (handler: () => void, ms: number) => {
+      sequence += 1;
+      pending.set(sequence, { at: now + ms, handler });
+      return sequence;
+    },
+  };
+  return {
+    advance: (ms: number) => {
+      now += ms;
+      for (const [handle, entry] of [...pending.entries()])
+        if (entry.at <= now) {
+          pending.delete(handle);
+          entry.handler();
+        }
+    },
+    timers,
+  };
+};
 
 describe("interactive role", () => {
   test("session_start runs the session-start helper with the capture on stdin", async () => {
@@ -346,6 +419,82 @@ describe("interactive role", () => {
     );
   });
 
+  test("a helper that never exits is killed with SIGKILL after 15 s", async () => {
+    const manual = manualSpawn();
+    const clock = manualTimers();
+    const handlers = loadInteractive(manual.spawn, LUCID, clock.timers);
+    const starting = handlers.get("session_start")?.({}, tuiContext());
+    clock.advance(15_000);
+    await starting;
+    const pending = handlers.get("tool_result")?.(
+      bashResult(`lucid-pi-proposal:${"a".repeat(36)}`),
+      tuiContext(),
+    );
+    clock.advance(15_000);
+    const result = await pending;
+    expect(manual.children[1]?.kills).toEqual(["SIGKILL"]);
+    expect((result as { content: { text: string }[] }).content[1]?.text).toBe(
+      "Lucid could not confirm these proposals. They are not retried.",
+    );
+  });
+
+  test("stdout past the 49152-byte bound kills the child and leaves the proposals unconfirmed", async () => {
+    const manual = manualSpawn();
+    const handlers = loadInteractive(manual.spawn);
+    const starting = handlers.get("session_start")?.({}, tuiContext());
+    manual.children[0]?.emitClose();
+    await starting;
+    const pending = handlers.get("tool_result")?.(
+      bashResult(`lucid-pi-proposal:${"a".repeat(36)}`),
+      tuiContext(),
+    );
+    manual.children[1]?.emitData(Buffer.alloc(30_000, 0x7b));
+    manual.children[1]?.emitData(Buffer.alloc(20_000, 0x7d));
+    const result = await pending;
+    expect(manual.children[1]?.kills).toEqual(["SIGKILL"]);
+    expect((result as { content: { text: string }[] }).content[1]?.text).toBe(
+      "Lucid could not confirm these proposals. They are not retried.",
+    );
+  });
+
+  test("a spawn that throws leaves the proposals unconfirmed", async () => {
+    const manual = manualSpawn();
+    let calls = 0;
+    const spawn: PiHelperSpawn = (command, args, options) => {
+      calls += 1;
+      if (calls > 1) throw new Error("spawn refused");
+      return manual.spawn(command, args, options);
+    };
+    const handlers = loadInteractive(spawn);
+    const starting = handlers.get("session_start")?.({}, tuiContext());
+    manual.children[0]?.emitClose();
+    await starting;
+    const result = await handlers.get("tool_result")?.(
+      bashResult(`lucid-pi-proposal:${"a".repeat(36)}`),
+      tuiContext(),
+    );
+    expect((result as { content: { text: string }[] }).content[1]?.text).toBe(
+      "Lucid could not confirm these proposals. They are not retried.",
+    );
+  });
+
+  test("a child error event leaves the proposals unconfirmed", async () => {
+    const manual = manualSpawn();
+    const handlers = loadInteractive(manual.spawn);
+    const starting = handlers.get("session_start")?.({}, tuiContext());
+    manual.children[0]?.emitClose();
+    await starting;
+    const pending = handlers.get("tool_result")?.(
+      bashResult(`lucid-pi-proposal:${"a".repeat(36)}`),
+      tuiContext(),
+    );
+    manual.children[1]?.emitError();
+    const result = await pending;
+    expect((result as { content: { text: string }[] }).content[1]?.text).toBe(
+      "Lucid could not confirm these proposals. They are not retried.",
+    );
+  });
+
   test("a bash tool result without a marker returns undefined and starts nothing", async () => {
     const helper = helperSpawn();
     const handlers = loadInteractive(helper.spawn);
@@ -402,7 +551,7 @@ describe("piExtensionSource with a lucid command", () => {
     expect(source).toContain("export default function (pi) { return extension(pi, LUCID); }");
   });
 
-  test("without lucid it is byte-identical to before", () => {
+  test("without lucid the source is the headless template, byte for byte", () => {
     expect(piExtensionSource()).toBe(
       `// Lucid Pi extension (RFC 28). Written by Lucid; do not edit.\nexport default ${lucidPiExtension.toString()};\n`,
     );

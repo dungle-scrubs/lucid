@@ -37,6 +37,8 @@ export interface ConnectionProjection extends ConnectionStatus {
   readonly interface: NativeInterface | null;
   readonly nativeConnectionRequired: boolean;
   readonly nativeSessionId: string | null;
+  /** The registration this record is bound to, when a binding exists. */
+  readonly registrationId: string | null;
   readonly observedAt: number;
   readonly savedPreference: DriverPreference | null;
 }

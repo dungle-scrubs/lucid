@@ -55,6 +55,12 @@ export type PiHelperSpawn = (
   options: unknown,
 ) => PiHelperChild;
 
+/** Timer functions the interactive role schedules its helper timeout with; tests pass a fake. */
+export interface PiHelperTimers {
+  clearTimeout(handle: unknown): void;
+  setTimeout(handler: () => void, ms: number): unknown;
+}
+
 /**
  * The Lucid Pi extension (RFC 28). It runs inside Pi, not inside Lucid:
  * `piExtensionSource` serializes it with `Function.prototype.toString`, so
@@ -71,6 +77,7 @@ export function lucidPiExtension(
   pi: PiExtensionApi,
   lucid?: PiHelperCommand,
   spawnHelper?: PiHelperSpawn,
+  timers?: PiHelperTimers,
 ): void {
   const env = process.env;
   const attemptValue = env.LUCID_PI_ATTEMPT;
@@ -121,6 +128,10 @@ export function lucidPiExtension(
         resolve(undefined);
         return;
       }
+      const clock: PiHelperTimers = timers ?? {
+        clearTimeout: (handle) => clearTimeout(handle as Parameters<typeof clearTimeout>[0]),
+        setTimeout: (handler, ms) => setTimeout(handler, ms),
+      };
       let child: PiHelperChild;
       try {
         const spawn = (spawnHelper ??
@@ -134,22 +145,22 @@ export function lucidPiExtension(
       }
       let done = false;
       let bytes = 0;
-      const parts: string[] = [];
+      const chunks: Buffer[] = [];
       const finish = (value: Record<string, unknown> | undefined) => {
         if (done) return;
         done = true;
-        clearTimeout(timer);
+        clock.clearTimeout(timer);
         try {
           child.kill("SIGKILL");
         } catch {}
         resolve(value);
       };
-      const timer = setTimeout(() => finish(undefined), HELPER_TIMEOUT_MS);
+      const timer = clock.setTimeout(() => finish(undefined), HELPER_TIMEOUT_MS);
       child.on("error", () => finish(undefined));
       child.on("close", () => {
         if (done) return;
         try {
-          const parsed = JSON.parse(parts.join(""));
+          const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
           finish(parsed !== null && typeof parsed === "object" ? parsed : undefined);
         } catch {
           finish(undefined);
@@ -158,10 +169,14 @@ export function lucidPiExtension(
       if (child.stdout)
         child.stdout.on("data", (chunk: unknown) => {
           if (done) return;
-          const text = typeof chunk === "string" ? chunk : String(chunk);
-          parts.push(text);
-          bytes +=
-            typeof chunk === "string" ? Buffer.byteLength(chunk) : (chunk as Uint8Array).length;
+          const buffer =
+            typeof chunk === "string"
+              ? Buffer.from(chunk, "utf8")
+              : chunk instanceof Uint8Array
+                ? Buffer.from(chunk)
+                : Buffer.from(String(chunk));
+          chunks.push(buffer);
+          bytes += buffer.length;
           if (bytes > HELPER_RESULT_MAX) finish(undefined);
         });
       child.stdin.on("error", () => {});

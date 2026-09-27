@@ -455,6 +455,7 @@ states. `refused` never reaches `input` with `continue`.
 | Condition | Behavior |
 |---|---|
 | Helper parent PID or executable does not match the capture | Refuse registration: `native-context-unverified`. |
+| Owner runs under a JavaScript runtime or Pi process, or the session file header disagrees | Refuse registration: `native-context-unverified`. |
 | `mode` is not `tui` in an interactive-role event | The extension does not start a helper. |
 | Helper input over 64 KiB, malformed, or with unknown fields | Refuse before parsing or mutation. |
 | More than 16 marker lines in one tool result | Refuse the batch; nothing commits. |
@@ -498,10 +499,14 @@ the ordinary managed driver for a bound record.
   installed Pi extension already has the user's authority. This RFC does
   not claim that a malicious same-user process cannot impersonate the
   extension.
-- A model cannot nominate an owner or a session. Bash commands only
-  propose; commits need the parent callback in `tui` mode and a proposal
-  session equal to the registered session. `PI_SESSION_ID` locates a
-  registration and proves nothing.
+- A model cannot nominate an owner or a session through Lucid's commands:
+  Bash commands only propose, and commits need the parent callback in
+  `tui` mode and a proposal session equal to the registered session. A
+  model can start the helper itself from a runtime it controls, so
+  registration also refuses an owner that runs under a JavaScript runtime
+  or a Pi process, and requires the session file header to name the
+  captured session and folder. `PI_SESSION_ID` locates a registration and
+  proves nothing.
 - The model cannot forge an attestation. The nonce and the file path
   leave `process.env` before any tool runs (R8). A refusal also requires
   exit 3 and a stream with no agent events, which a run that reached the

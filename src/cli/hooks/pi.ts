@@ -1,15 +1,17 @@
-import { realpathSync } from "node:fs";
+import { closeSync, constants, openSync, readSync, realpathSync } from "node:fs";
 import { basename } from "node:path";
-import { readProcessOwner } from "../../process-owner.js";
+import { readParentPid, readProcessOwner } from "../../process-owner.js";
 import { path } from "../../protocol/connection.js";
 import { isWireId } from "../../protocol/frames.js";
 import type { ProcessOwner } from "../../protocol/process-owner.js";
+import { sameProcessOwner } from "../../protocol/process-owner.js";
 import {
   claimNativeProposal,
   PROPOSAL_MARKERS,
   proposalNonces,
 } from "../../store/native-proposals.js";
 import {
+  nativeRegistrationAuthority,
   registerNativeSession,
   removeNativeRegistration,
   withNativeRegistration,
@@ -30,6 +32,10 @@ export const PI_CAPTURE_OVERSIZE_MESSAGE = "The Pi hook capture is too large.";
 
 const INVALID_CAPTURE_MESSAGE = "The Pi hook capture is invalid.";
 const UNVERIFIED_PARENT_MESSAGE = "The Pi process that started this helper could not be verified.";
+const RUNTIME_ANCESTRY_MESSAGE =
+  "This Pi session runs inside another JavaScript runtime or Pi process, so Lucid does not register it. Start Pi directly from a terminal.";
+const SESSION_FILE_MESSAGE =
+  "This Pi session's own session file does not match the captured session or folder, so Lucid does not register it.";
 
 const BASE_KEYS = [
   "v",
@@ -51,6 +57,9 @@ export interface PiHookDeps {
   /** The process that spawned this helper; it must be the captured Pi process. */
   readonly parentPid: () => number;
   readonly probe: (pid: number) => ReturnType<typeof readProcessOwner>;
+  /** The first line of a file, or null when it cannot be read; bounds the session-file check. */
+  readonly readFirstLine: (path: string) => string | null;
+  readonly readParentPid: (pid: number) => number | null | undefined;
   readonly realpath: (path: string) => string;
   readonly now: () => number;
 }
@@ -72,6 +81,24 @@ const refused = (reason: string, message: string): PiHookResult => ({
   reason,
   v: 1,
 });
+
+/** The first line of a session file, at most 64 KiB in; null when it cannot be read. */
+function readHeaderLine(path: string): string | null {
+  try {
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const buffer = Buffer.alloc(65_536);
+      const bytes = readSync(fd, buffer, 0, buffer.length, 0);
+      const text = buffer.subarray(0, bytes).toString("utf8");
+      const newline = text.indexOf("\n");
+      return newline === -1 ? text : text.slice(0, newline);
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+}
 
 /** Read at most `maxBytes`; a larger input stops reading and reports `null` without parsing. */
 export async function readBoundedInput(
@@ -145,7 +172,9 @@ function parseCapture(event: PiHookEvent, text: string): PiCapture | null {
 function verifyParent(
   capture: PiCapture,
   deps: PiHookDeps,
-): { readonly owner: ProcessOwner } | { readonly message: string } {
+):
+  | { readonly owner: ProcessOwner; readonly ownerParentPid: number }
+  | { readonly message: string } {
   if (deps.parentPid() !== capture.pid) return { message: UNVERIFIED_PARENT_MESSAGE };
   const snapshot = deps.probe(capture.pid);
   if (!snapshot) return { message: UNVERIFIED_PARENT_MESSAGE };
@@ -162,14 +191,66 @@ function verifyParent(
     return { message: UNVERIFIED_PARENT_MESSAGE };
   return {
     owner: { executable: snapshot.executable, pid: snapshot.pid, startedAt: snapshot.startedAt },
+    ownerParentPid: snapshot.parentPid,
   };
+}
+
+/** RFC 28 registration rule: a real Pi TUI starts from a shell or terminal, so an
+ * owner with a JavaScript runtime or a Pi process above it is a helper a model
+ * started, not this session. Walking stops at pid 1 after at most 64 steps; an
+ * unreadable ancestor is skipped by its parent pid and never itself a refusal. */
+function ownerUnderRuntimeOrPi(startPid: number, deps: PiHookDeps): boolean {
+  const visited = new Set<number>();
+  let pid = startPid;
+  while (pid > 1 && visited.size < 64 && !visited.has(pid)) {
+    visited.add(pid);
+    const snapshot = deps.probe(pid);
+    if (!snapshot) {
+      const parent = deps.readParentPid(pid);
+      if (parent === undefined || parent === null) return false;
+      pid = parent;
+      continue;
+    }
+    let base: string;
+    try {
+      base = basename(deps.realpath(snapshot.executable));
+    } catch {
+      base = basename(snapshot.executable);
+    }
+    if (base === "node" || base === "bun" || base === "deno" || base === "pi") return true;
+    pid = snapshot.parentPid;
+  }
+  return false;
+}
+
+/** The session file's header line must name the captured session and folder. A null
+ * return accepts; a session Pi has not written yet (`sessionFile: null`) is accepted. */
+function sessionFileRefusal(capture: PiCapture, deps: PiHookDeps): string | null {
+  if (capture.sessionFile === null) return null;
+  const line = deps.readFirstLine(capture.sessionFile);
+  let header: unknown;
+  try {
+    header = JSON.parse(line ?? "");
+  } catch {
+    return SESSION_FILE_MESSAGE;
+  }
+  if (!object(header)) return SESSION_FILE_MESSAGE;
+  const record = header as Record<string, unknown>;
+  if (record.type !== "session" || record.id !== capture.nativeSessionId)
+    return SESSION_FILE_MESSAGE;
+  if (typeof record.cwd !== "string") return SESSION_FILE_MESSAGE;
+  try {
+    return deps.realpath(record.cwd) === deps.realpath(capture.workingDirectory)
+      ? null
+      : SESSION_FILE_MESSAGE;
+  } catch {
+    return SESSION_FILE_MESSAGE;
+  }
 }
 
 /** Map a registration lookup failure to the commit line's refusal reason (RFC 28 step 3). */
 function commitRefusalReason(reason: string): string {
-  if (reason === "stale-registration") return "registration-replaced";
-  if (reason === "registration-missing") return "proposal-session-mismatch";
-  return reason;
+  return reason === "stale-registration" ? "registration-replaced" : reason;
 }
 
 export async function runPiHook(
@@ -182,6 +263,8 @@ export async function runPiHook(
     now: Date.now,
     parentPid: () => process.ppid,
     probe: readProcessOwner,
+    readFirstLine: readHeaderLine,
+    readParentPid,
     realpath: (value) => realpathSync.native(value),
     ...deps,
   };
@@ -189,9 +272,13 @@ export async function runPiHook(
   if (!capture) return refused("invalid-capture", INVALID_CAPTURE_MESSAGE);
   const parent = verifyParent(capture, d);
   if (!("owner" in parent)) return refused("native-context-unverified", parent.message);
-  const { owner } = parent;
-  const authority = piSessionAuthority(capture.nativeSessionId, d.probe);
+  const { owner, ownerParentPid } = parent;
   if (event === "session-start") {
+    if (ownerUnderRuntimeOrPi(ownerParentPid, d))
+      return refused("native-context-unverified", RUNTIME_ANCESTRY_MESSAGE);
+    const sessionFile = sessionFileRefusal(capture, d);
+    if (sessionFile !== null) return refused("native-context-unverified", sessionFile);
+    // Registration corroborates the whole capture, as the Claude SessionStart hook does.
     const result = registerNativeSession(
       records.rootDir,
       {
@@ -201,7 +288,15 @@ export async function runPiHook(
         owner,
         workingDirectory: capture.workingDirectory,
       },
-      authority,
+      nativeRegistrationAuthority(
+        (candidate) =>
+          candidate.harness === "pi" &&
+          candidate.interface === "pi-cli" &&
+          candidate.nativeSessionId === capture.nativeSessionId &&
+          candidate.workingDirectory === capture.workingDirectory &&
+          sameProcessOwner(candidate.owner, owner),
+        d.probe,
+      ),
     );
     return result.ok
       ? {
@@ -223,6 +318,9 @@ export async function runPiHook(
       ? { kind: "removed", removed: result.removed, v: 1 }
       : refused(result.reason, result.message);
   }
+  // Commits locate the registration through the callback's session; the session itself
+  // proves nothing beyond locating (RFC 28 Security Considerations).
+  const authority = piSessionAuthority(capture.nativeSessionId, d.probe);
   const lines: string[] = [];
   for (const nonce of proposalNonces("pi-cli", (capture.markers ?? []).join("\n"))) {
     const proposal = claimNativeProposal(records.rootDir, "pi-cli", nonce, d.now());
@@ -230,14 +328,6 @@ export async function runPiHook(
       lines.push(`${nonce}: not found or expired`);
       continue;
     }
-    // The registration is resolved under the registry lock; the commit runs after it,
-    // as the Claude hook does, because every operation re-enters the same lock.
-    const current = withNativeRegistration(
-      records.rootDir,
-      proposal.registrationId,
-      (registration) => registration,
-      authority,
-    );
     const refuse = (reason: string): void => {
       lines.push(`${nonce}: refused (${reason})`);
       // A refused bind is claimed and saved beside the publication, as for Claude.
@@ -249,13 +339,32 @@ export async function runPiHook(
           `Artifact published; connection refused: ${reason}.`,
         );
     };
+    // The proposal names the session whose registration saved it; a capture from any
+    // other session never reaches the registration lookup.
+    if (proposal.nativeSessionId !== capture.nativeSessionId) {
+      refuse("proposal-session-mismatch");
+      continue;
+    }
+    // The registration is resolved under the registry lock; the commit runs after it,
+    // as the Claude hook does, because every operation re-enters the same lock.
+    const current = withNativeRegistration(
+      records.rootDir,
+      proposal.registrationId,
+      (registration) => registration,
+      authority,
+    );
     if (!current.ok) {
+      // A busy registry saves nothing: the command can simply run again.
+      if (current.reason === "registration-busy") {
+        lines.push(`${nonce}: not recorded, Lucid was busy; run the command again`);
+        continue;
+      }
       refuse(commitRefusalReason(current.reason));
       continue;
     }
     const registration = current.value;
     if (
-      registration.owner.pid !== owner.pid ||
+      !sameProcessOwner(registration.owner, owner) ||
       registration.nativeSessionId !== capture.nativeSessionId
     ) {
       refuse("proposal-session-mismatch");

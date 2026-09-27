@@ -197,7 +197,7 @@ function commitProposals(
     }
     if (proposal.registrationId !== registration.registrationId) {
       lines.push(
-        `${nonce}: not recorded. It was saved by a different native lifecycle; run the command again.`,
+        `${nonce}: not recorded. stale-registration: It was saved by a different native lifecycle; run the command again.`,
       );
       continue;
     }

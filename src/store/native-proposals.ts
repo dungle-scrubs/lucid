@@ -12,7 +12,7 @@ import {
 import { join } from "node:path";
 import type { NativeBinding } from "../protocol/connection.js";
 import { connectionId } from "../protocol/connection.js";
-import { TEXT_MAX } from "../protocol/frames.js";
+import { isWireId, TEXT_MAX } from "../protocol/frames.js";
 import { atomicSidecar } from "./atomic-file.js";
 import { validConversationId } from "./errors.js";
 
@@ -37,6 +37,8 @@ export type NativeOperation =
 
 export interface NativeProposal {
   readonly createdAt: number;
+  /** The native session whose registration saved this; the committing callback must name it. */
+  readonly nativeSessionId?: string;
   readonly nonce: string;
   readonly operation: NativeOperation;
   readonly registrationId: string;
@@ -93,6 +95,7 @@ export function saveNativeProposal(
     throw new Error(`Unsupported proposal interface: ${iface}`);
   const proposal: NativeProposal = {
     createdAt: now,
+    nativeSessionId: registration.nativeSessionId,
     nonce: crypto.randomUUID(),
     operation,
     registrationId: registration.registrationId,
@@ -144,6 +147,12 @@ export function claimNativeProposal(
       closeSync(fd);
     }
     if (!object(raw) || raw.nonce !== nonce || !connectionId(raw.registrationId)) return null;
+    // The session is optional so proposals written before it existed still claim;
+    // a present value that is not a wire id marks the file invalid.
+    const nativeSessionId = raw.nativeSessionId;
+    if (nativeSessionId !== undefined) {
+      if (typeof nativeSessionId !== "string" || !isWireId(nativeSessionId)) return null;
+    }
     const operation = parseOperation(raw.operation);
     const createdAt = raw.createdAt;
     if (
@@ -154,7 +163,13 @@ export function claimNativeProposal(
       now - createdAt > NATIVE_PROPOSAL_TTL_MS
     )
       return null;
-    return { createdAt, nonce, operation, registrationId: raw.registrationId };
+    return {
+      createdAt,
+      nonce,
+      operation,
+      registrationId: raw.registrationId,
+      ...(nativeSessionId === undefined ? {} : { nativeSessionId }),
+    };
   } catch {
     return null;
   } finally {
