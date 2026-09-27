@@ -5,7 +5,7 @@ type: protocol
 status: Accepted
 author: "Claude Opus 5.5"
 date: 2026-09-27
-version: 2
+version: 3
 ---
 
 # RFC-35: Pi native settings and extension loading for bound continuation
@@ -217,6 +217,15 @@ RFC 28's outcome classification at settlement.
    stream: a refusal needs exit 3 and no agent events, which a run that
    reached the model cannot produce, and a refused session never lets the
    model run to forge a `verified` file.
+3. Row 2 of the outcome table matches a `failure` with
+   `nativeExitCode: 3` of any class, not only `class: "native"`. hcn
+   classifies a nonzero exit as `native` when Pi wrote to stderr and as
+   `transport` when it did not. The live smoke showed both: a raced resume
+   (Pi prints a warning) reported `native`, and a folder mismatch (Pi is
+   silent) reported `transport`. hcn 0.7.6 carries `nativeExitCode` on the
+   silent case. Pi itself exits only 0, 1, or 129, so exit 3 is still the
+   extension's code. The attestation and the empty agent stream are
+   unchanged.
 
 ## Security Considerations
 

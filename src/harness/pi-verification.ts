@@ -46,9 +46,11 @@ const CONTROL_KINDS: ReadonlySet<string> = new Set([
 ]);
 export const isAgentEventKind = (kind: string): boolean => !CONTROL_KINDS.has(kind);
 
-/** hcn's report of a Pi process that exited 3: the extension's refusal code. */
+/** hcn's report of a Pi process that exited 3: the extension's refusal code.
+ * Pi itself exits 0, 1, or 129. hcn classifies the exit as `native` when Pi
+ * wrote to stderr and `transport` when it did not; the code is data on both. */
 export const isNativeExit3 = (event: Readonly<Record<string, unknown>>): boolean =>
-  event.kind === EventKind.failure && event.class === "native" && event.nativeExitCode === 3;
+  event.kind === EventKind.failure && event.nativeExitCode === 3;
 
 /** Prepare one attempt: write the extension under the record root and make the
  * record's attestation folder. Throws when either cannot be written. */

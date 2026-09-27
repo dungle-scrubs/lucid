@@ -127,9 +127,11 @@ test("control kinds are not agent events; every other kind is, including unknown
     expect(isAgentEventKind(kind)).toBe(true);
 });
 
-test("only a native failure with exit code 3 counts as the extension's exit", () => {
+test("a failure with native exit code 3 counts as the extension's exit, whatever its class", () => {
   expect(isNativeExit3({ kind: "failure", class: "native", nativeExitCode: 3 })).toBe(true);
+  // A silent exit 3 (no stderr) reduces to transport in hcn (live smoke).
+  expect(isNativeExit3({ kind: "failure", class: "transport", nativeExitCode: 3 })).toBe(true);
   expect(isNativeExit3({ kind: "failure", class: "native", nativeExitCode: 1 })).toBe(false);
-  expect(isNativeExit3({ kind: "failure", class: "transport", nativeExitCode: 3 })).toBe(false);
+  expect(isNativeExit3({ kind: "failure", class: "transport" })).toBe(false);
   expect(isNativeExit3({ kind: "done", class: "native", nativeExitCode: 3 })).toBe(false);
 });
