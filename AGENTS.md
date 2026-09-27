@@ -68,6 +68,8 @@ A patch is green only when `bun run check` is green. Do not skip gates via `-k n
     process is lost
   - `scripts/smoke-cross-harness.ts` - one record, two different harnesses
   - `scripts/smoke-handoff.ts` - two processes, baton-passed
+  - `scripts/smoke-pi-resume.ts` - a bound Pi resume through Lucid's
+    extension: one verified continuation and four proven refusals
   - `scripts/smoke-interactive.ts` - the mode with no `hcn` in it at all: a
     claude session lucid does not own, reached through project-scope hooks
 

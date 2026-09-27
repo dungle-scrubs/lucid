@@ -533,9 +533,7 @@ Each slice has an observable outcome before the next depends on it.
    `PI_CODING_AGENT_SESSION_DIR` (flat), else
    `<PI_CODING_AGENT_DIR>/sessions/<slug>`, else
    `~/.pi/agent/sessions/<slug>`. Tests with a non-default agent folder
-   and a flat session folder. Status: committed on hcn branch
-   `fix/pi-store-root`; release, Lucid pin bump, and fixture re-capture
-   pending.
+   and a flat session folder. Status: shipped in hcn 0.7.4.
 2. **Lucid: headless role.** Ship the extension; pass `-e` and the four
    variables on Pi resume through the harness seam; read the attestation;
    classify per the outcome table. Fake-hcn tests, plus
@@ -543,7 +541,9 @@ Each slice has an observable outcome before the next depends on it.
    raced resume (P1), folder mismatch, and a second extension whose
    `input` handler returns `continue`, run in both load orders. Each case
    records the full list of hcn event kinds, and the refused cases must
-   match outcome table row 2.
+   match outcome table row 2. Status: implemented; the extension loads
+   through hcn `--extension` (RFC 35), and `scripts/smoke-pi-resume.ts`
+   passes all five runs on hcn 0.7.6.
 3. **Lucid: interactive role, registration and commits.** `_pi-hook
    session-start | session-shutdown | tool-result`; proposal commit reuses
    the Claude proposal store with the session check. Tests with injected
