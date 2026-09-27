@@ -339,6 +339,23 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
     if (opts.signal?.aborted) throw new HarnessRefusal("aborted", "The turn was canceled");
     if (opts.isolation && opts.resume !== undefined)
       throw new HarnessRefusal("invalid-isolation", "An isolated turn cannot resume a session");
+    if (opts.native && (opts.isolation || opts.nativeApprovals))
+      throw new HarnessRefusal(
+        "invalid-native",
+        "Native turn inputs cannot combine with isolation or native approvals",
+      );
+    if (
+      opts.native?.settingsFingerprint !== undefined &&
+      (opts.resume === undefined ||
+        opts.cwd === undefined ||
+        opts.model !== undefined ||
+        opts.provider !== undefined ||
+        opts.effort !== undefined)
+    )
+      throw new HarnessRefusal(
+        "invalid-native",
+        "A native settings fingerprint needs an exact resume and folder, and no model selectors",
+      );
     if (opts.nativeApprovals)
       return nativeApprovalStream(deps, opts, (event) =>
         safeRefusal(event, opts, "execution-check"),
@@ -364,9 +381,20 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
       ...(opts.isolation ? ["--questions", "none"] : []),
       "--prompt-file",
       "-",
+      ...(opts.native?.settingsFingerprint === undefined
+        ? []
+        : [
+            "--native-settings-fingerprint",
+            opts.native.settingsFingerprint,
+            ...(opts.cwd === undefined ? [] : ["--cwd", opts.cwd]),
+          ]),
+      ...(opts.native?.extensions ?? []).flatMap((path) => ["--extension", path]),
     ];
     log({ event: "hcn_run", turnId: opts.turnId, harness: opts.harness });
-    const proc = deps.spawn(argv, opts.cwd === undefined ? {} : { cwd: opts.cwd });
+    const proc = deps.spawn(argv, {
+      ...(opts.cwd === undefined ? {} : { cwd: opts.cwd }),
+      ...(opts.native ? { env: opts.native.env } : {}),
+    });
     let termination: Promise<void> | undefined;
     const terminate = (): void => {
       termination ??= (async () => {

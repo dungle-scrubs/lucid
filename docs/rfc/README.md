@@ -12,7 +12,9 @@ It is a draft: a parked `headless-session` run holds presence forever and blocks
 RFC 30 defines [native feedback context by reference](30_native-feedback-context-by-reference.rfc.md).
 It is accepted for implementation after two Muse review passes and amends RFC 26's transport-limit rule. Claude Code is measured and enabled; Codex keeps inline-only delivery until its own slice is measured.
 
-RFC 28 drafts the [Pi native extension bridge and strict session locators](28_pi-native-extension-bridge-and-strict-session-locators.rfc.md). It is parked with unresolved protocol review and a demonstrated native lookup/open race. Pi stays unavailable; the verified Codex lane continues independently.
+RFC 28 is the accepted [Pi native extension bridge and verified headless resume](28_pi-native-extension-bridge-and-strict-session-locators.rfc.md) (v6). Slices 1 and 2 are implemented. A Lucid Pi extension registers the TUI session, commits commands from `tool_result`, injects notes while Pi is idle, and verifies the session and folder Pi opened before a headless resume reaches the model, recording the result in a nonce-keyed attestation file. Pi stays unavailable until its live acceptance passes.
+
+RFC 35 is the accepted [Pi native settings and extension loading for bound continuation](35_pi-native-settings-for-bound-continuation.rfc.md) (v3): hcn gains a Pi settings source and an `--extension` option, and Lucid resumes a bound Pi session with a settings fingerprint and no approval channel. Without it, Lucid holds every bound Pi note before a prompt. v3 corrects RFC 28's refusal evidence: exit 3 counts on any hcn failure class. Implemented with hcn 0.7.6.
 
 RFC 27 defines [native approvals during headless continuation](27_native-approvals-during-headless-continuation.rfc.md).
 It is accepted for implementation after two Muse review passes. Native transport and browser acceptance remain required.
@@ -60,7 +62,7 @@ settings`). Its proposal and v1 review are preserved in the merge; current
 contracts live in [drivers](../drivers.md) for the store source and
 served choices.
 
-The highest allocated RFC number is **34**. The next RFC is **35**.
+The highest allocated RFC number is **35**. The next RFC is **36**.
 RFC 24 was allocated to Claude startup compatibility; RFC 25 is allocated to
 automatic recovery in concurrent work. Their numbers remain reserved.
 Never reset numbering because completed files have been removed. Before

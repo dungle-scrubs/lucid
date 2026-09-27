@@ -1,9 +1,11 @@
+import { dirname } from "node:path";
 import { shellCommand } from "../cli/invocation.js";
 import {
   diagnosticMessage,
   failureDiagnostic,
   selectionProblem,
 } from "../harness/compatibility.js";
+import { type PiVerification, preparePiVerification } from "../harness/pi-verification.js";
 import type { HarnessFacts, HarnessRunner } from "../harness/runner.js";
 import { composeAnnotationPrompt } from "../protocol/annotations.js";
 import { composeArtifactPrompt } from "../protocol/artifacts.js";
@@ -43,6 +45,9 @@ type ManagedPrepared =
       readonly kind: "ready";
       readonly native: NativeIntent;
       readonly nativeFingerprint?: string;
+      readonly nativeContinuation?: "native-approvals" | "resume";
+      /** RFC 28: a resume of a bound Pi session carries its verification. */
+      readonly piVerification?: PiVerification;
     });
 interface ManagedPreparationDeps {
   readonly cwd: string;
@@ -228,6 +233,7 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
       const resume = native.kind === "resume" ? native.sessionId : undefined;
       let facts: HarnessFacts;
       let nativeFingerprint: string | undefined;
+      let nativeContinuation: "native-approvals" | "resume" | undefined;
       if (state.connection) {
         const binding = state.connection.binding;
         if (
@@ -261,6 +267,7 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
           provider: settings.provider,
         };
         nativeFingerprint = settings.fingerprint;
+        nativeContinuation = settings.continuation;
         facts = await runner.inspect(binding.harness);
       } else {
         const saved = preferenceState(host.dir).preference;
@@ -401,7 +408,29 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
           );
         return { kind: "held", issue: started.issue };
       }
-      if (closed || input.signal.aborted) {
+      let piVerification: PiVerification | undefined;
+      let unavailable: string | undefined;
+      const bound = host.state().connection;
+      if (bound?.binding.interface === "pi-cli" && native.kind === "resume") {
+        const launch = Object.values(bound.launches).find(
+          (pending) => pending.launch.execution?.turnId === input.turnId,
+        );
+        try {
+          if (!launch) throw new Error("The native launch is not recorded.");
+          piVerification = preparePiVerification({
+            root: dirname(host.dir),
+            recordDir: host.dir,
+            launchId: launch.launch.id,
+            sessionId: native.sessionId,
+            workingDirectory: bound.binding.workingDirectory,
+          });
+        } catch (cause) {
+          unavailable = `Lucid could not prepare its Pi extension (native-extension-unavailable): ${
+            cause instanceof Error ? cause.message : String(cause)
+          }`;
+        }
+      }
+      if (closed || input.signal.aborted || unavailable !== undefined) {
         const ended = host.writeExecution({
           kind: "attempt-ended",
           inputId: input.inputId,
@@ -412,13 +441,21 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
             failure: {
               code: "E-HUB-07",
               evidence: "dispatch-not-called",
-              reason: "Preparation was cancelled before task dispatch.",
+              reason: (unavailable ?? "Preparation was cancelled before task dispatch.").slice(
+                0,
+                4096,
+              ),
             },
           },
         });
-        return ended.verdict === "accepted"
-          ? { kind: "held" }
-          : { kind: "held", issue: ended.issue };
+        if (ended.verdict !== "accepted") return { kind: "held", issue: ended.issue };
+        // No process started, so the launch settles here; the source never
+        // owns this turn and its cleanup cannot settle it.
+        if (host.state().connection) {
+          const settled = host.recordNativeExecution({ kind: "settled", turnId: input.turnId });
+          if (settled.verdict === "refused") return { kind: "held", issue: settled.issue };
+        }
+        return { kind: "held" };
       }
       offers.set(input.turnId, { path: offered.path, close: offered.close });
       offered = undefined;
@@ -427,6 +464,8 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
         kind: "ready",
         native,
         ...(nativeFingerprint === undefined ? {} : { nativeFingerprint }),
+        ...(nativeContinuation === undefined ? {} : { nativeContinuation }),
+        ...(piVerification === undefined ? {} : { piVerification }),
       };
     } catch (cause) {
       if (input.signal.aborted || closed) return { kind: "held" };

@@ -200,6 +200,9 @@ export interface HeadlessDeps {
   readonly explicitAttachmentId?: string;
   readonly onAttached?: () => readonly Frame[];
   readonly onTurnSettled?: (turnId: string) => void;
+  /** Every harness event of a turn, as the runner yielded it, before the
+   * sequencer filters or coalesces it. Execution evidence reads it here. */
+  readonly onHarnessEvent?: (turnId: string, event: HarnessEvent) => void;
   /** Complete context and persist its authorization before external work.
    * A ready prompt includes protocol teaching and every current artifact's
    * bytes, including resynchronization after a refused patch. The host adds
@@ -219,6 +222,9 @@ export interface HeadlessDeps {
         readonly prompt: string;
         readonly native: NativeIntent;
         readonly nativeApprovals?: StreamTurnOptions["nativeApprovals"];
+        readonly nativeTurn?: StreamTurnOptions["native"];
+        /** Admits the invocation through the bound record's native fence. */
+        readonly nativeDispatch?: <T>(invoke: () => T) => T;
         readonly notice?: string;
       }
   >;
@@ -1111,6 +1117,8 @@ const turnStrategy = (
             activeAbort = new AbortController();
             let composedPrompt: string;
             let nativeApprovals: StreamTurnOptions["nativeApprovals"];
+            let nativeTurn: StreamTurnOptions["native"];
+            let nativeDispatch: (<T>(invoke: () => T) => T) | undefined;
             if (deps.prepareTurn) {
               const managedTurn = await deps
                 .prepareTurn({
@@ -1153,6 +1161,8 @@ const turnStrategy = (
                     };
                   },
                 };
+              nativeTurn = managedTurn.nativeTurn;
+              nativeDispatch = managedTurn.nativeDispatch;
               ctx.preparedNotice(managedTurn.notice);
               resumeId =
                 managedTurn.native.kind === "resume" ? managedTurn.native.sessionId : undefined;
@@ -1183,14 +1193,21 @@ const turnStrategy = (
                 turnId,
                 ...(nativeApprovals
                   ? { nativeApprovals }
-                  : {
-                      ...(deps.model === undefined ? {} : { model: deps.model }),
-                      ...(deps.provider === undefined ? {} : { provider: deps.provider }),
-                      ...(deps.effort === undefined ? {} : { effort: deps.effort }),
-                    }),
+                  : nativeTurn?.settingsFingerprint !== undefined
+                    ? {}
+                    : {
+                        ...(deps.model === undefined ? {} : { model: deps.model }),
+                        ...(deps.provider === undefined ? {} : { provider: deps.provider }),
+                        ...(deps.effort === undefined ? {} : { effort: deps.effort }),
+                      }),
                 ...(attemptResume && resumeId !== undefined ? { resume: resumeId } : {}),
+                ...(nativeTurn ? { native: nativeTurn } : {}),
               });
-            let raw = nativeApprovals ? invoke() : ordinaryDispatch(deps, ctx, invoke);
+            let raw = nativeApprovals
+              ? invoke()
+              : nativeDispatch
+                ? nativeDispatch(invoke)
+                : ordinaryDispatch(deps, ctx, invoke);
             if (attemptResume || (deps.probeFirstTurn === true && spawns === 0)) {
               spawns += 1;
               const probe = raw[Symbol.asyncIterator]();
@@ -1541,6 +1558,7 @@ export const createHeadlessHost = (
           await handleArtifactMessage((event as { text: string }).text, turnId, deps, ctx);
         }
         if (stopped) return;
+        deps.onHarnessEvent?.(turnId, event);
         sequencer.emit(turnId, event);
         if (event.kind === EventKind.done && !advanced) {
           // A persistent session keeps this iterator open until the next

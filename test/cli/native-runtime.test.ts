@@ -110,6 +110,7 @@ test.each([false, true])(
           resume: binding.nativeSessionId,
         });
         return {
+          continuation: "native-approvals",
           effort: "high",
           fingerprint: "a".repeat(64),
           model: "native-model",

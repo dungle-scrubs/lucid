@@ -81,7 +81,7 @@ export const hcnSupervisorInvocation = (argv: readonly string[]): readonly strin
 
 const spawnHcn = (
   argv: readonly string[],
-  opts: { readonly cwd?: string },
+  opts: { readonly cwd?: string; readonly env?: Readonly<Record<string, string>> },
   supervised: boolean,
 ): HcnProcess => {
   const supervisor = hcnSupervisorInvocation(argv);
@@ -92,7 +92,7 @@ const spawnHcn = (
     child = nodeSpawn(bin, args, {
       stdio: supervised ? ["pipe", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "pipe"],
       ...(opts.cwd === undefined ? {} : { cwd: opts.cwd }),
-      env: { ...process.env, [NATIVE_ROLE_ENV]: HEADLESS_NATIVE_ROLE },
+      env: { ...process.env, ...opts.env, [NATIVE_ROLE_ENV]: HEADLESS_NATIVE_ROLE },
     });
   } catch (cause) {
     throw new HarnessSpawnError(cause);

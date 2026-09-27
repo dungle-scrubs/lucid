@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
@@ -10,6 +10,7 @@ import { createManagedExecution } from "../../src/modes/managed-execution.js";
 import { createManagedPreparation } from "../../src/modes/managed-preparation.js";
 import { createManagedSource } from "../../src/modes/managed-source.js";
 import { hasUnsettledNativeWork, type NativeBinding } from "../../src/protocol/connection.js";
+import { hasUnsettledExecution } from "../../src/protocol/execution.js";
 import { observeConnection, readConnection } from "../../src/store/connection-view.js";
 import { createConversationHost } from "../../src/store/conversation-host.js";
 import { registerNativeSession } from "../../src/store/native-registration.js";
@@ -18,14 +19,14 @@ import { replaceSettings } from "../../src/store/settings.js";
 import { createConversationRecord } from "../../src/store/store.js";
 import { FakeHcnProcess, fakeSpawner } from "../harness/fakes.js";
 
-function setup(attachSource = true) {
+function setup(attachSource = true, lane: "codex" | "pi" = "codex") {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "lucid-native-managed-")));
   const record = createConversationRecord(root, "native", { workingDirectory: root });
   const binding: NativeBinding = {
     generation: randomUUID(),
-    harness: "codex",
-    interface: "codex-cli",
-    nativeSessionId: "native-session",
+    harness: lane,
+    interface: lane === "pi" ? "pi-cli" : "codex-cli",
+    nativeSessionId: lane === "pi" ? "01a0e08c-06b0-71d0-8bfd-8304dfbd84b3" : "native-session",
     registrationId: randomUUID(),
     workingDirectory: root,
     owner: { pid: 123, executable: "/synthetic/native", startedAt: "123:456" },
@@ -44,7 +45,7 @@ function setup(attachSource = true) {
     presence: () => false,
   });
   const driver = {
-    harness: "codex",
+    harness: lane,
     model: "browser-model",
     effort: "low",
     profile: "headless-turn",
@@ -73,7 +74,7 @@ function setup(attachSource = true) {
           attachmentOrigin: "automatic",
           capabilities: ["managed-input-v1"],
           conversationId: "native",
-          harness: "codex",
+          harness: lane,
           kind: "attach",
           profile: "headless-turn",
           secret: record.secret,
@@ -85,10 +86,11 @@ function setup(attachSource = true) {
     inspectNativeContinuation: async (target) => {
       expect(target).toMatchObject({
         cwd: root,
-        harness: "codex",
+        harness: lane,
         resume: binding.nativeSessionId,
       });
       return {
+        continuation: lane === "pi" ? "resume" : "native-approvals",
         status: "available",
         model: "native-model",
         effort: "high",
@@ -98,7 +100,7 @@ function setup(attachSource = true) {
     },
     inspect: async (_harness, choice) => {
       expect(choice).toBeUndefined();
-      return { name: "codex", session: false, nativeContextManagement: "auto-compaction" };
+      return { name: lane, session: false, nativeContextManagement: "auto-compaction" };
     },
     capabilities: async () => {
       throw new Error("No model selection during native continuation");
@@ -899,6 +901,233 @@ test("a failed headless response keeps the terminal failure and never becomes re
       state: "finished",
       outcome: { kind: "failure", text: "The model request failed." },
     });
+  } finally {
+    execution.close();
+    f.close();
+  }
+});
+
+// RFC 28 and RFC 35: a bound Pi record resumes through the ordinary
+// fingerprinted transport with the Lucid extension, and its settlement
+// follows RFC 28's outcome table. The attestation file is written here in
+// the extension's place; the extension itself is tested in
+// test/harness/pi-extension.test.ts.
+async function piAttempt(turnId: string) {
+  const f = setup(true, "pi");
+  const execution = createManagedExecution({
+    cwd: f.root,
+    driver: f.driver,
+    host: f.host,
+    runner: f.runner,
+  });
+  const prepared = await execution.prepare({
+    inputId: "feedback",
+    text: "Review",
+    turnId,
+    native: { kind: "resume", sessionId: f.binding.nativeSessionId },
+    profile: "headless-turn",
+    signal: new AbortController().signal,
+  });
+  if (prepared.kind !== "ready" || !prepared.nativeTurn || !prepared.nativeDispatch)
+    throw new Error("Preparation held");
+  const env = prepared.nativeTurn.env;
+  const [attempt, nonce] = String(env.LUCID_PI_ATTEMPT).split(".");
+  const attest = (fields: Record<string, unknown>) =>
+    writeFileSync(
+      String(env.LUCID_PI_ATTESTATION),
+      JSON.stringify({
+        v: 1,
+        attempt,
+        nonce,
+        expected: f.binding.nativeSessionId,
+        opened: f.binding.nativeSessionId,
+        ...fields,
+      }),
+    );
+  let n = 0;
+  // As the host does: the raw observer first, then the sequenced frame.
+  const observe = (event: Record<string, unknown>) =>
+    execution.observeEvent(turnId, event as never);
+  const send = (event: Record<string, unknown>) => {
+    observe(event);
+    expect(
+      execution.sendFrame({
+        kind: "event",
+        epoch: f.host.state().epoch,
+        n: ++n,
+        turnId,
+        event: event as never,
+      }).verdict,
+    ).toBe("accepted");
+  };
+  return { f, execution, prepared, attest, send, observe };
+}
+
+test("a bound Pi resume uses the fingerprinted resume transport with the extension", async () => {
+  const { f, execution, prepared } = await piAttempt("pi-shape");
+  try {
+    expect(prepared.nativeApprovals).toBeUndefined();
+    expect(prepared.nativeTurn).toMatchObject({
+      settingsFingerprint: "a".repeat(64),
+      extensions: [expect.stringMatching(/\.integrations\/pi\/lucid-[0-9a-f]{16}\.js$/)],
+      env: {
+        LUCID_PI_EXPECTED_SESSION: f.binding.nativeSessionId,
+        LUCID_PI_EXPECTED_CWD: f.root,
+      },
+    });
+    const launch = Object.values(f.host.state().connection?.launches ?? {})[0];
+    expect(String(prepared.nativeTurn?.env.LUCID_PI_ATTEMPT)).toStartWith(`${launch?.launch.id}.`);
+    let invoked = false;
+    expect(prepared.nativeDispatch?.(() => (invoked = true))).toBe(true);
+    expect(invoked).toBe(true);
+    expect(() => prepared.nativeDispatch?.(() => true)).toThrow("Execution settlement was refused");
+  } finally {
+    execution.close();
+    f.close();
+  }
+});
+
+test("a verified Pi resume with agent events completes as the bound continuation", async () => {
+  const { f, execution, prepared, attest, send } = await piAttempt("pi-verified");
+  try {
+    prepared.nativeDispatch?.(() => undefined);
+    attest({ outcome: "verified" });
+    send({ kind: "identity", authority: "caller-assigned", sessionId: f.binding.nativeSessionId });
+    send({ kind: "message", role: "assistant", text: "Done." });
+    send({ kind: "done", cause: "clean", exitCode: 0 });
+    execution.turnSettled("pi-verified");
+    expect(f.host.state().executions.feedback).toMatchObject({
+      kind: "attempt-ended",
+      outcome: { kind: "completed" },
+    });
+  } finally {
+    execution.close();
+    f.close();
+  }
+});
+
+test("a proven Pi refusal is a pre-model refusal that keeps the note", async () => {
+  const { f, execution, prepared, attest, send } = await piAttempt("pi-refused");
+  try {
+    prepared.nativeDispatch?.(() => undefined);
+    attest({ outcome: "refused", reason: "session-empty" });
+    send({ kind: "identity", authority: "caller-assigned", sessionId: f.binding.nativeSessionId });
+    send({ kind: "failure", class: "native", nativeExitCode: 3, message: "pi exited 3" });
+    send({ kind: "done", cause: "error", exitCode: 1 });
+    execution.turnSettled("pi-refused");
+    expect(f.host.state().executions.feedback).toMatchObject({
+      kind: "attempt-ended",
+      outcome: {
+        kind: "pre-start-failed",
+        failure: {
+          code: "E-HUB-05",
+          evidence: "harness-refusal",
+          reason: expect.stringContaining("session-empty"),
+        },
+      },
+    });
+  } finally {
+    execution.close();
+    f.close();
+  }
+});
+
+test("a completed Pi turn without a matching attestation is never a continuation", async () => {
+  const { f, execution, prepared, send } = await piAttempt("pi-unattested");
+  try {
+    prepared.nativeDispatch?.(() => undefined);
+    send({ kind: "identity", authority: "caller-assigned", sessionId: f.binding.nativeSessionId });
+    send({ kind: "message", role: "assistant", text: "Done." });
+    send({ kind: "done", cause: "clean", exitCode: 0 });
+    execution.turnSettled("pi-unattested");
+    expect(f.host.state().executions.feedback).toMatchObject({
+      kind: "attempt-ended",
+      outcome: {
+        kind: "uncertain",
+        failure: { reason: expect.stringContaining("could not confirm") },
+      },
+    });
+  } finally {
+    execution.close();
+    f.close();
+  }
+});
+
+test("a refusal with a token the sequencer dropped is uncertain, not a refusal", async () => {
+  const { f, execution, prepared, attest, send, observe } = await piAttempt("pi-dropped");
+  try {
+    prepared.nativeDispatch?.(() => undefined);
+    attest({ outcome: "refused", reason: "session-empty" });
+    send({ kind: "identity", authority: "caller-assigned", sessionId: f.binding.nativeSessionId });
+    // Starved of credit: observed at the stream, never sent as a frame.
+    observe({ kind: "token", text: "partial" });
+    send({ kind: "failure", class: "native", nativeExitCode: 3, message: "pi exited 3" });
+    send({ kind: "done", cause: "error", exitCode: 1 });
+    execution.turnSettled("pi-dropped");
+    expect(f.host.state().executions.feedback).toMatchObject({
+      kind: "attempt-ended",
+      outcome: { kind: "uncertain" },
+    });
+  } finally {
+    execution.close();
+    f.close();
+  }
+});
+
+test.each([
+  ["a refusal whose model answered", { outcome: "refused", reason: "session-empty" }],
+  ["a failed turn with no attestation", null],
+] as const)("%s holds as uncertain and blocks later native work", async (_label, fields) => {
+  const { f, execution, prepared, attest, send } = await piAttempt("pi-failed");
+  try {
+    prepared.nativeDispatch?.(() => undefined);
+    if (fields) attest(fields);
+    send({ kind: "identity", authority: "caller-assigned", sessionId: f.binding.nativeSessionId });
+    send({ kind: "message", role: "assistant", text: "Partial answer." });
+    send({ kind: "failure", class: "native", nativeExitCode: 3, message: "pi exited 3" });
+    send({ kind: "done", cause: "error", exitCode: 1 });
+    execution.turnSettled("pi-failed");
+    expect(f.host.state().executions.feedback).toMatchObject({
+      kind: "attempt-ended",
+      outcome: { kind: "uncertain" },
+    });
+    expect(hasUnsettledExecution(f.host.state())).toBe(true);
+  } finally {
+    execution.close();
+    f.close();
+  }
+});
+
+test("a Pi extension that cannot be written ends the attempt and settles its launch", async () => {
+  const f = setup(true, "pi");
+  // A file where the extension folder must go makes materialization fail.
+  writeFileSync(join(f.root, ".integrations"), "");
+  const execution = createManagedExecution({
+    cwd: f.root,
+    driver: f.driver,
+    host: f.host,
+    runner: f.runner,
+  });
+  try {
+    const prepared = await execution.prepare({
+      inputId: "feedback",
+      text: "Review",
+      turnId: "pi-unwritable",
+      native: { kind: "resume", sessionId: f.binding.nativeSessionId },
+      profile: "headless-turn",
+      signal: new AbortController().signal,
+    });
+    expect(prepared).toEqual({ kind: "held" });
+    expect(f.host.state().executions.feedback).toMatchObject({
+      kind: "attempt-ended",
+      outcome: {
+        kind: "pre-start-failed",
+        failure: { reason: expect.stringContaining("native-extension-unavailable") },
+      },
+    });
+    expect(
+      Object.values(f.host.state().connection?.launches ?? {}).map((launch) => launch.kind),
+    ).not.toContain("intended");
   } finally {
     execution.close();
     f.close();

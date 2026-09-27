@@ -190,6 +190,9 @@ export interface NativeContinuationTarget {
 
 export type NativeContinuationSettings =
   | {
+      /** hcn-owned transport (RFC 35): Codex's approval channel, or an
+       * ordinary fingerprinted resume. */
+      readonly continuation: "native-approvals" | "resume";
       readonly effort: string;
       readonly fingerprint: string;
       readonly model: string;
@@ -221,6 +224,17 @@ export interface StreamTurnOptions {
   readonly effort?: string;
   readonly cwd?: string;
   readonly turnId: string;
+  /** Native inputs for one turn (RFC 28, RFC 35): `env` reaches the harness
+   * through the hcn process environment, never argv; `extensions` render as
+   * hcn `--extension`; `settingsFingerprint` requires hcn to re-verify the
+   * saved native settings and resume with them (with `--cwd`). */
+  readonly native?: NativeTurnOptions;
+}
+
+export interface NativeTurnOptions {
+  readonly env: Readonly<Record<string, string>>;
+  readonly extensions: readonly string[];
+  readonly settingsFingerprint?: string;
 }
 
 export interface HarnessRunner {

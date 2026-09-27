@@ -114,6 +114,74 @@ describe("streamTurn over hcn run --json", () => {
     expect(argv).toContain("sess-1");
     expect(argv).toContain("--model");
   });
+
+  test("native turn inputs render as hcn options, with env only in the process environment", async () => {
+    const r = rig();
+    const it = r.runner
+      .streamTurn({
+        harness: "pi",
+        prompt: "hi",
+        turnId: "t",
+        resume: "sess-1",
+        cwd: "/work",
+        native: {
+          env: { LUCID_PI_ATTEMPT: "secret-nonce" },
+          extensions: ["/x/lucid.js"],
+          settingsFingerprint: "f".repeat(64),
+        },
+      })
+      [Symbol.asyncIterator]();
+    r.proc.exit(0);
+    await it.next();
+    const call = r.spawner.calls[0];
+    expect(call?.argv.slice(-7)).toEqual([
+      "-",
+      "--native-settings-fingerprint",
+      "f".repeat(64),
+      "--cwd",
+      "/work",
+      "--extension",
+      "/x/lucid.js",
+    ]);
+    expect(call?.argv.join(" ")).not.toContain("secret-nonce");
+    expect(call?.opts.env).toEqual({ LUCID_PI_ATTEMPT: "secret-nonce" });
+  });
+
+  test("a settings fingerprint refuses model selectors and a missing resume or folder", () => {
+    const r = rig();
+    const native = { env: {}, extensions: [], settingsFingerprint: "f".repeat(64) };
+    for (const extra of [
+      { model: "m" },
+      { provider: "p" },
+      { effort: "high" },
+      { resume: undefined },
+      { cwd: undefined },
+    ])
+      expect(() =>
+        r.runner.streamTurn({
+          harness: "pi",
+          prompt: "hi",
+          turnId: "t",
+          resume: "s",
+          cwd: "/w",
+          native,
+          ...extra,
+        }),
+      ).toThrow("native settings fingerprint");
+  });
+
+  test("native turn inputs refuse isolation", () => {
+    const r = rig();
+    expect(() =>
+      r.runner.streamTurn({
+        harness: "claude",
+        prompt: "hi",
+        turnId: "t",
+        isolation: "tool-free",
+        native: { env: {}, extensions: ["/x"] },
+      }),
+    ).toThrow("Native turn inputs");
+  });
 });
 
 describe("openSession over hcn session --json", () => {

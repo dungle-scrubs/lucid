@@ -27,7 +27,14 @@ export interface HcnProcess {
   kill(signal?: "SIGTERM" | "SIGKILL"): void;
 }
 
-export type SpawnHcn = (argv: readonly string[], opts: { readonly cwd?: string }) => HcnProcess;
+export type SpawnHcn = (
+  argv: readonly string[],
+  opts: {
+    readonly cwd?: string;
+    /** Added to the inherited environment of the hcn process. */
+    readonly env?: Readonly<Record<string, string>>;
+  },
+) => HcnProcess;
 
 export interface InteractiveHcnProcess extends Pick<HcnProcess, "exited" | "kill"> {
   readonly control: AsyncIterable<string>;

@@ -38,6 +38,7 @@ export function createManagedSource(
         prepareTurn: execution.prepare,
         sendFrame: execution.sendFrame,
         onTurnSettled: execution.turnSettled,
+        onHarnessEvent: execution.observeEvent,
         onDispatchRejected: execution.dispatchRejected,
         onAttached: () => {
           for (const input of host.state().inputs) {

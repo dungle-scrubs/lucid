@@ -127,7 +127,7 @@ export class FakeHcnProcess implements HcnProcess {
 
 export interface FakeSpawnRecord {
   readonly argv: readonly string[];
-  readonly opts: { readonly cwd?: string };
+  readonly opts: Parameters<SpawnHcn>[1];
   readonly proc: FakeHcnProcess;
 }
 

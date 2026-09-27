@@ -1,0 +1,61 @@
+# RFC 28 v4 review
+
+Reviewer: muse-spark-1.3-contributor@muse. Draft version 4, commit b66cba1. The full reviewer report follows unchanged, except that links to git-ignored prototype files are cited as findings, and absolute links are made relative. v5 answers it in "Response to v3 review".
+
+
+Target: `docs/rfc/28_pi-native-extension-bridge-and-strict-session-locators.rfc.md` v4 (commit b66cba1, branch `rfc/28-pi-bridge-v3`), against v3 review G1-G7 ([review-v2](28_pi-native-extension-bridge-and-strict-session-locators.review-v2.md)), RFC 26 ([rfc](26_interactive-artifact-conversation-continuity.rfc.md)), ADR 0005, `CONTEXT.md`, the prototype findings rounds 1-3.
+
+Limits of this session: shell is disabled, so I did not re-run probes. I read the RFC, both prior reviews, FINDINGS rounds 1-3, RFC 26 sections 5/6/9, [claude.ts](../../src/cli/hooks/claude.ts), [native-registration.ts](../../src/store/native-registration.ts), [native-listening.ts](../../src/cli/native-listening.ts), and the hcn Pi descriptor (passthrough only). I did not read any `*.jsonl` session content, `sessions/` dirs, or credentials. The round-3 prototype files named in the brief are not present in this checkout (only one screen capture matched), so round-3 extension/stderr detail comes from FINDINGS text only. Pi `types.d.ts` handler-ordering text could not be searched (policy-confined search); the AND-semantics claim below is therefore marked unverified, not confirmed.
+
+## Q1 - Does v4 close G1-G7?
+
+| Finding | Status | Evidence |
+|---|---|---|
+| G1 subagent commits | Partly closed | Out-of-process separation is now evidenced (R8: Bash deletes/resets `PI_SESSION_ID` per session; R9: bundled subagent spawns separate `pi --mode json -p --no-session` process with own session ID). Step 3 session-equality check plus `registrationId` generation check correctly refuses those. In-process SDK sessions are correctly held behind the `subagent-provenance-unverified` gate instead of claimed. Still open: nested-same-session resume variant (see Q4) and missing claim-and-refuse for bind (see N1). |
+| G2 fail-open verification | Partly closed | Real progress: R3 (session_start throws + default-deny input = 0 model attempts), R1/R2 (missing/factory-throw exits 1 before open), step 10 deny-by-default in try/catch, outcome-table row 3 (uncertain hold, never success). Still open: multi-extension AND-semantics unproven (see Q3) and session_start-throw-before-write path has no attestation (see N2). Response row overclaims (see N5). |
+| G3 argv + folder | Closed with minor | R11 confirmed in hcn source: `passthrough: "after-argv"`, comment says the `--` separator caused prompt-joining and was removed. v4 text correctly distinguishes hcn-level `--` from separator-less child argv. Folder check added in step 9 (`getHeader().cwd` + `ctx.cwd` real paths vs expected). Residual minor only: realpath-vs-original-spelling (see N4). |
+| G4 marker spoofing | Closed with minor | Nonce-keyed attestation + exit 3 (R10: Pi uses only 0/1/129) + empty-agent-stream replaces the stderr marker. R8 env-deletion rationale is sound for child-tool isolation. Residual minors only: attestation-path uniqueness and verified-but-empty stream (see Q2). |
+| G5 injection races | Partly closed | Supervisor/singleton/one-outstanding-offer, `sendUserMessage` failure to delivery-uncertain with no replay, reload ownership assigned to old runtime's `session_shutdown`, 45 s declared as listener-only bound with no native deadline. Still open: person-input-during-delivery after helper exit is not mapped to a state transition, and reload-kill ordering is asserted without a probe (slice 4 lists it as future live work). |
+| G6 Amendment 1 overclaim | Closed with minor | Narrowed to "this attempt", RFC 26 retry rule restated (operator-admitted retry, new attempt ID, same input/session), lazy-write demoted to version observation. Residual minor: "agent events" undefined (see Q2). |
+| G7 RFC 26 deviations | Closed | All five items addressed: launch notice as existing behavior (step 7), folder (Amendment 3), transport stays `transport-unverified` until acceptance (Amendment 2; code confirms [native-listening.ts](../../src/cli/native-listening.ts:52-65) still lists only claude/codex), binding retained across replacement with `registration-replaced` refusal (step 1), headless proposals never commit (step 3). |
+
+## Q2 - Nonce-keyed attestation: sound, with two edge gaps
+
+Sound on the main claim. Per-attempt 256-bit nonce + `LUCID_PI_ATTESTATION` path leave `process.env` in the factory before any tool runs (R8: Bash builds child env from `process.env` at spawn, then resets session vars; deleting Lucid vars hides them from every tool). The model therefore cannot read the nonce or path from its tool environment, and cannot forge a matching `{"attempt","nonce","outcome"}` file. Exclusive-create write in `session_start` (before the model runs) plus Lucid ignoring nonce/attempt mismatches handles stale-file and duplicate cases. Triple requirement (hcn `native`/exit 3 + matching `refused` attestation + no agent events) is the right shape: no single channel suffices.
+
+- M1 (minor): outcome-table row 1 reads "success + `verified` + any agent events = continuation". A `verified` attestation with an empty agent stream (model never ran, prompt dropped) should not count as continuation. Required fix: row 1 requires at least one agent event, else uncertain hold.
+- M2 (minor): "agent events in the stream" is undefined. P1's refused run still emitted "only a `session` record". Required fix: name the hcn event kinds that count as agent events vs control/session records.
+- M3 (minor): path-per-attempt uniqueness is asserted ("named per resume attempt") but not specified. Required fix: state the filename contains the attempt ID (or equivalent uniqueness) so two attempts cannot share/exhaust the exclusive-create file.
+
+Severity: minor (all fail toward uncertain hold, which is safe).
+
+## Q3 - `input` deny-by-default with try/catch: sufficient subject to one unproven premise
+
+Given R1-R7, the design correctly identifies `input` as the only pre-model gate (R4: throwing `input` runs the prompt, 20 attempts; R5/R7: `before_agent_start` shutdown never stops print-mode model; R6: throwing `before_agent_start` continues). R3 proves default-deny holds when `session_start` throws. R1/R2 prove missing/factory-throw exits 1 pre-open. A single-comparison try/catch returning `handled` is the correct coding of the gate.
+
+- M4 (major): step 10 asserts "the model runs only when every handler lets the prompt through", i.e. AND-semantics across extensions, with no Pi citation. If Pi uses first-wins/OR semantics, another extension's `continue` reopens the gate this RFC just closed. The resume command (step 7) also does not pass extension-isolation flags (`-ne`/`-ns`-class), so user extensions load into the verify lane. Required fix: either cite the Pi docs/types lines proving AND-semantics, or require sole-extension semantics for the resume run (pass the flags that disable discovery/auto-load, and state them in step 7). Until then G2 is not closed.
+- M5 (minor): if `session_start` throws before writing the attestation, there is no file and exit stays 0 (R3 row: exit 0, 0 attempts) - correctly uncertain per row 3, but never a proven refusal. Required fix: write `refused` (with reason, e.g. `session-start-failed`) from a catch around the step-9 checks, or state that this path stays uncertain by design.
+
+## Q4 - Step 3 session check and SDK activation gate
+
+Out-of-process separation: adequate for the tested shape. A Pi subagent process has its own session ID (R9), so its proposals fail step 3's proposal-session-equals-registered-session check, and the parent sees its output as a non-`bash` tool result. The gate correctly keeps in-process SDK sessions (not covered by R8/R9) behind `subagent-provenance-unverified`, with a two-part negative-control lane. That is the behavior RFC 26 section 9 demands ("where parent and subagent callbacks cannot be distinguished, that adapter stays unavailable").
+
+- M6 (major): the gate's lane (a), "a nested `pi` run from the TUI's Bash tool proposes", does not cover a nested run that resumes the *parent* session (`pi --resume <parent-id>`, using the `PI_SESSION_ID` the model legitimately sees). The inner run's proposals would carry the parent session ID, and its stdout (with markers) lands in the parent's Bash output - passing both the session check and the nonce-in-this-tool-call check. R9 only evidences `--no-session`. Required fix: add the nested-resume-parent variant to the activation gate and refuse-or-define it before enabling `pi-cli` (likely refusal: nested resume of a Lucid-bound session from inside its own Bash tool must not commit; document the exact refusal).
+- M7 (minor): the gate says "nothing may commit in either case" but step 3 never states the Claude equivalent for bind proposals (cf. [claude.ts](../../src/cli/hooks/claude.ts:214-225): subagent bind is claimed and a `subagent-provenance` refusal is saved beside the publication). Required fix: state that a refused Pi bind proposal records the refusal beside the publication so the browser explains it, mirroring Claude.
+
+The activation-gate strategy itself is adequate and correctly blocks the lane until these probes pass.
+
+## Q5 - New defects, RFC 26 contradictions, Response-table overclaims
+
+- N1 (minor): per-operation table still has no subagent/provenance row (v3 review asked for it). The session check lives in step-3 prose only. Required fix: add a row (or footnote) stating the subagent rule and the two refusal reasons (`proposal-session-mismatch`, bind refusal beside publication).
+- N2 (minor, covered as M5): session_start-throw path writes nothing; outcome is uncertain, not proven refusal. Design is safe; text should say so.
+- N3 (minor): step 9's message-exists check assumes a bound session always has >=1 `message` entry. A publication from a zero-turn session (if ever possible) would refuse forever. Required fix: state the assumption (bound sessions have model turns by construction) or define the legitimate-empty exception.
+- N4 (minor, RFC 26 tension): RFC 26 section 9 requires original-spelling folder retention and says realpath "MUST NOT silently replace" it; v4 step 9 compares "real paths" only. On macOS `/tmp`-symlink-style spellings this risks false `folder-mismatch`. Required fix: compare original spelling AND realpath equivalence (record both, refuse only when both disagree or identity disagrees).
+- N5 (major): Response row G2 claims "a missing or throwing extension stops Pi (R1, R2)". R1/R2 prove missing-file and factory-throw stop Pi; R3/R4 prove throwing `session_start`/`input` handlers do *not* stop Pi (exit 0, run continues). The actual fix is deny-by-default, not stopping. Required fix: correct the row to "missing/factory-throw stops Pi; handler-throw is contained by deny-by-default + try/catch (M4 pending)".
+- N6 (minor): Response row G3 says slice 1 "is done". Slice 1 is a branch commit (`fix/pi-store-root`, 6e2fe56); the pin move plus fixture re-capture are still listed as future work in Implementation Notes. Required fix: "landed on branch, pending pin + re-capture".
+- N7 (minor): `LUCID_PI_ATTEMPT` carries "attempt ID and nonce" with no format/validators (cf. RFC 26 section 9 ID bounds). Required fix: specify encoding and validators.
+- No other RFC 26 contradiction found. Amendment 1's retry stance now matches section 6 (no auto-retry; explicit repaired retry with new ID). `STOP_TRANSPORTS` correctly still excludes `pi-cli`, matching Amendment 2.
+
+## Verdict: revise
+
+v4 genuinely closes G3, G4, G6, G7 and halves G1/G2/G5, with honest gating where evidence is missing. It is not yet an acceptably sound acceptance contract because: (1) the input gate rests on unproven multi-extension AND-semantics with no extension isolation on the resume run (M4, major); (2) the subagent gate omits the nested-resume-parent bypass variant (M6, major); (3) the Response table overclaims G2 in a way that misstates what R1-R4 proved (N5, major as a contract defect). Fix M4, M6, N5 plus the small contract gaps (M1-M3, M5, M7, N1, N3, N4, N7), and this becomes accept-with-minors; no redesign is needed.
