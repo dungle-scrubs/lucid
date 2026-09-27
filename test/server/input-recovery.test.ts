@@ -134,10 +134,12 @@ const clickPanel = async (
     client === undefined
       ? Promise.resolve()
       : new Promise<void>((resolve, reject) => {
+          // Below bun's 5-second test timeout, so a stuck recovery still fails
+          // with this message; a full-suite run has taken more than 1 second.
           const timeout = setTimeout(() => {
             stop();
             reject(new Error("Recovery did not settle"));
-          }, 1000);
+          }, 4000);
           const stop = client.subscribe(() => {
             if (client.getSnapshot().kind !== "settled") return;
             clearTimeout(timeout);
