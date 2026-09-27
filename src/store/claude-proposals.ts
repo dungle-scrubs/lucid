@@ -1,79 +1,34 @@
-import {
-  closeSync,
-  constants,
-  fstatSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  unlinkSync,
-} from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { NativeBinding } from "../protocol/connection.js";
-import { connectionId } from "../protocol/connection.js";
-import { TEXT_MAX } from "../protocol/frames.js";
 import { atomicSidecar } from "./atomic-file.js";
-import { validConversationId } from "./errors.js";
+import {
+  claimNativeProposal as claimInterfaceProposal,
+  proposalNonces as interfaceProposalNonces,
+  NATIVE_PROPOSAL_TTL_MS,
+  type NativeOperation,
+  type NativeProposal,
+  PROPOSAL_MARKERS,
+  type ProposalInterface,
+  proposalPrivateDir,
+  saveNativeProposal,
+} from "./native-proposals.js";
 
 /**
  * Claude Code runs a subagent's Bash commands with the parent's session ID and process.
  * A command therefore cannot prove its own provenance. It saves one of these proposals;
  * the parent session's PostToolUse callback, which carries a subagent marker, commits it.
+ * The storage itself is interface-generic and lives in `native-proposals.ts` (RFC 28).
  */
-export type ClaudeOperation =
-  | { readonly kind: "bind"; readonly conversationId: string }
-  | { readonly kind: "listen"; readonly conversationId: string }
-  | { readonly kind: "receipt"; readonly conversationId: string; readonly offerId: string }
-  | {
-      readonly kind: "respond";
-      readonly conversationId: string;
-      readonly offerId: string;
-      readonly outcome: unknown;
-    };
+export type ClaudeOperation = NativeOperation;
+export type ClaudeProposal = NativeProposal;
+export const CLAUDE_PROPOSAL_TTL_MS = NATIVE_PROPOSAL_TTL_MS;
+export const CLAUDE_PROPOSAL_MARKER = PROPOSAL_MARKERS["claude-cli"];
 
-export interface ClaudeProposal {
-  readonly createdAt: number;
-  readonly nonce: string;
-  readonly operation: ClaudeOperation;
-  readonly registrationId: string;
-}
-
-/** A proposal that no foreground parent Bash call reports within this window is never committed. */
-export const CLAUDE_PROPOSAL_TTL_MS = 10 * 60 * 1000;
-export const CLAUDE_PROPOSAL_MARKER = "lucid-claude-proposal:";
-const PROPOSAL_BYTES = TEXT_MAX * 4 + 4096;
+const IFACE: ProposalInterface = "claude-cli";
 
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
-
-function privateDir(root: string, name: string): string {
-  const dir = join(root, ".registrations", "claude-cli", name);
-  mkdirSync(dir, { mode: 0o700, recursive: true });
-  for (const path of [join(root, ".registrations", "claude-cli"), dir]) {
-    const stat = lstatSync(path);
-    if (
-      !stat.isDirectory() ||
-      stat.isSymbolicLink() ||
-      (stat.mode & 0o777) !== 0o700 ||
-      stat.uid !== process.getuid?.()
-    )
-      throw new Error("Claude proposal storage must be a private directory owned by this user");
-  }
-  return dir;
-}
-
-function parseOperation(value: unknown): ClaudeOperation | null {
-  if (!object(value) || typeof value.conversationId !== "string") return null;
-  if (!validConversationId(value.conversationId)) return null;
-  const conversationId = value.conversationId;
-  if (value.kind === "bind" || value.kind === "listen") return { kind: value.kind, conversationId };
-  if (typeof value.offerId !== "string" || !connectionId(value.offerId)) return null;
-  if (value.kind === "receipt") return { kind: "receipt", conversationId, offerId: value.offerId };
-  if (value.kind === "respond")
-    return { kind: "respond", conversationId, offerId: value.offerId, outcome: value.outcome };
-  return null;
-}
 
 export function saveClaudeProposal(
   root: string,
@@ -81,22 +36,12 @@ export function saveClaudeProposal(
   operation: ClaudeOperation,
   now = Date.now(),
 ): ClaudeProposal {
-  const proposal: ClaudeProposal = {
-    createdAt: now,
-    nonce: crypto.randomUUID(),
-    operation,
-    registrationId: registration.registrationId,
-  };
-  atomicSidecar(join(privateDir(root, "proposals"), `${proposal.nonce}.json`), proposal);
-  return proposal;
+  return saveNativeProposal(root, registration, operation, now);
 }
 
 /** Proposal nonces named in text, in order, without duplicates. */
 export function proposalNonces(text: string): readonly string[] {
-  const pattern = new RegExp(`${CLAUDE_PROPOSAL_MARKER}([0-9a-f-]{36})`, "gi");
-  return [...new Set([...text.matchAll(pattern)].map((match) => match[1] ?? ""))].filter(
-    connectionId,
-  );
+  return interfaceProposalNonces(IFACE, text);
 }
 
 /** Claiming renames the proposal first, so one callback at most can commit it. */
@@ -105,49 +50,7 @@ export function claimClaudeProposal(
   nonce: string,
   now = Date.now(),
 ): ClaudeProposal | null {
-  if (!connectionId(nonce)) return null;
-  const dir = privateDir(root, "proposals");
-  const claimed = join(dir, `${nonce}.${crypto.randomUUID()}.claimed`);
-  try {
-    renameSync(join(dir, `${nonce}.json`), claimed);
-  } catch {
-    return null;
-  }
-  try {
-    const fd = openSync(claimed, constants.O_RDONLY | constants.O_NOFOLLOW);
-    let raw: unknown;
-    try {
-      const stat = fstatSync(fd);
-      if (
-        !stat.isFile() ||
-        stat.size > PROPOSAL_BYTES ||
-        (stat.mode & 0o777) !== 0o600 ||
-        stat.uid !== process.getuid?.()
-      )
-        return null;
-      raw = JSON.parse(readFileSync(fd, "utf8"));
-    } finally {
-      closeSync(fd);
-    }
-    if (!object(raw) || raw.nonce !== nonce || !connectionId(raw.registrationId)) return null;
-    const operation = parseOperation(raw.operation);
-    const createdAt = raw.createdAt;
-    if (
-      !operation ||
-      typeof createdAt !== "number" ||
-      !Number.isSafeInteger(createdAt) ||
-      createdAt > now ||
-      now - createdAt > CLAUDE_PROPOSAL_TTL_MS
-    )
-      return null;
-    return { createdAt, nonce, operation, registrationId: raw.registrationId };
-  } catch {
-    return null;
-  } finally {
-    try {
-      unlinkSync(claimed);
-    } catch {}
-  }
+  return claimInterfaceProposal(root, IFACE, nonce, now);
 }
 
 /** Consecutive Stop continuations Lucid produced for one registration. Unreadable state
@@ -156,7 +59,7 @@ export function readStopBlocks(root: string, registrationId: string): number {
   let fd: number;
   try {
     fd = openSync(
-      join(privateDir(root, "stops"), `${registrationId}.json`),
+      join(proposalPrivateDir(root, IFACE, "stops"), `${registrationId}.json`),
       constants.O_RDONLY | constants.O_NOFOLLOW,
     );
   } catch (cause) {
@@ -178,5 +81,7 @@ export function readStopBlocks(root: string, registrationId: string): number {
 }
 
 export function writeStopBlocks(root: string, registrationId: string, count: number): void {
-  atomicSidecar(join(privateDir(root, "stops"), `${registrationId}.json`), { count });
+  atomicSidecar(join(proposalPrivateDir(root, IFACE, "stops"), `${registrationId}.json`), {
+    count,
+  });
 }
