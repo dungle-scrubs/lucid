@@ -9,6 +9,7 @@ import {
   callerAncestryOwns,
   nativeRegistrationAuthority,
   registerNativeSession,
+  removeNativeRegistration,
   withNativeRegistration,
 } from "../../src/store/native-registration.js";
 
@@ -371,4 +372,81 @@ describe("ancestry through a process whose identity is unreadable", () => {
   test("an ancestor that is gone ends the walk as not owned", () => {
     expect(callerAncestryOwns(owner(999), probe, () => null, 500)).toBe(false);
   });
+});
+
+test("shutdown removal deletes only this owner's registration for this session", () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-registration-removal-"));
+  const authority = { callerOwns: () => true, ownerPresence: () => true };
+  const capture = {
+    harness: "pi" as const,
+    interface: "pi-cli" as const,
+    nativeSessionId: "pi-session-one",
+    owner: { executable: "/usr/local/bin/pi", pid: 777, startedAt: "777:1" },
+    workingDirectory: root,
+  };
+  try {
+    expect(removeNativeRegistration(root, "pi-cli", capture.owner, "pi-session-one")).toEqual({
+      removed: false,
+    });
+    const registered = registerNativeSession(root, capture, authority);
+    expect(registered.ok).toBe(true);
+    const files = (): number =>
+      readdirSync(join(root, ".registrations")).filter((name) => name.endsWith(".json")).length;
+    expect(files()).toBe(1);
+    // Another session ID or another owner leaves the registration in place.
+    expect(removeNativeRegistration(root, "pi-cli", capture.owner, "pi-session-two")).toEqual({
+      removed: false,
+    });
+    expect(
+      removeNativeRegistration(root, "pi-cli", { ...capture.owner, pid: 778 }, "pi-session-one"),
+    ).toEqual({ removed: false });
+    expect(files()).toBe(1);
+    // The owner may be named with any field order; the key is canonical.
+    const reordered = {
+      pid: capture.owner.pid,
+      executable: capture.owner.executable,
+      startedAt: capture.owner.startedAt,
+    };
+    expect(removeNativeRegistration(root, "pi-cli", reordered, "pi-session-one")).toMatchObject({
+      removed: true,
+    });
+    expect(files()).toBe(0);
+    expect(removeNativeRegistration(root, "pi-cli", capture.owner, "pi-session-one")).toEqual({
+      removed: false,
+    });
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("shutdown removal reports a busy registry instead of waiting", () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-registration-removal-busy-"));
+  const authority = { callerOwns: () => true, ownerPresence: () => true };
+  try {
+    const registered = registerNativeSession(
+      root,
+      {
+        harness: "pi",
+        interface: "pi-cli",
+        nativeSessionId: "pi-session-one",
+        owner: { executable: "/usr/local/bin/pi", pid: 777, startedAt: "777:1" },
+        workingDirectory: root,
+      },
+      authority,
+    );
+    expect(registered.ok).toBe(true);
+    const owner = registered.ok ? registered.registration.owner : undefined;
+    if (!owner) throw new Error("Missing registration fixture");
+    const lock = acquireAppendLock(join(root, ".registrations", "registry"));
+    try {
+      expect(removeNativeRegistration(root, "pi-cli", owner, "pi-session-one")).toMatchObject({
+        ok: false,
+        reason: "registration-busy",
+      });
+    } finally {
+      lock.release();
+    }
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
 });
