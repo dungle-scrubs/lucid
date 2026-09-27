@@ -75,6 +75,20 @@ test.each([
     "unavailable",
   ],
   ["an unknown continuation is refused", { continuation: "teleport" }, "unavailable"],
+  [
+    "a null continuation never falls back, even with approval permissions",
+    {
+      continuation: null,
+      permissions: {
+        status: "recorded",
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user",
+        filesystem: "read-only",
+        network: "restricted",
+      },
+    },
+    "unavailable",
+  ],
 ] as const)("%s", async (_label, change, status) => {
   const proc = new FakeHcnProcess();
   const runner = createHcnRunner({ bin: "/fake/hcn", spawn: fakeSpawner([proc]).spawn });

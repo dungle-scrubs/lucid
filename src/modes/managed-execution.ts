@@ -1,3 +1,4 @@
+import type { HarnessEvent } from "../harness/events.js";
 import {
   classifyPiResume,
   isAgentEventKind,
@@ -51,6 +52,9 @@ export interface ManagedExecution {
     }
   >;
   readonly sendFrame: (frame: Frame) => ReturnType<ConversationHost["handleFrame"]>;
+  /** Every raw harness event of an owned turn, before the sequencer drops
+   * or coalesces any: the evidence that the model may have run. */
+  observeEvent(turnId: string, event: HarnessEvent): void;
   /** The source has drained this turn, including its process cleanup. */
   turnSettled(turnId: string): void;
 }
@@ -77,7 +81,9 @@ function piAttemptOutcome(
         reason: `Pi did not open the bound session (${result.reason}), so the resume stopped before the model. The original session may be gone. The note stays saved; retry after repair.`,
       },
     };
-  if (derived.kind !== "completed") return derived;
+  // hcn's own refusal or a dispatch that never ran proves nothing reached
+  // Pi; every other unverified end holds as uncertain (RFC 28 row 3).
+  if (derived.kind === "pre-start-failed" || derived.kind === "uncertain") return derived;
   return {
     kind: "uncertain",
     failure: {
@@ -298,6 +304,16 @@ export function createManagedExecution(
         preparing--;
       }
     },
+    observeEvent: (turnId, event) => {
+      const attempt = owned.get(turnId);
+      if (!attempt) return;
+      if (executionEvents.has(event.kind)) attempt.mayHaveRun = true;
+      if (attempt.pi) {
+        if (isAgentEventKind(event.kind)) attempt.pi.agentEvents = true;
+        if (isNativeExit3(event as Readonly<Record<string, unknown>>))
+          attempt.pi.nativeExit3 = true;
+      }
+    },
     sendFrame: (frame) => {
       const attempt = frame.kind === "event" ? owned.get(frame.turnId) : undefined;
       if (
@@ -307,10 +323,6 @@ export function createManagedExecution(
         executionEvents.has(String(frame.event.kind))
       )
         attempt.mayHaveRun = true;
-      if (attempt?.pi && frame.kind === "event") {
-        if (isAgentEventKind(String(frame.event.kind))) attempt.pi.agentEvents = true;
-        if (isNativeExit3(frame.event)) attempt.pi.nativeExit3 = true;
-      }
       const result = host.handleFrame(JSON.stringify(frame));
       if (
         attempt &&

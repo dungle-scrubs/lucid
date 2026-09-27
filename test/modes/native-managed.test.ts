@@ -10,6 +10,7 @@ import { createManagedExecution } from "../../src/modes/managed-execution.js";
 import { createManagedPreparation } from "../../src/modes/managed-preparation.js";
 import { createManagedSource } from "../../src/modes/managed-source.js";
 import { hasUnsettledNativeWork, type NativeBinding } from "../../src/protocol/connection.js";
+import { hasUnsettledExecution } from "../../src/protocol/execution.js";
 import { observeConnection, readConnection } from "../../src/store/connection-view.js";
 import { createConversationHost } from "../../src/store/conversation-host.js";
 import { registerNativeSession } from "../../src/store/native-registration.js";
@@ -944,7 +945,11 @@ async function piAttempt(turnId: string) {
       }),
     );
   let n = 0;
-  const send = (event: Record<string, unknown>) =>
+  // As the host does: the raw observer first, then the sequenced frame.
+  const observe = (event: Record<string, unknown>) =>
+    execution.observeEvent(turnId, event as never);
+  const send = (event: Record<string, unknown>) => {
+    observe(event);
     expect(
       execution.sendFrame({
         kind: "event",
@@ -954,7 +959,8 @@ async function piAttempt(turnId: string) {
         event: event as never,
       }).verdict,
     ).toBe("accepted");
-  return { f, execution, prepared, attest, send };
+  };
+  return { f, execution, prepared, attest, send, observe };
 }
 
 test("a bound Pi resume uses the fingerprinted resume transport with the extension", async () => {
@@ -1041,6 +1047,87 @@ test("a completed Pi turn without a matching attestation is never a continuation
         failure: { reason: expect.stringContaining("could not confirm") },
       },
     });
+  } finally {
+    execution.close();
+    f.close();
+  }
+});
+
+test("a refusal with a token the sequencer dropped is uncertain, not a refusal", async () => {
+  const { f, execution, prepared, attest, send, observe } = await piAttempt("pi-dropped");
+  try {
+    prepared.nativeDispatch?.(() => undefined);
+    attest({ outcome: "refused", reason: "session-empty" });
+    send({ kind: "identity", authority: "caller-assigned", sessionId: f.binding.nativeSessionId });
+    // Starved of credit: observed at the stream, never sent as a frame.
+    observe({ kind: "token", text: "partial" });
+    send({ kind: "failure", class: "native", nativeExitCode: 3, message: "pi exited 3" });
+    send({ kind: "done", cause: "error", exitCode: 1 });
+    execution.turnSettled("pi-dropped");
+    expect(f.host.state().executions.feedback).toMatchObject({
+      kind: "attempt-ended",
+      outcome: { kind: "uncertain" },
+    });
+  } finally {
+    execution.close();
+    f.close();
+  }
+});
+
+test.each([
+  ["a refusal whose model answered", { outcome: "refused", reason: "session-empty" }],
+  ["a failed turn with no attestation", null],
+] as const)("%s holds as uncertain and blocks later native work", async (_label, fields) => {
+  const { f, execution, prepared, attest, send } = await piAttempt("pi-failed");
+  try {
+    prepared.nativeDispatch?.(() => undefined);
+    if (fields) attest(fields);
+    send({ kind: "identity", authority: "caller-assigned", sessionId: f.binding.nativeSessionId });
+    send({ kind: "message", role: "assistant", text: "Partial answer." });
+    send({ kind: "failure", class: "native", nativeExitCode: 3, message: "pi exited 3" });
+    send({ kind: "done", cause: "error", exitCode: 1 });
+    execution.turnSettled("pi-failed");
+    expect(f.host.state().executions.feedback).toMatchObject({
+      kind: "attempt-ended",
+      outcome: { kind: "uncertain" },
+    });
+    expect(hasUnsettledExecution(f.host.state())).toBe(true);
+  } finally {
+    execution.close();
+    f.close();
+  }
+});
+
+test("a Pi extension that cannot be written ends the attempt and settles its launch", async () => {
+  const f = setup(true, "pi");
+  // A file where the extension folder must go makes materialization fail.
+  writeFileSync(join(f.root, ".integrations"), "");
+  const execution = createManagedExecution({
+    cwd: f.root,
+    driver: f.driver,
+    host: f.host,
+    runner: f.runner,
+  });
+  try {
+    const prepared = await execution.prepare({
+      inputId: "feedback",
+      text: "Review",
+      turnId: "pi-unwritable",
+      native: { kind: "resume", sessionId: f.binding.nativeSessionId },
+      profile: "headless-turn",
+      signal: new AbortController().signal,
+    });
+    expect(prepared).toEqual({ kind: "held" });
+    expect(f.host.state().executions.feedback).toMatchObject({
+      kind: "attempt-ended",
+      outcome: {
+        kind: "pre-start-failed",
+        failure: { reason: expect.stringContaining("native-extension-unavailable") },
+      },
+    });
+    expect(
+      Object.values(f.host.state().connection?.launches ?? {}).map((launch) => launch.kind),
+    ).not.toContain("intended");
   } finally {
     execution.close();
     f.close();

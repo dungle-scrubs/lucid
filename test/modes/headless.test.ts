@@ -41,6 +41,7 @@ const rig = (
     route?: Pick<HeadlessDeps, "harness" | "cwd" | "model" | "provider" | "effort">;
     clock?: Pick<HeadlessDeps, "now" | "stallMs" | "stallTickMs">;
     driverChangeAtBoundary?: () => boolean;
+    onHarnessEvent?: HeadlessDeps["onHarnessEvent"];
     /** An input already in the record before any source attaches - the
      * `lucid send` while nothing was running, folded by the next `run`. */
     pendingInput?: { id: string; text: string };
@@ -79,6 +80,7 @@ const rig = (
     beforeProcess: opts.beforeProcess,
     prepareTurn: opts.prepareTurn,
     driverChangeAtBoundary: opts.driverChangeAtBoundary,
+    onHarnessEvent: opts.onHarnessEvent,
     harness: "claude" as const,
     ...opts.route,
     ...opts.clock,
@@ -896,6 +898,30 @@ describe("headless modes (M5.2)", () => {
     expect(tokenEntries).toHaveLength(1);
     expect(tokenEntries[0]?.frame?.event?.text).toBe("next");
 
+    r.proc.emit(doneClean);
+    await flush();
+  });
+
+  test("the raw event observer sees every harness event, including deltas starved of credit", async () => {
+    const seen: string[] = [];
+    const r = rig({ onHarnessEvent: (turnId, event) => seen.push(`${turnId}:${event.kind}`) });
+    r.host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
+    await flush();
+    r.accept("in-1", "turn-1");
+    await flush();
+    r.proc.emit(identity);
+    r.proc.emit(token("a"));
+    await flush();
+    await flush();
+    // Execution evidence cannot depend on credit: the token never reaches
+    // the log, but the observer saw it.
+    expect(
+      r
+        .logEntries()
+        .filter((e) => e.frame?.event?.kind === "token")
+        .map((e) => e.frame?.event?.kind),
+    ).toEqual([]);
+    expect(seen).toContain("turn-1:token");
     r.proc.emit(doneClean);
     await flush();
   });

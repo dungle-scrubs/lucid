@@ -448,9 +448,14 @@ export function createManagedPreparation(deps: ManagedPreparationDeps): ManagedP
             },
           },
         });
-        return ended.verdict === "accepted"
-          ? { kind: "held" }
-          : { kind: "held", issue: ended.issue };
+        if (ended.verdict !== "accepted") return { kind: "held", issue: ended.issue };
+        // No process started, so the launch settles here; the source never
+        // owns this turn and its cleanup cannot settle it.
+        if (host.state().connection) {
+          const settled = host.recordNativeExecution({ kind: "settled", turnId: input.turnId });
+          if (settled.verdict === "refused") return { kind: "held", issue: settled.issue };
+        }
+        return { kind: "held" };
       }
       offers.set(input.turnId, { path: offered.path, close: offered.close });
       offered = undefined;

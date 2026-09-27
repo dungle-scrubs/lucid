@@ -200,6 +200,9 @@ export interface HeadlessDeps {
   readonly explicitAttachmentId?: string;
   readonly onAttached?: () => readonly Frame[];
   readonly onTurnSettled?: (turnId: string) => void;
+  /** Every harness event of a turn, as the runner yielded it, before the
+   * sequencer filters or coalesces it. Execution evidence reads it here. */
+  readonly onHarnessEvent?: (turnId: string, event: HarnessEvent) => void;
   /** Complete context and persist its authorization before external work.
    * A ready prompt includes protocol teaching and every current artifact's
    * bytes, including resynchronization after a refused patch. The host adds
@@ -1555,6 +1558,7 @@ export const createHeadlessHost = (
           await handleArtifactMessage((event as { text: string }).text, turnId, deps, ctx);
         }
         if (stopped) return;
+        deps.onHarnessEvent?.(turnId, event);
         sequencer.emit(turnId, event);
         if (event.kind === EventKind.done && !advanced) {
           // A persistent session keeps this iterator open until the next
