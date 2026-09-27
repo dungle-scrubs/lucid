@@ -270,7 +270,7 @@ describe("what the poll carries", () => {
     expect(after.driverPreference).toEqual({
       v: 1,
       harness: "claude",
-      model: "claude-opus-5",
+      model: "claude-opus-5-5",
       effort: "high",
       profile: "headless-turn",
       revision: 1,
