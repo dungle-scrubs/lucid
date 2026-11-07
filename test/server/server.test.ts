@@ -11,6 +11,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { publishArtifact } from "../../src/cli/artifact-publish.js";
@@ -366,6 +367,34 @@ describe("a request from anywhere else is refused before it arrives", () => {
   test("this server's own origin is allowed", async () => {
     const res = await api(`/api/conversations/${CONV}`, { headers: { origin: server.url } });
     expect(res.status).toBe(200);
+  });
+
+  // DNS rebinding: a page at attacker.example whose name now resolves to
+  // 127.0.0.1 is same-origin to the browser, so its GET carries no Origin.
+  // The Host header still names the attacker's site, and that is refused
+  // before the token endpoint can answer. fetch() will not send a foreign
+  // Host, so the request is made with node:http.
+  const withHost = (path: string, host: string): Promise<number> =>
+    new Promise((resolve, reject) => {
+      const req = request(
+        { host: "127.0.0.1", port: server.port, path, headers: { host } },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+
+  test("a rebinding host cannot read the token", async () => {
+    expect(await withHost("/api/session", `attacker.example:${server.port}`)).toBe(403);
+    expect(await withHost("/api/session", "127.0.0.1:1")).toBe(403);
+  });
+
+  test("this server's own names are answered", async () => {
+    expect(await withHost("/api/session", `127.0.0.1:${server.port}`)).toBe(200);
+    expect(await withHost("/api/session", `localhost:${server.port}`)).toBe(200);
   });
 });
 
