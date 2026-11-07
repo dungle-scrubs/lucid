@@ -38,6 +38,7 @@ describe("milestone-1 skill doc (M6.2)", () => {
       "setting-sources",
       "lucid-aware",
       "text-delta", // (not used, but a plausible kebab term)
+      "tool-result", // an event kind, not a refusal issue
     ]);
     const backticked = [...skill.matchAll(/`([a-z]+(?:-[a-z]+)+)`/g)].map((m) => m[1] ?? "");
     const unknown = backticked.filter((t) => !allIssues.has(t) && !NON_ISSUE_TERMS.has(t));

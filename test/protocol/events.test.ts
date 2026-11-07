@@ -54,3 +54,13 @@ describe("compaction (hcn ADR 0009)", () => {
     expect(DROPPABLE_KINDS).not.toContain(EventKind.compaction);
   });
 });
+
+describe("tool results and usage (hcn ADR 0012)", () => {
+  test("both are lossless: a result or a count nobody recorded cannot be rebuilt", () => {
+    for (const kind of [EventKind.toolResult, EventKind.usage]) {
+      expect(classOfEventKind(kind)).toBe("lossless");
+      expect(LOSSLESS_KINDS).toContain(kind);
+      expect(DROPPABLE_KINDS).not.toContain(kind);
+    }
+  });
+});

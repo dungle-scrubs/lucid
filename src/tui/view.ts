@@ -148,6 +148,12 @@ const eventText = (event: Record<string, unknown>): string => {
   if ((kind === EventKind.error || kind === EventKind.limit) && typeof event.message === "string")
     return `${kind === EventKind.error ? "✗" : "!"} ${event.message}`;
   if (kind === EventKind.progress && typeof event.label === "string") return `… ${event.label}`;
+  if (kind === EventKind.toolResult) {
+    // Only a failed call is shown; a result that worked is already visible
+    // in what the agent did next, and dumping payloads buries the chat.
+    const name = typeof event.name === "string" && event.name !== "" ? event.name : "tool";
+    return `✗ ${name} failed`;
+  }
   if (kind === EventKind.compaction && typeof event.state === "string") {
     // The harness replaced earlier turns with a summary. A reader who sees
     // only a pause cannot tell that from a slow model, so name the state and
@@ -182,7 +188,19 @@ const eventText = (event: Record<string, unknown>): string => {
  * the durable log, and neither is anything a person said or was told. Left
  * unfiltered, `identity` fell through to the `[kind]` fallback and printed a
  * bare `[identity]` line between the question and the answer. */
-const UNRENDERED: readonly HarnessEventKind[] = [EventKind.done, EventKind.identity];
+const UNRENDERED: readonly HarnessEventKind[] = [
+  EventKind.done,
+  EventKind.identity,
+  // Token counts the harness reported about itself: bookkeeping, not chat.
+  EventKind.usage,
+];
+
+/** A tool result is shown only when the harness flagged it as an error; a
+ * result that worked is bookkeeping too. hcn ADR 0012: an absent flag means
+ * unknown, and unknown is not shown as a failure. */
+const rendered = (event: Record<string, unknown>): boolean =>
+  !UNRENDERED.some((kind) => kind === event.kind) &&
+  (event.kind !== EventKind.toolResult || event.isError === true);
 
 export const buildView = (input: {
   readonly transcript: Transcript;
@@ -209,7 +227,7 @@ export const buildView = (input: {
     .filter(
       (e) => !((e.event.kind as string) === EventKind.token && turnsWithMessage.has(e.turnId)),
     )
-    .filter((e) => !UNRENDERED.some((kind) => kind === e.event.kind))
+    .filter((e) => rendered(e.event))
     .map((e) => ({
       kind: "agent",
       seq: e.seq,

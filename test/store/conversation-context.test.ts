@@ -246,3 +246,85 @@ test("a compaction event is not conversation content, and never fails context pr
   expect(JSON.stringify(context)).not.toContain("never-project-me");
   expect(JSON.stringify(context)).not.toContain("compaction");
 });
+
+test("a tool call's native id and its recorded result reach the context whole, and usage never does", () => {
+  const context = projectConversationContext({
+    artifacts: [],
+    from: 0,
+    through: 6,
+    pendingInputId: "next",
+    transcript: {
+      aborted: [],
+      inputs: [{ id: "next", seq: 5, mode: "queue", status: "outstanding", text: "Continue" }],
+      events: [
+        {
+          seq: 1,
+          epoch: 1,
+          turnId: "previous",
+          event: { kind: "tool", name: "Bash", input: { command: "ls" }, callId: "call-7" },
+        },
+        {
+          seq: 2,
+          epoch: 1,
+          turnId: "previous",
+          event: {
+            kind: "tool-result",
+            callId: "call-7",
+            result: { stdout: "README.md", details: { exitCode: 0 } },
+            isError: false,
+          },
+        },
+        {
+          seq: 3,
+          epoch: 1,
+          turnId: "previous",
+          event: { kind: "usage", scope: "turn", inputTokens: 12, outputTokens: 3, costUsd: 0.01 },
+        },
+        {
+          seq: 4,
+          epoch: 1,
+          turnId: "previous",
+          event: { kind: "tool-result", name: "Read", result: "not found" },
+        },
+      ],
+    },
+  });
+  expect(context.history.map((entry) => entry.id)).toEqual(["event:1", "event:2", "event:4"]);
+  expect(context.history[0]).toMatchObject({ kind: "tool", role: "tool" });
+  expect(JSON.parse(context.history[0]?.text ?? "")).toEqual({
+    name: "Bash",
+    callId: "call-7",
+    input: { command: "ls" },
+  });
+  expect(JSON.parse(context.history[1]?.text ?? "")).toEqual({
+    callId: "call-7",
+    result: { stdout: "README.md", details: { exitCode: 0 } },
+    isError: false,
+  });
+  // An absent error flag stays absent: unknown is not success.
+  expect(JSON.parse(context.history[2]?.text ?? "")).toEqual({ name: "Read", result: "not found" });
+  expect(JSON.stringify(context)).not.toContain("costUsd");
+});
+
+test("an unfamiliar tool result field holds context like an unfamiliar tool field", () => {
+  expect(() =>
+    projectConversationContext({
+      artifacts: [],
+      from: 0,
+      through: 3,
+      pendingInputId: "next",
+      transcript: {
+        aborted: [],
+        inputs: [{ id: "next", seq: 2, mode: "queue", status: "outstanding", text: "Continue" }],
+        events: [
+          {
+            seq: 1,
+            epoch: 1,
+            turnId: "previous",
+            event: { kind: "tool-result", name: "Read", envelope: "a future format" },
+          },
+        ],
+      },
+    }),
+  ).toThrow("Unsupported tool result content");
+});

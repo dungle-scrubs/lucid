@@ -311,6 +311,29 @@ test("tool activity retains Codex string commands and accepts absent details", (
   ]);
 });
 
+test("usage is bookkeeping and a tool result shows only when the harness flagged an error", () => {
+  const r = rig();
+  r.send(attach({ conversationId: "conv-1", secret: r.secret }));
+  const events = [
+    { kind: "tool", name: "Bash", input: { command: "make" }, callId: "c-1" },
+    { kind: "usage", scope: "turn", inputTokens: 10, outputTokens: 2 },
+    { kind: "tool-result", callId: "c-1", result: { stdout: "" }, isError: false },
+    { kind: "tool-result", name: "Bash", callId: "c-2", result: "exit 2", isError: true },
+    // No flag means unknown, and unknown is not shown as a failure.
+    { kind: "tool-result", callId: "c-3", result: "?" },
+  ];
+  events.forEach((e, index) => {
+    r.send(event({ epoch: 1, n: index + 1, turnId: "t-1", event: e }));
+  });
+  const view = buildView({
+    transcript: r.host.transcript(),
+    status: r.host.status(),
+    rung: "",
+    draft: "",
+  });
+  expect(view.lines.map((line) => line.text)).toEqual(["Bash: make", "✗ Bash failed"]);
+});
+
 test("historical HCN refusal prose is replaced at presentation without rewriting the transcript", () => {
   const r = rig();
   r.send(attach({ conversationId: "conv-1", secret: r.secret }));

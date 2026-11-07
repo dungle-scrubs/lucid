@@ -61,6 +61,15 @@ export const EventKind = {
    * when a limit lifts. Lossless - a failure nobody sees reads as the
    * agent going quiet. */
   failure: "failure",
+  /** What a tool call returned, matched to its `tool` event by `callId`.
+   * hcn ADR 0012: the result is an observation, carried whole, and
+   * `isError` absent means unknown, not success. Lossless - a result nobody
+   * recorded leaves a tool call with no outcome. */
+  toolResult: "tool-result",
+  /** Token counts and cost the harness itself reported, with a `scope`.
+   * Sparse observations, never totals lucid derives. Lossless by the same
+   * rule as compaction: nothing else on the stream can rebuild it. */
+  usage: "usage",
   done: "done",
 } as const;
 
@@ -84,6 +93,8 @@ export const EVENT_CLASS = {
   question: "lossless",
   token: "droppable",
   tool: "lossless",
+  "tool-result": "lossless",
+  usage: "lossless",
 } as const satisfies Record<HarnessEventKind, EventClass>;
 
 const kindsOf = (eventClass: EventClass): readonly HarnessEventKind[] =>
