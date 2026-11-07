@@ -826,6 +826,10 @@ test("a concurrent accepted prompt does not strand or overtake the preparing pro
     managed: true,
     runner,
     presence: () => false,
+    // The second prompt is picked up by the record poll, not by a file
+    // notification. The production 500 ms poll is longer than `until`
+    // waits, so the test names its own poll interval.
+    pollMs: 5,
   });
   if (running.kind !== "running") throw new Error("Did not attach");
   try {
