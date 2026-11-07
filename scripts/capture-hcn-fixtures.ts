@@ -83,7 +83,9 @@ const captureSession = (name: string, args: string[], commands: unknown[]): Prom
 mkdirSync(OUT, { recursive: true });
 
 // Refusals need no harness binary at all: hcn decides them before spawning.
-await captureRun("session-refusal-no-session-mode", ["session", "codex", "--json"]);
+// muse is the harness hcn still declares no persistent session mode for;
+// codex gained one in hcn 0.9, so a recording from it is no longer a refusal.
+await captureRun("session-refusal-no-session-mode", ["session", "muse", "--json"]);
 await captureRun("inspect-capabilities-claude", ["inspect", "claude", "--capabilities"]);
 
 if (!available(harness)) {
