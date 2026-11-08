@@ -142,6 +142,40 @@ The terminal paints cached snapshots. A failed submission keeps the draft.
 Stopping releases resources even when appending a final event or closing a
 harness fails. Error reporting itself must not prevent cleanup.
 
+## Publication without a native integration
+
+A session with no Lucid integration can still publish through
+`lucid artifact publish`. The request carries the publisher's own `settings`
+and `workingDirectory`, and may carry `origin` (harness and session file).
+Publication records a native requirement first, so the binding is attempted
+before any note can reach a fresh session.
+
+When the binding fails with `registration-missing`, the only reason that
+proves no verified registration is an ancestor of the publisher, the host
+appends one more connection fact, `publication-fallback`, naming the failure
+it answers. The reducer admits it only while the record is never bound, the
+named failure is current, and no execution or legacy delivery is unsettled;
+a repeat is a no-op and a reused ID with different content is a
+`connection-conflict`. The failure and the fallback are two ordered appends;
+a crash between them leaves the record held, and a repeat of the same
+publication heals it.
+
+The fallback is terminal. The record then runs as an ordinary managed record
+on its saved driver preference: `bound` and a later
+`publication-connection-failed` are refused, a later publication into the
+record writes its artifact and changes no connection state, and the browser
+shows no connection panel. The connection projection reports
+`headless-fallback` with reason `registration-missing` and no actions, and a
+label near the chat input names the harness and model that will answer. The
+Settings control changes them.
+
+A fresh headless session on a fallback record receives one reference line
+pointing at `origin.sessionFile` when the publisher declared it. Lucid never
+reads or sizes that file; the agent opens it only when a note needs earlier
+context. The registration check walks process ancestry through processes it
+cannot read fully, by parent PID only, so a root-owned ancestor such as
+`/usr/bin/login` yields `registration-missing` rather than `owner-unknown`.
+
 ## Failure and vocabulary ownership
 
 The protocol owns frame kinds, event classes, refusals, input modes, and

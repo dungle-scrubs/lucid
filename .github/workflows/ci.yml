@@ -38,10 +38,9 @@ jobs:
 
       # The deterministic suite drives a fake hcn, so CI never spawns a
       # harness and never needs credentials. The live lanes
-      # (scripts/smoke-live.ts, scripts/smoke-handoff.ts) are deferred by
-      # design - they need an installed claude and are nondeterministic. They
-      # are run on demand and their evidence is committed under
-      # spikes/evidence/.
+      # (scripts/smoke-*.ts) are deferred by design - they need an installed
+      # harness and are nondeterministic. They run on demand and write their
+      # evidence under ignored artifacts/evidence/.
       - name: Confirm lucid imports no normalizer internals
         run: |
           if grep -rn 'harness-cli/src\|harness-cli/test' src test scripts; then

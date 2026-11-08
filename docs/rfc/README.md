@@ -1,8 +1,5 @@
 # Active RFCs
 
-RFC 34 drafts [unbound publication headless fallback](34_unbound-publication-headless-fallback.rfc.md).
-It is a draft: a publication from a session with no Lucid integration releases its native requirement, and browser chat runs headless on the settings the publisher declared.
-
 RFC 32 drafts [any-session handoff to Lucid](32_any-session-handoff-to-lucid.rfc.md).
 It is a draft: any plain session supplies artifact plus continuation text, one local command creates the record and attaches, and the source holds through a 30-minute review window.
 
@@ -12,9 +9,16 @@ It is a draft: a parked `headless-session` run holds presence forever and blocks
 RFC 30 defines [native feedback context by reference](30_native-feedback-context-by-reference.rfc.md).
 It is accepted for implementation after two Muse review passes and amends RFC 26's transport-limit rule. Claude Code is measured and enabled; Codex keeps inline-only delivery until its own slice is measured.
 
-RFC 28 [Pi native extension bridge and verified headless resume](28_pi-native-extension-bridge-and-strict-session-locators.rfc.md) (v6) is implemented in main (#326, #329, #330, #331). A Lucid Pi extension registers the TUI session, commits Lucid commands from Pi's Bash tool, delivers browser notes as follow-up messages, and verifies the session and folder Pi opened before a headless resume reaches the model. Its activation gates passed on Pi 0.87.1. The current contract is [native Pi](../native-pi.md).
+RFC 28 (Pi native extension bridge and verified headless resume, v6) and
+RFC 35 (Pi native settings and extension loading for bound continuation, v3)
+are implemented in main (#326, #329, #330, #331; hcn 0.7.6). Their proposals
+and reviews are preserved in commit `8b2df59`. The current contract is
+[native Pi](../native-pi.md).
 
-RFC 35 [Pi native settings and extension loading for bound continuation](35_pi-native-settings-for-bound-continuation.rfc.md) (v3) is implemented in main (#326, hcn 0.7.6): hcn gains a Pi settings source and an `--extension` option, and Lucid resumes a bound Pi session with a settings fingerprint and no approval channel. Without it, Lucid holds every bound Pi note before a prompt. v3 corrects RFC 28's refusal evidence: exit 3 counts on any hcn failure class.
+RFC 34 (unbound publication headless fallback, v3) is implemented in main
+(#321). Its proposal and reviews are preserved in commit `8b2df59`. The
+current contract is [publication without a native integration](../architecture.md#publication-without-a-native-integration)
+and the publisher rules in [the Lucid skill](../../skills/lucid/SKILL.md).
 
 RFC 27 defines [native approvals during headless continuation](27_native-approvals-during-headless-continuation.rfc.md).
 It is accepted for implementation after two Muse review passes. Native transport and browser acceptance remain required.
@@ -57,10 +61,14 @@ commit `000381b`; its current contract is in [the design reference](../design.md
 Current reading-view design is listed in the
 [documentation index](../README.md#browser-design).
 
+RFC 33 is implemented (#317, #318, docs ticket #315). Its proposal and v1
+review are preserved in commit `8b2df59`. The current contract is the
+theme declaration guard in [artifacts](../artifacts.md).
+
 RFC 29 is implemented in main (`fix(pi): live installed model list in
-settings`). Its proposal and v1 review are preserved in the merge; current
-contracts live in [drivers](../drivers.md) for the store source and
-served choices.
+settings`). Its proposal and v1 review, and its earlier draft numbered 27,
+are preserved in commit `8b2df59`; current contracts live in
+[drivers](../drivers.md) for the store source and served choices.
 
 The highest allocated RFC number is **35**. The next RFC is **36**.
 RFC 24 was allocated to Claude startup compatibility; RFC 25 is allocated to
