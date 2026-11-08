@@ -28,11 +28,16 @@ interface OwnedAttempt {
   refused: false | "harness-refusal" | "dispatch-not-called";
   pi?: { readonly verification: PiVerification; agentEvents: boolean; nativeExit3: boolean };
 }
+/** Kinds that prove the model may have acted on the prompt: a turn that
+ * produced any of these is never retried as if it had not started. A tool
+ * result or a usage report is such proof even when no message arrived. */
 const executionEvents: ReadonlySet<string> = new Set([
   EventKind.approvalRequest,
   EventKind.message,
   EventKind.token,
   EventKind.tool,
+  EventKind.toolResult,
+  EventKind.usage,
   EventKind.question,
 ]);
 export interface ManagedExecution {

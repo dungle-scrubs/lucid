@@ -380,7 +380,7 @@ describe("openSession over hcn session --json", () => {
 
   test("a refusal before the session line throws, using the recorded refusal", async () => {
     const r = rig();
-    const opening = r.runner.openSession({ harness: "codex", sessionId: sid });
+    const opening = r.runner.openSession({ harness: "muse", sessionId: sid });
     for (const e of fixtureEvents("session-refusal-no-session-mode")) r.proc.emit(e);
     r.proc.exit(2);
     await expect(opening).rejects.toBeInstanceOf(HarnessRefusal);
@@ -801,7 +801,7 @@ test("a refused child that ignores SIGTERM is killed before the refusal returns"
   }
   const proc = new ResistantProcess();
   const runner = createHcnRunner({ spawn: fakeSpawner([proc]).spawn, bin: BIN, refusalGraceMs: 0 });
-  const opening = runner.openSession({ harness: "codex", sessionId: "session" });
+  const opening = runner.openSession({ harness: "muse", sessionId: "session" });
   for (const e of fixtureEvents("session-refusal-no-session-mode")) proc.emit(e);
   // Cleanup also bounds the RED run, without making its missing SIGKILL pass.
   const cleanup = setTimeout(() => proc.exit(2), 50);

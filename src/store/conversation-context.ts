@@ -66,13 +66,28 @@ const eventEntry = (row: TranscriptEvent): ContextEntry | null => {
   if (e.kind === EventKind.tool) {
     // Project the recorded tool result, never executable instructions or a
     // raw process envelope. An unknown result shape remains quoted JSON.
-    const fields = ["name", "id", "input", "output", "result", "error", "status"];
+    const fields = ["name", "id", "callId", "input", "output", "result", "error", "status"];
     if (
       typeof e.name !== "string" ||
       Object.keys(e).some((field) => field !== "kind" && !fields.includes(field))
     )
       throw new ContextPreparationError(
         `Unsupported tool event content at ${row.seq}; upgrade context preparation to read this format`,
+      );
+    const payload: Record<string, unknown> = {};
+    for (const field of fields) if (Object.hasOwn(e, field)) payload[field] = e[field];
+    return { ...base, kind: "tool", role: "tool", text: JSON.stringify(payload) };
+  }
+  if (e.kind === EventKind.toolResult) {
+    // The recorded outcome of a tool call, whole: the structured native
+    // result and the harness's own error flag. An absent flag is carried as
+    // absent, because unknown is not success. Any other field is a format
+    // this projection has not read yet, and holds preparation like an
+    // unfamiliar tool field does.
+    const fields = ["name", "callId", "result", "isError"];
+    if (Object.keys(e).some((field) => field !== "kind" && !fields.includes(field)))
+      throw new ContextPreparationError(
+        `Unsupported tool result content at ${row.seq}; upgrade context preparation to read this format`,
       );
     const payload: Record<string, unknown> = {};
     for (const field of fields) if (Object.hasOwn(e, field)) payload[field] = e[field];
@@ -106,7 +121,10 @@ const eventEntry = (row: TranscriptEvent): ContextEntry | null => {
     e.kind === EventKind.done ||
     e.kind === EventKind.context ||
     e.kind === EventKind.compaction ||
-    e.kind === EventKind.progress
+    e.kind === EventKind.progress ||
+    // Accounting the harness reported about itself: not something the
+    // agent said or was told, so it never enters a fresh session's context.
+    e.kind === EventKind.usage
   )
     return null;
   throw new ContextPreparationError(

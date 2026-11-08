@@ -43,7 +43,26 @@ export type HarnessEvent =
   | { readonly kind: typeof EventKind.token; readonly text: string }
   | { readonly kind: typeof EventKind.message; readonly role: string; readonly text: string }
   | { readonly kind: typeof EventKind.progress; readonly label: string }
-  | { readonly kind: typeof EventKind.tool; readonly name: string; readonly input?: unknown }
+  | {
+      readonly kind: typeof EventKind.tool;
+      readonly name: string;
+      readonly input?: unknown;
+      /** The harness's own id for the call, when it reports one. */
+      readonly callId?: string;
+    }
+  | {
+      readonly kind: typeof EventKind.toolResult;
+      readonly name?: string;
+      readonly callId?: string;
+      readonly result?: unknown;
+      /** Absent means unknown, not success (hcn ADR 0012). */
+      readonly isError?: boolean;
+    }
+  | {
+      readonly kind: typeof EventKind.usage;
+      readonly scope: string;
+      readonly [field: string]: unknown;
+    }
   | { readonly kind: typeof EventKind.context; readonly usedPct: number }
   | {
       readonly kind: typeof EventKind.compaction;

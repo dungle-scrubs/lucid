@@ -257,6 +257,12 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
    * "any free port", so the requested value is not the origin the browser
    * will send. */
   let ownOrigins = new Set<string>();
+  /** The names this server answers to. A page on another site whose
+   * hostname a DNS rebinding points at 127.0.0.1 is same-origin to the
+   * browser, sends no `Origin` on a plain GET, and would otherwise read the
+   * token from `/api/session`. The `Host` header names the site the browser
+   * thinks it is talking to; only this server's own names are accepted. */
+  let ownHosts = new Set<string>();
 
   const server = Bun.serve({
     port,
@@ -286,6 +292,10 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
         const dirForRequest = (id: string): string => (resolvedRecord ??= records.dirFor(id));
         const origin = req.headers.get("origin");
 
+        const host = req.headers.get("host");
+        if (host === null || !ownHosts.has(host)) {
+          return text("forbidden: host not allowed", 403);
+        }
         if (origin !== null && !ownOrigins.has(origin)) {
           return text("forbidden: origin not allowed", 403);
         }
@@ -1272,6 +1282,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
   // port is read back from the server rather than echoed from the request.
   const bound = server.port ?? port;
   ownOrigins = new Set([`http://127.0.0.1:${bound}`, `http://localhost:${bound}`]);
+  ownHosts = new Set([`127.0.0.1:${bound}`, `localhost:${bound}`]);
   // Only a successfully bound server may discover work or launch children.
   // A failed bind must not create a fresh reconciler that launches on startup.
   const discovery = watchConversations(rootDir, { scan: records.list });

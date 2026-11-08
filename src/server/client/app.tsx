@@ -341,6 +341,17 @@ const ChatRefs = React.createContext<
   ReadonlyMap<string, { readonly elementId: string | null; readonly label: string }>
 >(new Map());
 
+/** The id of the message whose text parts are rendering. A text part
+ * component has to be one module-level component, not a closure made per
+ * message - React would treat each closure as a new component and remount
+ * the subtree on every render - so the id reaches it through context. */
+const MessageId = React.createContext<string>("");
+
+/** The assistant text part: chat text with its message id attached. */
+const AgentText = (props: { text: string }): React.ReactElement => (
+  <ChatText {...props} messageId={React.useContext(MessageId)} />
+);
+
 /** Key for one message's resolved references. Both parts are required:
  * the label alone collides across messages. */
 export const chatRefKey = (messageId: string, label: string): string => `${messageId}\0${label}`;
@@ -421,6 +432,10 @@ const useLostLight = (): {
   }, []);
   return { lit, light };
 };
+
+/** One object for the life of the module, so the parts renderer sees the
+ * same components on every render. */
+const AGENT_PARTS = { Text: AgentText };
 
 const Message = (): React.ReactElement => {
   const resolutions = React.useContext(Resolutions);
@@ -693,9 +708,9 @@ const Message = (): React.ReactElement => {
       <MessagePrimitive.If assistant>
         <div className="msg agent">
           <div className="body">
-            <MessagePrimitive.Parts
-              components={{ Text: (props) => <ChatText {...props} messageId={one?.id ?? ""} /> }}
-            />
+            <MessageId.Provider value={one?.id ?? ""}>
+              <MessagePrimitive.Parts components={AGENT_PARTS} />
+            </MessageId.Provider>
           </div>
         </div>
       </MessagePrimitive.If>

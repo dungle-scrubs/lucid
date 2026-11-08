@@ -90,8 +90,8 @@ Stream the harness's output as `event { epoch, n, turnId, event }`:
 - Event **classes** decide flow control. `token`, `progress`, `context`
   are **droppable** - lucid grants `credit { epoch, tokens }` for them,
   and a droppable event sent with no credit is refused `no-credit`.
-  `identity`, `message`, `tool`, `question`, `limit`, `error`, `failure`,
-  `done` are **lossless**
+  `identity`, `message`, `tool`, `tool-result`, `usage`, `question`,
+  `compaction`, `limit`, `error`, `failure`, `done` are **lossless**
   - never gated, never dropped.
 - **Coalescing under starvation, exactly:** keep at most one pending
   droppable per **(turnId, kind)** - latest-wins, so a turn can hold one
