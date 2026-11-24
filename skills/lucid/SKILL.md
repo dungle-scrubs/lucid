@@ -117,9 +117,11 @@ header yourself.
 - Use HTML/CSS or inline SVG for diagrams, flows, timelines, and wireframes;
   reserve `pre` for literal code, commands, paths, or logs.
 - Keep the document readable without network access. Do not depend on CDNs,
-  remote scripts, fonts, images, or stylesheets.
-- Prefer an editorial document over an application shell: clear hierarchy,
-  generous whitespace, restrained color, and one accent.
+  remote scripts, images, or stylesheets. The one exception is Google Fonts
+  (`fonts.googleapis.com`), loaded with a local fallback stack that still reads
+  well offline.
+- Choose the palette, type, and layout for this document's subject and job,
+  as lucid-design describes. Lucid has no house style to copy.
 - Use flexbox for mixed-width layouts and grid for genuinely uniform
   matrices. Give text-bearing flex/grid children `min-width: 0` and sensible
   overflow wrapping.
@@ -131,7 +133,7 @@ header yourself.
   remain readable without interaction.
 
 For new reading artifacts, follow [lucid-design](../lucid-design/SKILL.md),
-including its adaptive default and verified example. The
+including its design step and adaptive default. The
 [artifact appearance contract](https://github.com/dungle-scrubs/lucid/blob/main/docs/artifacts.md#application-and-artifact-appearance)
 owns declaration, synchronization, and saved-content rules.
 

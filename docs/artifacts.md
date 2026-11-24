@@ -471,7 +471,7 @@ normal save semantics retain those changes; Lucid does not guess original
 values to restore. That document fails adaptive authoring verification but
 still renders and saves normally.
 
-For a new reading artifact, use the [adaptive authoring example](../skills/lucid-design/examples/adaptive-reading.html)
-and [design guidance](../skills/lucid-design/SKILL.md). Standalone adaptive HTML
+For a new reading artifact, follow the [design guidance](../skills/lucid-design/SKILL.md),
+including its adaptive mechanics. Standalone adaptive HTML
 follows the browser preference. Verify both appearances and save/reopen behavior;
 a metadata declaration is an author claim, not evidence of correct styling.
