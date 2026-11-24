@@ -209,11 +209,16 @@ uses the existing send guards. Sending shows "Sending…" and prevents another
 click. Once the queue empties with work still in flight, the same corner
 holds the same activity report chat shows above the composer - label and
 elapsed from `describeActivity`, plus "Sending" while the request itself
-is on its way - until nothing is running. A native-owned record docks its
-connection there instead: the "Current connection" card's message, session
-identity, and retry control, since the full card lives at the top of
-hidden chat. Opening chat, emptying the queue with nothing running, losing
-the connection, or the record leaving native ownership removes the floating
-element; the queue's send action remains in chat. The old note-count
+is on its way - until nothing is running. Opening chat, emptying the queue
+with nothing running, or losing the connection removes the floating element;
+the queue's send action remains in chat.
+
+A native-owned record shows its connection in the header while chat is
+closed, left of the theme and chat controls, so it never covers the
+document. It is one labelled button ("Not connected", "Session connected",
+"Agent replying", and so on) with a tone dot; its tooltip carries the
+current connection message, and pressing it opens chat at the full
+"Current connection" card. Below 640 pixels it keeps the dot, its
+accessible name and its tooltip, and drops the words. The old note-count
 guidance beneath the document is removed. Other document guidance and
 refusals remain.

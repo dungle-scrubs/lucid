@@ -8,17 +8,12 @@
  * the same corner then holds the same report chat shows above the
  * composer, until nothing is in flight anymore.
  *
- * A native-owned record adds a second resident: the connection card that
- * otherwise lives at the top of hidden chat ("Current connection" with
- * its session identity and retry control) is unreachable with the panel
- * closed, so its one-line summary and its action dock in the same corner.
- *
  * Pure decision table, tested beside it. The send button's own disabled
  * guards stay at the call site; this answers only which corner element
  * renders.
  */
 
-export type ClosedChatCorner = "send" | "status" | "connection" | "none";
+export type ClosedChatCorner = "send" | "status" | "none";
 
 export const closedChatCorner = (state: {
   /** The panel is open, so chat shows everything itself. */
@@ -36,17 +31,9 @@ export const closedChatCorner = (state: {
   /** `report.busy` from `describeActivity`: a turn, an in-flight input, a
    * waiting one, a pending approval, or a saved input with no agent. */
   readonly workBusy: boolean;
-  /** The record is native-owned: the connection card owns activity
-   * announcements on this record, and `report` stays quiet for it. */
-  readonly nativeConnectionRequired: boolean;
 }): ClosedChatCorner => {
   if (state.panelOpen) return "none";
   if (state.dead || state.damaged || !state.connected) return "none";
-  // The connection owns the corner while it owns the record: its card is
-  // the only status, and it outranks an empty queue's send button. A
-  // queued batch still sends first - the notes are already written and
-  // the button is their way out.
-  if (state.nativeConnectionRequired && state.queuedNotes === 0) return "connection";
   if (state.queuedNotes > 0) return "send";
   if (state.sending || state.submissionBusy || state.workBusy) return "status";
   return "none";

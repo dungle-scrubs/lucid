@@ -63,7 +63,6 @@ import { ARTIFACT_SANDBOX } from "./artifact-links.js";
 import { useArtifactWidth } from "./artifact-width-control.js";
 import { chatLinkTravels, resolveChatReferences, splitChatLabels } from "./chat-references.js";
 import { ChatSpans } from "./chat-spans.js";
-import { ClosedChatConnection } from "./closed-chat-connection.js";
 import { closedChatCorner } from "./closed-chat-status.js";
 import type { ComparisonDraft } from "./comparison-draft.js";
 import { comparisonDraftText, restoreComparisonDraft } from "./comparison-draft.js";
@@ -73,6 +72,7 @@ import { ContentComparisonView } from "./content-comparison.js";
 import { useConversationPanel } from "./conversation-panel.js";
 import type { DriverChoiceBody, DriverChoices, DriverPreference } from "./driver-menus.js";
 import { ExecutionRecovery } from "./execution-recovery.js";
+import { HeaderConnection } from "./header-connection.js";
 import { HeadlessFallbackLabel } from "./headless-fallback-label.js";
 import { isQueueSend } from "./hotkeys.js";
 import {
@@ -1989,7 +1989,20 @@ const App = (): React.ReactElement => {
   );
   const headerControls = (
     <span className="header-controls">
-      <ThemeControls />
+      {conversationPanel.open ? null : (
+        <HeaderConnection
+          conversationId={conversationId}
+          enabled={!dead && !damaged && token !== null}
+          onOpen={conversationPanel.show}
+          request={(signal) =>
+            fetch(`/api/conversations/${encodeURIComponent(conversationId)}/connection`, {
+              headers: { [TOKEN_HEADER]: token ?? "" },
+              signal,
+            })
+          }
+        />
+      )}
+      <ThemeControls documentBytes={doc?.bytes ?? null} />
       {conversationPanel.control}
     </span>
   );
@@ -4606,7 +4619,6 @@ const App = (): React.ReactElement => {
                     sending,
                     submissionBusy,
                     workBusy: report.busy,
-                    nativeConnectionRequired: activity.nativeConnectionRequired === true,
                   });
                   if (corner === "send")
                     return (
@@ -4653,23 +4665,6 @@ const App = (): React.ReactElement => {
                           <span> · {report.elapsed}</span>
                         ) : null}
                       </div>
-                    );
-                  // Native-owned: the connection card is the status on this
-                  // record, and with chat closed it is unreachable. The same
-                  // query chat reads, in one line with its retry, until the
-                  // record stops needing it.
-                  if (corner === "connection")
-                    return (
-                      <ClosedChatConnection
-                        conversationId={conversationId}
-                        enabled={!dead && !damaged && token !== null}
-                        request={(signal) =>
-                          fetch(
-                            `/api/conversations/${encodeURIComponent(conversationId)}/connection`,
-                            { headers: { [TOKEN_HEADER]: token ?? "" }, signal },
-                          )
-                        }
-                      />
                     );
                   return null;
                 })()}

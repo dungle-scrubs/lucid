@@ -1,6 +1,9 @@
+import * as React from "react";
+import { type ArtifactTheme, preferredArtifactTheme } from "./artifact-theme.js";
 import { getBrowserTheme } from "./browser-theme.js";
 import { MoonDuotone, SunDuotone } from "./icons.js";
-import { parseThemePreference } from "./theme.js";
+import { type Appearance, parseThemePreference } from "./theme.js";
+import { Tooltip } from "./tooltip.js";
 import { useTheme } from "./use-theme.js";
 
 export function AppearanceSettings() {
@@ -25,21 +28,82 @@ export function AppearanceSettings() {
   );
 }
 
-export function ThemeControls() {
+/** How the document on screen relates to the app's appearance, when the
+ * toggle cannot change it. `null` for adaptive documents and for pages
+ * with no document, where the toggle changes everything. */
+export function documentThemeNote(
+  policy: ArtifactTheme | null,
+  appearance: Appearance,
+  systemDark: boolean,
+): { readonly help: string; readonly mismatch: string | null } | null {
+  if (policy === null || policy === "adaptive") return null;
+  if (policy === "unmanaged") {
+    const page: Appearance = systemDark ? "dark" : "light";
+    return {
+      help: "This document does not declare light and dark versions, so it follows your system setting. This button changes Lucid around it, not the document.",
+      mismatch: page === appearance ? null : `Page follows system (${page})`,
+    };
+  }
+  return {
+    help: `This document has a fixed ${policy} theme. This button changes Lucid around it, not the document.`,
+    mismatch: policy === appearance ? null : `Page is ${policy} only`,
+  };
+}
+
+const useSystemDark = (): boolean =>
+  React.useSyncExternalStore(
+    (listener) => {
+      const media = window.matchMedia("(prefers-color-scheme: dark)");
+      media.addEventListener("change", listener);
+      return () => media.removeEventListener("change", listener);
+    },
+    () => window.matchMedia("(prefers-color-scheme: dark)").matches,
+    () => false,
+  );
+
+export function ThemeControls(props: { readonly documentBytes?: string | null }) {
   const state = useTheme();
+  const systemDark = useSystemDark();
   const dark = state.appearance === "dark";
   const action = dark ? "Switch to light mode" : "Switch to dark mode";
+  const following = state.preference === "system" ? " · Following system" : "";
+  const bytes = props.documentBytes ?? null;
+  const policy = React.useMemo(
+    () => (bytes === null ? null : preferredArtifactTheme(bytes)),
+    [bytes],
+  );
+  const note = documentThemeNote(policy, state.appearance, systemDark);
+  const button = (
+    <button
+      type="button"
+      className="theme-toggle"
+      aria-label={note ? `${action}. ${note.help}` : action}
+      title={note ? undefined : `${action}${following}`}
+      onClick={() => getBrowserTheme().choose(dark ? "light" : "dark")}
+    >
+      {dark ? <SunDuotone size={16} /> : <MoonDuotone size={16} />}
+    </button>
+  );
+  if (!note) return <div className="theme-controls">{button}</div>;
   return (
     <div className="theme-controls">
-      <button
-        type="button"
-        className="theme-toggle"
-        aria-label={action}
-        title={`${action}${state.preference === "system" ? " · Following system" : ""}`}
-        onClick={() => getBrowserTheme().choose(dark ? "light" : "dark")}
-      >
-        {dark ? <SunDuotone size={16} /> : <MoonDuotone size={16} />}
-      </button>
+      {note.mismatch ? (
+        <span className="theme-document-note" aria-hidden="true">
+          {note.mismatch}
+        </span>
+      ) : null}
+      <Tooltip.Provider delayDuration={250}>
+        <Tooltip.Root>
+          <Tooltip.Trigger asChild>{button}</Tooltip.Trigger>
+          <Tooltip.Content className="theme-document-help" align="end">
+            <p>
+              {action}
+              {following}.
+            </p>
+            <p>{note.help}</p>
+          </Tooltip.Content>
+        </Tooltip.Root>
+      </Tooltip.Provider>
     </div>
   );
 }

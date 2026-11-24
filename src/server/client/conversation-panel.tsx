@@ -51,6 +51,10 @@ export const useConversationPanel = (search: string, defaultOpen = false, viewId
   return {
     control,
     open,
+    show: (): void => {
+      saveConversationPanel(key, true);
+      setOpen(true);
+    },
     panelProps: {
       "aria-hidden": !open,
       "aria-label": "Chat",

@@ -44,6 +44,12 @@ highlight; a purple-to-blue gradient header; an uppercase letter-spaced label
 above every heading; emoji section markers; identical rounded cards for every
 block. Use one of these only when the user asks for it.
 
+Generated pages also reach for the same few web fonts: Inter, Archivo, Public
+Sans, Space Grotesk, IBM Plex and JetBrains Mono. Choose other families unless
+the subject or the user calls for one of these. Do not give every long document
+the same left contents rail beside one reading column; place the contents where
+this document's structure puts it.
+
 Structure carries meaning. Use numbering only for real sequences, labels only
 where they classify something, and cards only for objects that stand apart.
 
