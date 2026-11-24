@@ -1,7 +1,8 @@
+import * as Popover from "@radix-ui/react-popover";
 import * as React from "react";
 import { type ArtifactTheme, preferredArtifactTheme } from "./artifact-theme.js";
 import { getBrowserTheme } from "./browser-theme.js";
-import { MoonDuotone, SunDuotone } from "./icons.js";
+import { InfoDuotone, MoonDuotone, SunDuotone } from "./icons.js";
 import { type Appearance, parseThemePreference } from "./theme.js";
 import { Tooltip } from "./tooltip.js";
 import { useTheme } from "./use-theme.js";
@@ -40,12 +41,12 @@ export function documentThemeNote(
   if (policy === "unmanaged") {
     const page: Appearance = systemDark ? "dark" : "light";
     return {
-      help: "This document does not declare light and dark versions, so it follows your system setting. This button changes Lucid around it, not the document.",
+      help: "This document does not declare light and dark versions, so it follows your system setting. The light and dark toggle changes Lucid around it, not the document.",
       mismatch: page === appearance ? null : `Page follows system (${page})`,
     };
   }
   return {
-    help: `This document has a fixed ${policy} theme. This button changes Lucid around it, not the document.`,
+    help: `This document has a fixed ${policy} theme. The light and dark toggle changes Lucid around it, not the document.`,
     mismatch: policy === appearance ? null : `Page is ${policy} only`,
   };
 }
@@ -88,9 +89,31 @@ export function ThemeControls(props: { readonly documentBytes?: string | null })
   return (
     <div className="theme-controls">
       {note.mismatch ? (
-        <span className="theme-document-note" aria-hidden="true">
-          {note.mismatch}
-        </span>
+        // A button, not hover help, so the reason also reaches touch screens,
+        // where tooltips never open. Small screens keep only its icon.
+        <Popover.Root>
+          <Popover.Trigger
+            className="theme-document-note"
+            aria-label={`${note.mismatch}. Why the toggle leaves this document unchanged`}
+          >
+            <InfoDuotone size={14} />
+            <span className="theme-document-note-label">{note.mismatch}</span>
+          </Popover.Trigger>
+          <Popover.Portal>
+            <Popover.Content
+              className="settings-popover theme-document-popover"
+              side="bottom"
+              align="end"
+              sideOffset={8}
+              collisionPadding={16}
+            >
+              <Popover.Title className="sr-only">
+                Why the toggle leaves this document unchanged
+              </Popover.Title>
+              <p>{note.help}</p>
+            </Popover.Content>
+          </Popover.Portal>
+        </Popover.Root>
       ) : null}
       <Tooltip.Provider delayDuration={250}>
         <Tooltip.Root>

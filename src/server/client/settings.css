@@ -173,16 +173,46 @@
   margin-inline-start: auto;
 }
 /* Shown only while the document's own theme differs from Lucid's, so the
-   reader sees why the toggle left the page as it was. */
+   reader sees why the toggle left the page as it was. Pressing it explains;
+   below 640px only the icon stays, so the header row still fits. */
 .theme-document-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  block-size: 28px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
   color: color-mix(in srgb, var(--color-text) 62%, transparent);
   font: 400 12px / 1 var(--font-body, system-ui, sans-serif);
   white-space: nowrap;
+  cursor: pointer;
+}
+.theme-document-note:hover {
+  color: var(--color-text);
+}
+.theme-document-note:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 @media (width <= 640px) {
   .theme-document-note {
+    inline-size: 28px;
+    justify-content: center;
+    padding: 0;
+  }
+  .theme-document-note-label {
     display: none;
   }
+}
+.theme-document-popover {
+  width: min(300px, calc(100vw - 32px));
+  font-size: 13px;
+  line-height: 1.45;
+}
+.theme-document-popover :where(p) {
+  margin: 0;
 }
 .theme-document-help {
   display: grid;

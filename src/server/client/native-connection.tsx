@@ -7,6 +7,8 @@ import { Button } from "./ui/button.js";
 interface NativeConnectionProps {
   readonly conversationId: string;
   readonly enabled: boolean;
+  /** The card's heading, which takes focus when the header status opens chat. */
+  readonly headingRef?: React.Ref<HTMLHeadingElement>;
   readonly request: (signal: AbortSignal) => Promise<Response>;
 }
 
@@ -55,7 +57,9 @@ export function NativeConnection(props: NativeConnectionProps) {
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {announcement}
       </p>
-      <h3>Current connection</h3>
+      <h3 ref={props.headingRef} tabIndex={-1}>
+        Current connection
+      </h3>
       <p>{message}</p>
       <p className="native-connection-identity">
         {connection.nativeSessionId ? (
