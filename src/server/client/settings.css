@@ -169,8 +169,27 @@
   display: flex;
   flex: none;
   align-items: center;
-  gap: 2px;
+  gap: 8px;
   margin-inline-start: auto;
+}
+/* Shown only while the document's own theme differs from Lucid's, so the
+   reader sees why the toggle left the page as it was. */
+.theme-document-note {
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
+  font: 400 12px / 1 var(--font-body, system-ui, sans-serif);
+  white-space: nowrap;
+}
+@media (width <= 640px) {
+  .theme-document-note {
+    display: none;
+  }
+}
+.theme-document-help {
+  display: grid;
+  gap: 8px;
+}
+.theme-document-help :where(p) {
+  margin: 0;
 }
 .theme-controls .theme-toggle {
   display: inline-flex;

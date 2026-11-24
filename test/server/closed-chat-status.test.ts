@@ -10,7 +10,6 @@ const idle = {
   sending: false,
   submissionBusy: false,
   workBusy: false,
-  nativeConnectionRequired: false,
 };
 
 describe("the closed-chat corner", () => {
@@ -39,20 +38,5 @@ describe("the closed-chat corner", () => {
     expect(closedChatCorner({ ...idle, dead: true, workBusy: true })).toBe("none");
     expect(closedChatCorner({ ...idle, damaged: true, queuedNotes: 1 })).toBe("none");
     expect(closedChatCorner({ ...idle, connected: false, queuedNotes: 1 })).toBe("none");
-  });
-
-  test("a native-owned record docks its connection in the corner", () => {
-    // The connection card owns this record's status, so the corner shows
-    // it instead of staying empty.
-    expect(closedChatCorner({ ...idle, nativeConnectionRequired: true })).toBe("connection");
-    // A queued batch still sends first: the notes are written and the
-    // button is their way out.
-    expect(closedChatCorner({ ...idle, nativeConnectionRequired: true, queuedNotes: 2 })).toBe(
-      "send",
-    );
-    // An open panel shows the card itself.
-    expect(closedChatCorner({ ...idle, nativeConnectionRequired: true, panelOpen: true })).toBe(
-      "none",
-    );
   });
 });
