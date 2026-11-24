@@ -97,6 +97,8 @@
   background: var(--color-neutral-500);
 }
 
+/* The busy tone keeps the neutral dot: work in progress is waiting ink,
+   not a colour of its own. */
 .header-connection[data-tone="ok"] .header-connection-dot {
   background: var(--color-accent);
 }

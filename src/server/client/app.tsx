@@ -1987,12 +1987,31 @@ const App = (): React.ReactElement => {
     initiallyEmpty === true,
     conversationId,
   );
+  /** The controls row floats over the document header's right end. Its
+   * width changes when the connection status or the theme note appears, so
+   * the document header reserves the measured width rather than a fixed
+   * one, and its own right-aligned controls are never covered. */
+  const headerControlsObserver = React.useRef<ResizeObserver | null>(null);
+  const headerControlsRef = React.useCallback((row: HTMLSpanElement | null) => {
+    headerControlsObserver.current?.disconnect();
+    headerControlsObserver.current = null;
+    const scope = row?.parentElement;
+    if (!row || !scope) return;
+    const write = (): void =>
+      scope.style.setProperty("--header-controls-width", `${row.offsetWidth}px`);
+    write();
+    const observer = new ResizeObserver(write);
+    observer.observe(row);
+    headerControlsObserver.current = observer;
+  }, []);
   const headerControls = (
-    <span className="header-controls">
+    <span className="header-controls" ref={headerControlsRef}>
       {conversationPanel.open ? null : (
         <HeaderConnection
           conversationId={conversationId}
-          enabled={!dead && !damaged && token !== null}
+          enabled={
+            !dead && !damaged && token !== null && activity.nativeConnectionRequired === true
+          }
           onOpen={conversationPanel.show}
           request={(signal) =>
             fetch(`/api/conversations/${encodeURIComponent(conversationId)}/connection`, {

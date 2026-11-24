@@ -3052,7 +3052,9 @@ button.note-card-target,
   flex-wrap: wrap;
   flex-basis: auto;
   min-height: 34px;
-  margin-inline-end: 84px;
+  /* The floating controls row is measured (app.tsx writes the variable);
+     69px is the theme and chat buttons alone. 15px keeps the old gap. */
+  margin-inline-end: calc(var(--header-controls-width, 69px) + 15px);
 }
 .doc-head :is(.dim-name, .none-name, .doc-rename) {
   min-width: 0;
