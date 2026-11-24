@@ -1987,6 +1987,8 @@ const App = (): React.ReactElement => {
     initiallyEmpty === true,
     conversationId,
   );
+  /** The chat card's heading, focused when the header status opens chat. */
+  const connectionHeading = React.useRef<HTMLHeadingElement>(null);
   /** The controls row floats over the document header's right end. Its
    * width changes when the connection status or the theme note appears, so
    * the document header reserves the measured width rather than a fixed
@@ -2012,7 +2014,7 @@ const App = (): React.ReactElement => {
           enabled={
             !dead && !damaged && token !== null && activity.nativeConnectionRequired === true
           }
-          onOpen={conversationPanel.show}
+          onOpen={() => conversationPanel.show(() => connectionHeading.current)}
           request={(signal) =>
             fetch(`/api/conversations/${encodeURIComponent(conversationId)}/connection`, {
               headers: { [TOKEN_HEADER]: token ?? "" },
@@ -4489,6 +4491,7 @@ const App = (): React.ReactElement => {
                         <NativeConnection
                           key={conversationId}
                           conversationId={conversationId}
+                          headingRef={connectionHeading}
                           enabled={conversationPanel.open && !dead && token !== null}
                           request={(signal) =>
                             fetch(

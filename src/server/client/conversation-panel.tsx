@@ -29,6 +29,15 @@ export const useConversationPanel = (search: string, defaultOpen = false, viewId
   const [choice, setOpen] = React.useState(() => restoreConversationPanel(search, key));
   const open = choice ?? defaultOpen;
   const id = React.useId();
+  const toggle = React.useRef<HTMLButtonElement>(null);
+  // Set by `show`: what takes focus once the panel is no longer inert.
+  const focusOnOpen = React.useRef<(() => HTMLElement | null) | null>(null);
+  React.useEffect(() => {
+    const target = focusOnOpen.current;
+    if (!open || !target) return;
+    focusOnOpen.current = null;
+    (target() ?? toggle.current)?.focus();
+  }, [open]);
   const label = open ? "Hide chat" : "Show chat";
   const control = (
     <button
@@ -36,6 +45,7 @@ export const useConversationPanel = (search: string, defaultOpen = false, viewId
       aria-expanded={open}
       aria-label={label}
       className="conversation-toggle"
+      ref={toggle}
       onClick={(event) => {
         // Safari pointer activation need not focus a button before its panel becomes inert.
         event.currentTarget.focus();
@@ -51,7 +61,10 @@ export const useConversationPanel = (search: string, defaultOpen = false, viewId
   return {
     control,
     open,
-    show: (): void => {
+    /** Open the panel from another control and move focus into it, to
+     * `focus()`'s element or, when that is missing, the panel toggle. */
+    show: (focus: () => HTMLElement | null): void => {
+      focusOnOpen.current = focus;
       saveConversationPanel(key, true);
       setOpen(true);
     },

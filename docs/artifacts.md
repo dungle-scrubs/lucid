@@ -398,9 +398,11 @@ immediately, separately from Save settings.
 When the displayed version declares a fixed `light` or `dark` theme, or is
 unmanaged, the button cannot change the document. Its tooltip, on hover and
 keyboard focus, says so and names the document's theme. While the document's
-appearance differs from Lucid's, a short note beside the button says "Page is
-dark only", "Page is light only" or "Page follows system (light|dark)"; it is
-hidden below 640 pixels, where the tooltip still explains.
+appearance differs from Lucid's, a note button beside it says "Page is dark
+only", "Page is light only" or "Page follows system (light|dark)", and
+pressing or tapping it opens the same explanation, so touch screens, where
+tooltips do not open, get it too. Below 640 pixels the note keeps only its
+info icon.
 
 The preference is the literal `system`, `light`, or `dark` under
 `localStorage` key `lucid.theme.v1`. Missing or invalid values mean System.

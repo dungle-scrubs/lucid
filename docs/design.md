@@ -217,8 +217,8 @@ A native-owned record shows its connection in the header while chat is
 closed, left of the theme and chat controls, so it never covers the
 document. It is one labelled button ("Not connected", "Session connected",
 "Agent replying", and so on) with a tone dot; its tooltip carries the
-current connection message, and pressing it opens chat at the full
-"Current connection" card. Below 640 pixels it keeps the dot, its
+current connection message, and pressing it opens chat and moves focus to
+the full "Current connection" card's heading. Below 640 pixels it keeps the dot, its
 accessible name and its tooltip, and drops the words. The old note-count
 guidance beneath the document is removed. Other document guidance and
 refusals remain.
