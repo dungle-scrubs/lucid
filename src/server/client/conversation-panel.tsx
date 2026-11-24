@@ -64,6 +64,12 @@ export const useConversationPanel = (search: string, defaultOpen = false, viewId
     /** Open the panel from another control and move focus into it, to
      * `focus()`'s element or, when that is missing, the panel toggle. */
     show: (focus: () => HTMLElement | null): void => {
+      // Already open: no state change follows, so focus now rather than
+      // leaving a request for some later, unrelated open.
+      if (open) {
+        (focus() ?? toggle.current)?.focus();
+        return;
+      }
       focusOnOpen.current = focus;
       saveConversationPanel(key, true);
       setOpen(true);

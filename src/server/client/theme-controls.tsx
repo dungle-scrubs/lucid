@@ -107,6 +107,9 @@ export function ThemeControls(props: { readonly documentBytes?: string | null })
               sideOffset={8}
               collisionPadding={16}
             >
+              <Popover.Title className="sr-only">
+                Why the toggle leaves this document unchanged
+              </Popover.Title>
               <p>{note.help}</p>
             </Popover.Content>
           </Popover.Portal>
