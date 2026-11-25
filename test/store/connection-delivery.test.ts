@@ -709,6 +709,12 @@ function returningRegistration(binding: NativeBinding): NativeBinding {
   };
 }
 
+/** The fixture's native owner is invented. Tests that probe real processes
+ * would read a real PID such as 123 as unknown whenever the machine happens to
+ * run an unreadable process there (GitHub's Linux runners sometimes do), so
+ * it lives above every platform's PID limit, where a probe reads it as gone. */
+const SYNTHETIC_OWNER_PID = 2_000_000_123;
+
 function boundFixture(bind = true): BoundFixture {
   const executorOwner = readProcessOwner(process.pid);
   if (!executorOwner) throw new Error("Cannot verify this test process");
@@ -728,7 +734,7 @@ function boundFixture(bind = true): BoundFixture {
       harness: "codex",
       interface: "codex-cli",
       nativeSessionId: "native-one",
-      owner: { executable: "/native/codex", pid: 123, startedAt: "123:456" },
+      owner: { executable: "/native/codex", pid: SYNTHETIC_OWNER_PID, startedAt: "123:456" },
       registrationId: crypto.randomUUID(),
       workingDirectory: root,
     },
@@ -952,7 +958,7 @@ test("a returning listener waits until every other native owner is confirmed gon
     const binding = f.controls.registration;
     f.controls.registration = returningRegistration(binding);
     let previousOwner: boolean | undefined = true;
-    f.controls.probe = (owner) => (owner.pid === 123 ? previousOwner : true);
+    f.controls.probe = (owner) => (owner.pid === SYNTHETIC_OWNER_PID ? previousOwner : true);
     f.acquire();
     const fact = f.enableFact();
     const conflict = f.host.writeConnection(fact);
@@ -1289,11 +1295,11 @@ test("status probes every native owner once and cannot hide uncertainty or compe
     previous = undefined;
     observed.length = 0;
     expect(f.status().state).toBe("owner-unknown");
-    expect(observed.sort()).toEqual([123, 456]);
+    expect(observed.sort((a, b) => a - b)).toEqual([456, SYNTHETIC_OWNER_PID]);
     previous = true;
     observed.length = 0;
     expect(f.status().state).toBe("owner-conflict");
-    expect(observed.sort()).toEqual([123, 456]);
+    expect(observed.sort((a, b) => a - b)).toEqual([456, SYNTHETIC_OWNER_PID]);
   } finally {
     f.close();
   }
