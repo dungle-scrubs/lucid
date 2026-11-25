@@ -28,6 +28,9 @@ jobs:
       # which are recordings of one pinned version.
       - run: bun install --frozen-lockfile
 
+      # TEMPORARY diagnostic: what owns PID 123 on this runner?
+      - run: ps -o pid,user,comm -p 123 || true; bun -e 'import {readProcessOwner} from "./src/process-owner.ts"; console.log("pid123", readProcessOwner(123))'
+
       # Mirrors `bun run check` explicitly so each failed gate is named in
       # Actions rather than hidden behind one composite step.
       - run: bun run lint
