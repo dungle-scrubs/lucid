@@ -76,5 +76,7 @@ jobs:
 
       # prepack runs `bun run build:package`, which rebuilds dist/package and
       # runs the relocated package check before npm packs it.
+      # --tag latest: tags cut before this workflow existed (v0.8.0) still
+      # carry publishConfig.tag "beta", which would leave latest behind.
       - name: Publish public package
-        run: npm publish --access public
+        run: npm publish --access public --tag latest
