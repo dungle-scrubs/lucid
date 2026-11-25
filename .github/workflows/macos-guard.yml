@@ -1,0 +1,22 @@
+name: macOS guard
+
+# GitHub-hosted macOS runners bill at 10x the Linux rate. macOS work in this
+# repo runs locally on mini (self-hosted runner) instead. This check fails if
+# a hosted macOS runner (macos-latest, macos-14, ...) is reintroduced.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  no-macos-runners:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail on GitHub-hosted macOS runners
+        run: |
+          if grep -rInE '(runs-on|runner):.*macos-(latest|[0-9]+)' .github/workflows; then
+            echo "::error::GitHub-hosted macOS runner found. Run macOS work locally on mini (self-hosted)."
+            exit 1
+          fi

@@ -60,8 +60,7 @@
   },
   "homepage": "https://github.com/dungle-scrubs/lucid#readme",
   "publishConfig": {
-    "access": "public",
-    "tag": "beta"
+    "access": "public"
   },
   "overrides": {
     "nanoid": "^5.1.16",
