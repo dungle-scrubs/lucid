@@ -1,0 +1,80 @@
+name: Publish to npm
+
+# Release flow:
+#
+#  1. A push to main runs release-please (ci.yml). It keeps one release PR
+#     current; package.json's version, CHANGELOG.md and
+#     .release-please-manifest.json belong to the bot. Merging that PR tags
+#     the merge commit, creates the GitHub release and dispatches this
+#     workflow with the tag.
+#  2. `check` runs the full gate on the tagged commit on the self-hosted
+#     runner on mini ([self-hosted, macos]), the platform Lucid's suite is
+#     written for. No GitHub-hosted macOS runner (see macos-guard.yml).
+#  3. `publish` runs only after `check` passes. npm trusted publishing (OIDC,
+#     no stored token) works only on GitHub-hosted runners, so it rebuilds
+#     the package from the same tag on ubuntu-latest and publishes it.
+#
+# Recovery: dispatch with an existing tag to finish a release whose publish
+# failed:
+#   gh workflow run publish.yml --repo dungle-scrubs/lucid --ref main -f tag=v0.8.0
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published GitHub release tag to publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: [self-hosted, macos]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun test
+      - run: bun run build:package
+
+  publish:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+          registry-url: https://registry.npmjs.org
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install --frozen-lockfile
+
+      - name: Use an npm CLI with trusted publishing support
+        run: npm install --global npm@latest
+
+      # prepack runs `bun run build:package`, which rebuilds dist/package and
+      # runs the relocated package check before npm packs it.
+      - name: Publish public package
+        run: npm publish --access public

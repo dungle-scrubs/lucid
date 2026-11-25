@@ -54,3 +54,43 @@ jobs:
             echo "protocol must not import store modules (RFC-13)" >&2
             exit 1
           fi
+
+  release-please:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [check]
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-please-main
+      cancel-in-progress: false
+    permissions:
+      actions: write
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      # Manifest-driven: reads release-please-config.json and
+      # .release-please-manifest.json.
+      - id: release
+        uses: googleapis/release-please-action@v5
+
+      # GITHUB_TOKEN-created pull requests do not start ordinary CI without
+      # approval. workflow_dispatch is the supported recursive-run exception,
+      # so the generated release branch receives the same required check.
+      - name: Check the release pull request
+        if: steps.release.outputs.prs_created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BRANCH: ${{ fromJSON(steps.release.outputs.pr || '{}').headBranchName }}
+        run: gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$RELEASE_BRANCH"
+
+      # Release Please publishes with GITHUB_TOKEN, so the resulting release
+      # event cannot start another workflow. workflow_dispatch is the supported
+      # recursive-run exception.
+      - name: Publish the release to npm
+        if: steps.release.outputs.release_created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
+        run: >-
+          gh workflow run publish.yml --repo "$GITHUB_REPOSITORY" --ref main
+          --field tag="$RELEASE_TAG"
